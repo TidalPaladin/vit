@@ -1,6 +1,6 @@
 .PHONY: clean clean-env check quality style tag-version test env upload upload-test
 
-PROJECT=project
+PROJECT=vit
 QUALITY_DIRS=$(PROJECT) tests
 CLEAN_DIRS=$(PROJECT) tests
 PYTHON=pdm run python
@@ -31,14 +31,14 @@ clean-env: ## remove the virtual environment directory
 deploy: ## installs from lockfile
 	git submodule update --init --recursive
 	which pdm || pip install --user pdm
-	pdm venv create -n $(PROJECT)-deploy
+	pdm venv create 
 	pdm install --production --no-lock
 
 
 init: ## pulls submodules and initializes virtual environment
 	git submodule update --init --recursive
 	which pdm || pip install --user pdm
-	pdm venv create -n $(PROJECT)
+	pdm venv create --with-pip
 	pdm install -d
 
 node_modules: 

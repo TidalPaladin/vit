@@ -3,13 +3,18 @@ requires = ["pdm-pep517>=1.0"]
 build-backend = "pdm.pep517.api"
 
 [project]
-name = "python-template"
+name = "vit"
 description = ""
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 authors = [
     {name = "Scott Chase Waggener", email = "tidalpaladin@protonmail.com"},
 ]
-dependencies = []
+dependencies = [
+  "torch",
+  "numpy",
+  "einops",
+]
+
 readme = "README.md"
 license = {text = "Apache"}
 dynamic = ["version"]
@@ -40,7 +45,7 @@ multi_line_output = 3
 use_parentheses = false
 
 [tool.pyright]
-include = ["project", "tests"]
+include = ["vit", "tests"]
 exclude = [
   "**/node_modules",
   "**/__pycache__",
@@ -74,6 +79,9 @@ markers = [
   "ci_skip",
 ]
 filterwarnings = []
+
+[tool.pytest_env]
+TORCH_COMPILE = "0"
 
 # Sample script config
 #[project.scripts]
