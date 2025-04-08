@@ -14,13 +14,12 @@ class PatchEmbed2d(nn.Module):
         in_channels: int,
         embed_dim: int,
         patch_size: Sequence[int],
-        normalization: str = "LayerNorm",
     ):
         super().__init__()
         self._patch_size = tuple(patch_size)
         self.patch = nn.Conv2d(in_channels, embed_dim, self.patch_size, stride=self.patch_size)
         self.pos_enc = RelativeFactorizedPosition(2, embed_dim)
-        self.norm = nn.LayerNorm(embed_dim) if normalization == "LayerNorm" else nn.RMSNorm(embed_dim)
+        self.norm = nn.LayerNorm(embed_dim)
 
     @property
     def patch_size(self) -> Tuple[int, int]:

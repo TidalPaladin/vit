@@ -73,7 +73,6 @@ class ViT(nn.Module):
             config.in_channels,
             config.hidden_size,
             cast(Tuple[int, int], tuple(config.patch_size)),
-            normalization=config.normalization,
         )
 
         # Transformer blocks
