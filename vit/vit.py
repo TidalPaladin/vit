@@ -30,6 +30,7 @@ class ViTConfig:
     bias: bool = True
     activation: str = "srelu"
     drop_path_rate: float = 0.0
+    decoder: bool = False
 
     # Other
     checkpoint: bool = False
@@ -76,7 +77,12 @@ class ViT(nn.Module):
         )
 
         # Transformer blocks
-        self.blocks = nn.ModuleList([self.create_encoder_layer(i) for i in range(config.depth)])
+        self.blocks = nn.ModuleList(
+            [
+                self.create_encoder_layer(i) if not self.config.decoder else self.create_decoder_layer(i)
+                for i in range(config.depth)
+            ]
+        )
 
     @property
     def config(self) -> ViTConfig:
@@ -194,6 +200,7 @@ class ViT(nn.Module):
         self,
         x: Tensor,
         mask: Tensor | None = None,
+        encoder_output: Tensor | None = None,
     ) -> Tuple[Tensor, Tensor]:
         B, C, *original_size = x.shape
         self.stem.tokenized_size(cast(Any, tuple(original_size)))
@@ -208,7 +215,8 @@ class ViT(nn.Module):
 
         # Transformer blocks and output norm
         for block in self.blocks:
-            x = block(x, checkpoint_core_attention=self.config.checkpoint)
+            block = cast(TransformerLayer, block)
+            x = block(x, encoder_output=encoder_output, checkpoint_core_attention=self.config.checkpoint)
 
         # Extract CLS token
         cls_token = x[:, 0, :].contiguous()

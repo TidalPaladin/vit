@@ -5,7 +5,7 @@
 groups = ["default", "quality", "test"]
 strategy = []
 lock_version = "4.5.0"
-content_hash = "sha256:5720601445f4cb5aa5f450db60b2f4a616e093cd5beeb71f903581b09fa39bee"
+content_hash = "sha256:ede162969b1fc0754b6126fa3b661993d534a5bf7d4bfd05116d964886ab69ce"
 
 [[metadata.targets]]
 requires_python = ">=3.10"
@@ -762,7 +762,7 @@ files = [
 
 [[package]]
 name = "pytest-cov"
-version = "6.1.0"
+version = "6.1.1"
 requires_python = ">=3.9"
 summary = "Pytest plugin for measuring coverage."
 dependencies = [
@@ -770,8 +770,22 @@ dependencies = [
     "pytest>=4.6",
 ]
 files = [
-    {file = "pytest_cov-6.1.0-py3-none-any.whl", hash = "sha256:cd7e1d54981d5185ef2b8d64b50172ce97e6f357e6df5cb103e828c7f993e201"},
-    {file = "pytest_cov-6.1.0.tar.gz", hash = "sha256:ec55e828c66755e5b74a21bd7cc03c303a9f928389c0563e50ba454a6dbe71db"},
+    {file = "pytest_cov-6.1.1-py3-none-any.whl", hash = "sha256:bddf29ed2d0ab6f4df17b4c55b0a657287db8684af9c42ea546b21b1041b3dde"},
+    {file = "pytest_cov-6.1.1.tar.gz", hash = "sha256:46935f7aaefba760e716c2ebfbe1c216240b9592966e7da99ea8292d4d3e2a0a"},
+]
+
+[[package]]
+name = "pytest-env"
+version = "1.1.5"
+requires_python = ">=3.8"
+summary = "pytest plugin that allows you to add environment variables."
+dependencies = [
+    "pytest>=8.3.3",
+    "tomli>=2.0.1; python_version < \"3.11\"",
+]
+files = [
+    {file = "pytest_env-1.1.5-py3-none-any.whl", hash = "sha256:ce90cf8772878515c24b31cd97c7fa1f4481cd68d588419fd45f10ecaee6bc30"},
+    {file = "pytest_env-1.1.5.tar.gz", hash = "sha256:91209840aa0e43385073ac464a554ad2947cc2fd663a9debf88d03b01e0cc1cf"},
 ]
 
 [[package]]
