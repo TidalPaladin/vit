@@ -54,6 +54,16 @@ class TestViT:
         assert out.shape == (1, 196, 128)
         assert cls_token.shape == (1, 128)
 
+    def test_forward_with_encoder_output(self, config):
+        x = torch.randn(1, 3, 224, 224)
+        encoder_output = torch.randn(1, 64, 128)
+        config = replace(config, decoder=True)
+        model = ViT(config)
+        with torch.autocast(device_type="cpu", dtype=torch.bfloat16, enabled=True):
+            out, cls_token = model(x, encoder_output=encoder_output)
+        assert out.shape == (1, 196, 128)
+        assert cls_token.shape == (1, 128)
+
     @pytest.mark.parametrize("checkpoint", [False, True])
     def test_backward(self, config, checkpoint):
         x = torch.randn(1, 3, 224, 224, requires_grad=True)
@@ -61,6 +71,19 @@ class TestViT:
         model = ViT(config)
         with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
             out, cls_token = model(x)
+        (out.sum() + cls_token.sum()).backward()
+        for name, param in model.named_parameters():
+            assert param.grad is not None, f"{name} has no gradient"
+            assert not param.grad.isnan().any(), f"{name} has nan gradient"
+
+    @pytest.mark.parametrize("checkpoint", [False, True])
+    def test_backward_with_encoder_output(self, config, checkpoint):
+        x = torch.randn(1, 3, 224, 224, requires_grad=True)
+        encoder_output = torch.randn(1, 64, 128)
+        config = replace(config, decoder=True, checkpoint=checkpoint)
+        model = ViT(config)
+        with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+            out, cls_token = model(x, encoder_output=encoder_output)
         (out.sum() + cls_token.sum()).backward()
         for name, param in model.named_parameters():
             assert param.grad is not None, f"{name} has no gradient"
