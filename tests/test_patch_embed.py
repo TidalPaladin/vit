@@ -48,6 +48,7 @@ class TestPatchEmbed2d:
             assert param.grad is not None
             assert not param.grad.isnan().any()
 
+    @pytest.mark.cuda
     @pytest.mark.parametrize("normalization", ["LayerNorm", "RMSNorm"])
     def test_baseline(self, normalization):
         B, C, H, W = 2, 3, 64, 64

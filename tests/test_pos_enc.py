@@ -45,6 +45,7 @@ class TestRelativeFactorizedPosition:
             assert param.grad is not None
             assert not param.grad.isnan().any()
 
+    @pytest.mark.cuda
     def test_baseline(self):
         C, D = 2, 16
         torch.random.manual_seed(0)
