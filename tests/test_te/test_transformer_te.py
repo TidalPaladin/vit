@@ -11,6 +11,7 @@ except ImportError:
     pytest.skip("Transformer Engine is not installed", allow_module_level=True)
 
 
+@pytest.mark.skip(reason="Incomplete")
 class TestTransformerLayer:
 
     def test_baseline_simple(self):

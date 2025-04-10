@@ -7,7 +7,6 @@ from einops import rearrange
 from torch import Tensor
 from torch.utils.checkpoint import checkpoint
 
-from .fused import LayerNormLinear
 from .helpers import DEFAULT_TRUNC_STD, compile_is_disabled
 
 
@@ -179,15 +178,7 @@ def forward_attention(
     training: bool,
 ) -> Tensor:
     dropout = 0.0 if not training else dropout
-    print(f"Baseline final query sum: {q.sum()}")
-    print(f"Baseline final key sum: {k.sum()}")
-    print(f"Baseline final value sum: {v.sum()}")
-    print(f"Baseline Query hashed sum: {q.mean(-1).sum()}")
-    print(f"Baseline Key hashed sum: {k.mean(-1).sum()}")
-    print(f"Baseline Value hashed sum: {v.mean(-1).sum()}")
     o = F.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=dropout, is_causal=False)
-    print(f"Baseline final output sum: {o.sum()}")
-    print(f"Baseline final output hashed sum: {o.mean(-1).sum()}")
 
     if qkv_format == "sbhd":
         o = rearrange(o, "b h s d -> s b (h d)")
@@ -214,40 +205,14 @@ class MultiheadAttention(nn.Module):
     ):
         super().__init__()
         assert kv_channels is None or kv_channels == hidden_size, "kv_channels must be None or equal to hidden_size"
-        kv_channels = kv_channels or hidden_size
         num_gqa_groups = num_gqa_groups or num_attention_heads
         self.attention_dropout = attention_dropout
         self.layer_number = layer_number
         self.attention_type = attention_type
 
-        self.num_gqa_groups = num_attention_heads if num_gqa_groups is None else num_gqa_groups
-        assert (
-            num_attention_heads % self.num_gqa_groups == 0
-        ), "The number of attention heads must be divisible by the number of GQA groups!"
-        self.hidden_size_per_attention_head = kv_channels
-        self.hidden_size_q = self.hidden_size_per_attention_head * num_attention_heads
-        self.hidden_size_kv = self.hidden_size_per_attention_head * self.num_gqa_groups
-
-        if self.attention_type == "self":
-            self.layernorm_qkv = LayerNormLinear(
-                hidden_size,
-                self.hidden_size_q + 2 * self.hidden_size_kv,
-                normalization=normalization,
-                bias=bias,
-            )
-        elif self.attention_type == "cross":
-            self.layernorm_query = LayerNormLinear(
-                hidden_size,
-                self.hidden_size_q,
-                normalization=normalization,
-                bias=bias,
-            )
-            self.key_value = nn.Linear(
-                hidden_size,
-                2 * self.hidden_size_kv,
-                bias=bias,
-            )
-
+        self.layernorm_qkv = InputProjection(
+            hidden_size, num_attention_heads, normalization, bias, num_gqa_groups, qkv_format
+        )
         self.proj = nn.Linear(hidden_size, hidden_size, bias=bias)
         self.reset_parameters()
 

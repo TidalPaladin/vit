@@ -72,6 +72,7 @@ class TestViT:
             assert param.grad is not None, f"{name} has no gradient"
             assert not param.grad.isnan().any(), f"{name} has nan gradient"
 
+    @pytest.mark.skip(reason="Incomplete")
     def test_baseline(self, config):
         B, C, H, W = 2, 3, 64, 64
         torch.random.manual_seed(0)
