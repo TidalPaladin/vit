@@ -6,7 +6,7 @@ from vit.transformer import TransformerLayer as TransformerLayerBaseline
 
 
 try:
-    from transformer_engine.pytorch import TransformerLayer
+    from transformer_engine.pytorch import TransformerLayer  # type: ignore
 except ImportError:
     pytest.skip("Transformer Engine is not installed", allow_module_level=True)
 

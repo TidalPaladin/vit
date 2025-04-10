@@ -2,7 +2,7 @@ from typing import Sequence, cast
 
 import torch
 import torch.nn as nn
-import transformer_engine.pytorch as te
+import transformer_engine.pytorch as te  # type: ignore
 from torch import Tensor
 
 from ..pos_enc import create_grid

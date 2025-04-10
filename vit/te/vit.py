@@ -2,7 +2,7 @@ from typing import Any, ClassVar, Tuple, Type, cast
 
 import torch
 import torch.nn as nn
-import transformer_engine.pytorch as te
+import transformer_engine.pytorch as te  # type: ignore
 from einops.layers.torch import Reduce
 from torch import Tensor
 
