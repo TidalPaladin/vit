@@ -41,13 +41,8 @@ class TestLayerNormMLP:
 
     def test_determinstic(self):
         torch.random.manual_seed(0)
-        layer = LayerNormMLP(10, 20, dropout=0.1)
+        layer = LayerNormMLP(10, 20)
         x = torch.randn(10)
-
-        layer.train()
-        y1 = layer(x)
-        y2 = layer(x)
-        assert not torch.allclose(y1, y2)
 
         layer.eval()
         y3 = layer(x)

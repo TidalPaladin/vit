@@ -70,19 +70,18 @@ def forward_layer_norm_mlp(
     layer_norm_weight: Tensor,
     layer_norm_bias: Tensor | None,
     activation: Callable[[Tensor], Tensor],
-    dropout: float,
+    eps: float,
     training: bool,
 ) -> Tensor:
     if normalization == "LayerNorm":
-        x = F.layer_norm(x, x.shape[-1:], weight=layer_norm_weight, bias=layer_norm_bias)
+        x = F.layer_norm(x, x.shape[-1:], weight=layer_norm_weight, bias=layer_norm_bias, eps=eps)
     elif normalization == "RMSNorm":
-        x = F.rms_norm(x, x.shape[-1:], weight=layer_norm_weight)
+        x = F.rms_norm(x, x.shape[-1:], weight=layer_norm_weight, eps=eps)
     else:
         raise ValueError(f"Invalid normalization: {normalization}")
 
     x = F.linear(x, fc1_weight, fc1_bias)
     x = activation(x)
-    x = F.dropout(x, p=dropout, training=training)
     x = F.linear(x, fc2_weight, fc2_bias)
     return x
 
@@ -96,12 +95,12 @@ class LayerNormMLP(nn.Module):
         bias: bool = True,
         normalization: str = "LayerNorm",
         activation: str = "srelu",
-        dropout: float = 0.0,
+        eps: float = 1e-5,
     ):
         super().__init__()
         self.normalization = normalization
         self.activation = get_activation(activation)
-        self.dropout = dropout
+        self.eps = eps
 
         self.fc1_weight = nn.Parameter(torch.empty(ffn_hidden_size, hidden_size))
         self.fc1_bias = nn.Parameter(torch.zeros(ffn_hidden_size)) if bias else None
@@ -134,6 +133,6 @@ class LayerNormMLP(nn.Module):
             self.layer_norm_weight,
             self.layer_norm_bias,
             self.activation,
-            self.dropout,
+            self.eps,
             self.training,
         )
