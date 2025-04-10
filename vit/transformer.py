@@ -26,6 +26,7 @@ class TransformerLayer(nn.Module):
         activation: str = "gelu",
         attn_input_format: Literal["sbhd", "bshd"] = "sbhd",
         drop_path_rate: float = 0.0,
+        eps: float = 1e-5,
     ):
         super().__init__()
         self.drop_path_rate = drop_path_rate
@@ -41,6 +42,7 @@ class TransformerLayer(nn.Module):
             normalization,
             bias,
             attn_input_format,
+            eps,
         )
         if layer_type == "decoder":
             self.inter_attention = MultiheadAttention(
@@ -54,10 +56,11 @@ class TransformerLayer(nn.Module):
                 normalization,
                 bias,
                 attn_input_format,
+                eps,
             )
         else:
             self.inter_attention = None
-        self.layernorm_mlp = LayerNormMLP(hidden_size, ffn_hidden_size, bias, normalization, activation, hidden_dropout)
+        self.layernorm_mlp = LayerNormMLP(hidden_size, ffn_hidden_size, bias, normalization, activation, eps)
 
     def forward(
         self,

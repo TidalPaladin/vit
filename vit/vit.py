@@ -1,15 +1,21 @@
 from dataclasses import dataclass
-from typing import Any, ClassVar, Dict, Literal, Sequence, Tuple, Type, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, Literal, Sequence, Tuple, Type, cast
 
 import torch
 import torch.nn as nn
 from einops.layers.torch import Reduce
 from torch import Tensor
 
-from .helpers import DEFAULT_TRUNC_STD
+from .helpers import DEFAULT_BACKEND, DEFAULT_TRUNC_STD, Backend, check_te_installed, try_import_te
 from .patch_embed import PatchEmbed2d
 from .tokens import apply_mask, create_mask
 from .transformer import TransformerLayer
+
+
+if TYPE_CHECKING:
+    import transformer_engine.pytorch as te  # type: ignore[reportMissingImports]
+else:
+    te = try_import_te()
 
 
 @dataclass(frozen=True)
@@ -35,21 +41,20 @@ class ViTConfig:
     # Other
     checkpoint: bool = False
 
-    backend: Literal["pytorch", "te"] = "pytorch"
+    backend: Backend = DEFAULT_BACKEND
+
+    @property
+    def device_type(self) -> Literal["cpu", "cuda"]:
+        return "cuda" if self.backend == "te" else "cpu"
 
     @property
     def isotropic_output_dim(self) -> int:
         return self.hidden_size
 
     def instantiate(self) -> "ViT":
-        if self.backend == "pytorch":
-            return ViT(self)
-        elif self.backend == "te":
-            from .te.vit import ViT as ViTTE
-
-            return cast(ViT, ViTTE(self))
-        else:
+        if self.backend not in ("te", "pytorch"):
             raise ValueError(f"Invalid backend: {self.backend}")
+        return ViT(self)
 
     @property
     def transformer_kwargs(self) -> Dict[str, Any]:
@@ -84,6 +89,7 @@ class ViT(nn.Module):
             config.hidden_size,
             cast(Tuple[int, int], tuple(config.patch_size)),
             normalization=config.normalization,
+            backend=config.backend,
         )
 
         # Transformer blocks
@@ -117,7 +123,14 @@ class ViT(nn.Module):
         _kwargs.update(kwargs)
         _kwargs["layer_number"] = i + 1
         _kwargs["layer_type"] = "encoder"
-        layer = TransformerLayer(**_kwargs)
+        match self.config.backend:
+            case "pytorch":
+                layer = TransformerLayer(**_kwargs)
+            case "te":
+                check_te_installed(te)
+                layer = te.TransformerLayer(**_kwargs)
+            case _:
+                raise ValueError(f"Invalid backend: {self.config.backend}")
         return layer
 
     def create_decoder_layer(self, i: int = 0, **kwargs) -> TransformerLayer:
@@ -139,15 +152,28 @@ class ViT(nn.Module):
         _kwargs.update(kwargs)
         _kwargs["layer_number"] = i + 1
         _kwargs["layer_type"] = "decoder"
-        layer = TransformerLayer(**_kwargs)
+        match self.config.backend:
+            case "pytorch":
+                layer = TransformerLayer(**_kwargs)
+            case "te":
+                check_te_installed(te)
+                layer = te.TransformerLayer(**_kwargs)
+            case _:
+                raise ValueError(f"Invalid backend: {self.config.backend}")
         return layer
 
     def create_norm(self, hidden_size: int) -> nn.Module:
-        match self.config.normalization:
-            case "LayerNorm":
+        match (self.config.normalization, self.config.backend):
+            case ("LayerNorm", "pytorch"):
                 return nn.LayerNorm(hidden_size)
-            case "RMSNorm":
+            case ("RMSNorm", "pytorch"):
                 return nn.RMSNorm(hidden_size)
+            case ("LayerNorm", "te"):
+                check_te_installed(te)
+                return te.LayerNorm(hidden_size)
+            case ("RMSNorm", "te"):
+                check_te_installed(te)
+                return te.RMSNorm(hidden_size)
             case _:
                 raise ValueError(f"Invalid normalization: {self.config.normalization}")
 
@@ -174,8 +200,15 @@ class ViT(nn.Module):
 
         # Normalization + Linear
         layer.add_module("norm", self.create_norm(self.config.isotropic_output_dim))
-        linear = nn.Linear(self.config.isotropic_output_dim, out_dim)
-        nn.init.trunc_normal_(linear.weight, std=DEFAULT_TRUNC_STD)
+        match self.config.backend:
+            case "pytorch":
+                linear = nn.Linear(self.config.isotropic_output_dim, out_dim)
+                nn.init.trunc_normal_(linear.weight, std=DEFAULT_TRUNC_STD)
+            case "te":
+                check_te_installed(te)
+                linear = te.Linear(self.config.isotropic_output_dim, out_dim)
+            case _:
+                raise ValueError(f"Invalid backend: {self.config.backend}")
         layer.add_module("linear", linear)
 
         return layer

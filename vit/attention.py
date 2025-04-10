@@ -11,29 +11,35 @@ from .helpers import DEFAULT_TRUNC_STD, compile_is_disabled
 
 
 def apply_qkv_norm(
-    q: Tensor, k: Tensor, v: Tensor, normalization: str, layer_norm_weight: Tensor, layer_norm_bias: Tensor | None
+    q: Tensor,
+    k: Tensor,
+    v: Tensor,
+    normalization: str,
+    layer_norm_weight: Tensor,
+    layer_norm_bias: Tensor | None,
+    eps: float,
 ) -> Tuple[Tensor, Tensor, Tensor]:
     if q is k and k is v:
         if normalization == "LayerNorm":
-            q = k = v = F.layer_norm(q, q.shape[-1:], weight=layer_norm_weight, bias=layer_norm_bias)
+            q = k = v = F.layer_norm(q, q.shape[-1:], weight=layer_norm_weight, bias=layer_norm_bias, eps=eps)
         elif normalization == "RMSNorm":
-            q = k = v = F.rms_norm(q, q.shape[-1:], weight=layer_norm_weight)
+            q = k = v = F.rms_norm(q, q.shape[-1:], weight=layer_norm_weight, eps=eps)
     elif k is v:
         if normalization == "LayerNorm":
-            q = F.layer_norm(q, q.shape[-1:], weight=layer_norm_weight, bias=layer_norm_bias)
-            k = v = F.layer_norm(k, k.shape[-1:], weight=layer_norm_weight)
+            q = F.layer_norm(q, q.shape[-1:], weight=layer_norm_weight, bias=layer_norm_bias, eps=eps)
+            k = v = F.layer_norm(k, k.shape[-1:], weight=layer_norm_weight, eps=eps)
         elif normalization == "RMSNorm":
-            q = F.rms_norm(q, q.shape[-1:], weight=layer_norm_weight)
-            k = v = F.rms_norm(k, k.shape[-1:], weight=layer_norm_weight)
+            q = F.rms_norm(q, q.shape[-1:], weight=layer_norm_weight, eps=eps)
+            k = v = F.rms_norm(k, k.shape[-1:], weight=layer_norm_weight, eps=eps)
     else:
         if normalization == "LayerNorm":
-            q = F.layer_norm(q, q.shape[-1:], weight=layer_norm_weight, bias=layer_norm_bias)
-            k = F.layer_norm(k, k.shape[-1:], weight=layer_norm_weight, bias=layer_norm_bias)
-            v = F.layer_norm(v, v.shape[-1:], weight=layer_norm_weight, bias=layer_norm_bias)
+            q = F.layer_norm(q, q.shape[-1:], weight=layer_norm_weight, bias=layer_norm_bias, eps=eps)
+            k = F.layer_norm(k, k.shape[-1:], weight=layer_norm_weight, bias=layer_norm_bias, eps=eps)
+            v = F.layer_norm(v, v.shape[-1:], weight=layer_norm_weight, bias=layer_norm_bias, eps=eps)
         elif normalization == "RMSNorm":
-            q = F.rms_norm(q, q.shape[-1:], weight=layer_norm_weight)
-            k = F.rms_norm(k, k.shape[-1:], weight=layer_norm_weight)
-            v = F.rms_norm(v, v.shape[-1:], weight=layer_norm_weight)
+            q = F.rms_norm(q, q.shape[-1:], weight=layer_norm_weight, eps=eps)
+            k = F.rms_norm(k, k.shape[-1:], weight=layer_norm_weight, eps=eps)
+            v = F.rms_norm(v, v.shape[-1:], weight=layer_norm_weight, eps=eps)
     return q, k, v
 
 
@@ -48,8 +54,9 @@ def forward_input_projection(
     qkv_format: Literal["sbhd", "bshd"],
     num_attention_heads: int,
     num_gqa_groups: int,
+    eps: float,
 ) -> Tuple[Tensor, Tensor, Tensor]:
-    q, k, v = apply_qkv_norm(q, k, v, normalization, layer_norm_weight, layer_norm_bias)
+    q, k, v = apply_qkv_norm(q, k, v, normalization, layer_norm_weight, layer_norm_bias, eps)
 
     q = F.linear(q, query_weight, query_bias)
     k = F.linear(k, key_weight, key_bias)
@@ -78,12 +85,14 @@ class InputProjection(nn.Module):
         bias: bool,
         num_gqa_groups: int,
         qkv_format: Literal["sbhd", "bshd"],
+        eps: float = 1e-5,
     ):
         super().__init__()
         self.num_attention_heads = num_attention_heads
         self.normalization = normalization
         self.num_gqa_groups = num_gqa_groups
         self.qkv_format = qkv_format
+        self.eps = eps
 
         self.layer_norm_weight = nn.Parameter(torch.empty(hidden_size))
         self.layer_norm_bias = nn.Parameter(torch.zeros(hidden_size)) if normalization == "LayerNorm" else None
@@ -140,6 +149,7 @@ class InputProjection(nn.Module):
                 self.qkv_format,
                 self.num_attention_heads,
                 self.num_gqa_groups,
+                self.eps,
                 use_reentrant=False,
             )
         else:
@@ -159,6 +169,7 @@ class InputProjection(nn.Module):
                 cast(Literal["sbhd", "bshd"], self.qkv_format),
                 self.num_attention_heads,
                 self.num_gqa_groups,
+                self.eps,
             )
 
         assert isinstance(y, tuple) and len(y) == 3
@@ -202,6 +213,7 @@ class MultiheadAttention(nn.Module):
         normalization: Literal["LayerNorm", "RMSNorm"] = "LayerNorm",
         bias: bool = True,
         qkv_format: Literal["sbhd", "bshd"] = "sbhd",
+        eps: float = 1e-5,
     ):
         super().__init__()
         assert kv_channels is None or kv_channels == hidden_size, "kv_channels must be None or equal to hidden_size"
@@ -211,7 +223,7 @@ class MultiheadAttention(nn.Module):
         self.attention_type = attention_type
 
         self.layernorm_qkv = InputProjection(
-            hidden_size, num_attention_heads, normalization, bias, num_gqa_groups, qkv_format
+            hidden_size, num_attention_heads, normalization, bias, num_gqa_groups, qkv_format, eps
         )
         self.proj = nn.Linear(hidden_size, hidden_size, bias=bias)
         self.reset_parameters()

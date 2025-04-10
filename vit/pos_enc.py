@@ -1,11 +1,17 @@
-from typing import Sequence, cast
+from typing import TYPE_CHECKING, Sequence, cast
 
 import torch
 import torch.nn as nn
 from torch import Tensor
 
 from .fused import LayerNormMLP
-from .helpers import compile_is_disabled
+from .helpers import DEFAULT_BACKEND, Backend, check_te_installed, compile_is_disabled, try_import_te
+
+
+if TYPE_CHECKING:
+    import transformer_engine.pytorch as te  # type: ignore[reportMissingImports]
+else:
+    te = try_import_te()
 
 
 @torch.compile(fullgraph=True, disable=compile_is_disabled())
@@ -56,10 +62,18 @@ class RelativeFactorizedPosition(nn.Module):
         * Output - :math:`(1, L, D)` where :math:`L` is the product of input dimensions and :math:`D` is the output dimension
     """
 
-    def __init__(self, d_in: int, d_out: int):
+    def __init__(self, d_in: int, d_out: int, backend: Backend = DEFAULT_BACKEND, eps: float = 1e-5):
         super().__init__()
-        self.linear = nn.Linear(d_in, d_out)
-        self.mlp = LayerNormMLP(d_out, d_out, activation="srelu")
+        match backend:
+            case "pytorch":
+                self.linear = nn.Linear(d_in, d_out)
+                self.mlp = LayerNormMLP(d_out, d_out, activation="srelu", eps=eps)
+            case "te":
+                check_te_installed(te)
+                self.linear = te.Linear(d_in, d_out)
+                self.mlp = te.LayerNormMLP(d_out, d_out, activation="srelu", eps=eps)
+            case _:
+                raise ValueError(f"Backend {backend} not supported")
 
     def forward(self, dims: Sequence[int]) -> Tensor:
         with torch.no_grad():
