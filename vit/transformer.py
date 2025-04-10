@@ -23,7 +23,7 @@ class TransformerLayer(nn.Module):
         layer_type: Literal["encoder", "decoder"] = "encoder",
         normalization: Literal["LayerNorm", "RMSNorm"] = "LayerNorm",
         bias: bool = True,
-        activation: str = "srelu",
+        activation: str = "gelu",
         attn_input_format: Literal["sbhd", "bshd"] = "sbhd",
         drop_path_rate: float = 0.0,
     ):

@@ -1,71 +1,15 @@
-from dataclasses import dataclass
-from typing import Any, ClassVar, Dict, Literal, Sequence, Tuple, Type, cast
+from typing import Any, ClassVar, Tuple, Type, cast
 
 import torch
 import torch.nn as nn
+import transformer_engine.pytorch as te  # type: ignore
 from einops.layers.torch import Reduce
 from torch import Tensor
 
-from .helpers import DEFAULT_TRUNC_STD
+from ..helpers import DEFAULT_TRUNC_STD
+from ..tokens import apply_mask, create_mask
+from ..vit import ViTConfig
 from .patch_embed import PatchEmbed2d
-from .tokens import apply_mask, create_mask
-from .transformer import TransformerLayer
-
-
-@dataclass(frozen=True)
-class ViTConfig:
-    # Inputs
-    in_channels: int
-    patch_size: Sequence[int]
-
-    # Transformer
-    depth: int
-    hidden_size: int
-    ffn_hidden_size: int
-    num_attention_heads: int
-    num_gqa_groups: int | None = None
-    hidden_dropout: float = 0.1
-    attention_dropout: float = 0.1
-    normalization: str = "RMSNorm"
-    bias: bool = True
-    activation: str = "srelu"
-    drop_path_rate: float = 0.0
-    decoder: bool = False
-
-    # Other
-    checkpoint: bool = False
-
-    backend: Literal["pytorch", "te"] = "pytorch"
-
-    @property
-    def isotropic_output_dim(self) -> int:
-        return self.hidden_size
-
-    def instantiate(self) -> "ViT":
-        if self.backend == "pytorch":
-            return ViT(self)
-        elif self.backend == "te":
-            from .te.vit import ViT as ViTTE
-
-            return cast(ViT, ViTTE(self))
-        else:
-            raise ValueError(f"Invalid backend: {self.backend}")
-
-    @property
-    def transformer_kwargs(self) -> Dict[str, Any]:
-        return dict(
-            hidden_size=self.hidden_size,
-            ffn_hidden_size=self.ffn_hidden_size,
-            num_attention_heads=self.num_attention_heads,
-            num_gqa_groups=self.num_gqa_groups,
-            hidden_dropout=self.hidden_dropout,
-            attention_dropout=self.attention_dropout,
-            normalization=self.normalization,
-            bias=self.bias,
-            activation=self.activation,
-            drop_path_rate=self.drop_path_rate,
-            attn_input_format="bshd",
-        )
 
 
 class ViT(nn.Module):
@@ -98,7 +42,7 @@ class ViT(nn.Module):
     def config(self) -> ViTConfig:
         return self._config
 
-    def create_encoder_layer(self, i: int = 0, **kwargs) -> TransformerLayer:
+    def create_encoder_layer(self, i: int = 0, **kwargs) -> te.TransformerLayer:
         """
         Creates a Transformer encoder layer.
 
@@ -117,10 +61,19 @@ class ViT(nn.Module):
         _kwargs.update(kwargs)
         _kwargs["layer_number"] = i + 1
         _kwargs["layer_type"] = "encoder"
-        layer = TransformerLayer(**_kwargs)
+        layer = te.TransformerLayer(**_kwargs)
         return layer
 
-    def create_decoder_layer(self, i: int = 0, **kwargs) -> TransformerLayer:
+    def create_norm(self, hidden_size: int) -> nn.Module:
+        match self.config.normalization:
+            case "LayerNorm":
+                return te.LayerNorm(hidden_size)
+            case "RMSNorm":
+                return te.RMSNorm(hidden_size)
+            case _:
+                raise ValueError(f"Invalid normalization: {self.config.normalization}")
+
+    def create_decoder_layer(self, i: int = 0, **kwargs) -> te.TransformerLayer:
         """
         Creates a Transformer decoder layer.
 
@@ -139,17 +92,8 @@ class ViT(nn.Module):
         _kwargs.update(kwargs)
         _kwargs["layer_number"] = i + 1
         _kwargs["layer_type"] = "decoder"
-        layer = TransformerLayer(**_kwargs)
+        layer = te.TransformerLayer(**_kwargs)
         return layer
-
-    def create_norm(self, hidden_size: int) -> nn.Module:
-        match self.config.normalization:
-            case "LayerNorm":
-                return nn.LayerNorm(hidden_size)
-            case "RMSNorm":
-                return nn.RMSNorm(hidden_size)
-            case _:
-                raise ValueError(f"Invalid normalization: {self.config.normalization}")
 
     def create_head(self, out_dim: int, pool_type: str | None = None) -> nn.Module:
         r"""Creates a head for the model.
@@ -174,7 +118,7 @@ class ViT(nn.Module):
 
         # Normalization + Linear
         layer.add_module("norm", self.create_norm(self.config.isotropic_output_dim))
-        linear = nn.Linear(self.config.isotropic_output_dim, out_dim)
+        linear = te.Linear(self.config.isotropic_output_dim, out_dim)
         nn.init.trunc_normal_(linear.weight, std=DEFAULT_TRUNC_STD)
         layer.add_module("linear", linear)
 
@@ -234,7 +178,7 @@ class ViT(nn.Module):
 
         # Transformer blocks and output norm
         for block in self.blocks:
-            block = cast(TransformerLayer, block)
+            block = cast(te.TransformerLayer, block)
             x = block(x, encoder_output=encoder_output, checkpoint_core_attention=self.config.checkpoint)
 
         # Extract CLS token

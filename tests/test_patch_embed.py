@@ -1,5 +1,6 @@
 import math
 
+import pytest
 import torch
 
 from vit.patch_embed import PatchEmbed2d
@@ -7,10 +8,11 @@ from vit.patch_embed import PatchEmbed2d
 
 class TestPatchEmbed2d:
 
-    def test_forward(self):
+    @pytest.mark.parametrize("normalization", ["LayerNorm", "RMSNorm"])
+    def test_forward(self, normalization):
         B, C, H, W = 2, 3, 64, 64
         D_model = 64
-        layer = PatchEmbed2d(C, D_model, (4, 4))
+        layer = PatchEmbed2d(C, D_model, (4, 4), normalization=normalization)
         x = torch.randn(B, C, H, W)
         with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
             y = layer(x)
