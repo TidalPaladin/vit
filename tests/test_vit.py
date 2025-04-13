@@ -34,6 +34,9 @@ class TestViT:
         encoder_output = torch.randn(1, 64, 128)
         config = replace(config, decoder=True)
         model = ViT(config)
+        assert model.blocks[0].inter_attention is not None
+        assert model.blocks[1].inter_attention is not None
+        assert model.blocks[2].inter_attention is not None
         with torch.autocast(device_type="cpu", dtype=torch.bfloat16, enabled=True):
             out, cls_token = model(x, encoder_output=encoder_output)
         assert out.shape == (1, 196, 128)
