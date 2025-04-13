@@ -37,6 +37,7 @@ class ViTConfig:
     activation: str = "srelu"
     drop_path_rate: float = 0.0
     decoder: bool = False
+    decoder_layers: Sequence[int] | None = None
 
     # Other
     checkpoint: bool = False
@@ -93,9 +94,14 @@ class ViT(nn.Module):
         )
 
         # Transformer blocks
+        if self.config.decoder:
+            decoder_layers = self.config.decoder_layers or range(config.depth)
+        else:
+            decoder_layers = []
+        decoder_layers = set(decoder_layers)
         self.blocks = nn.ModuleList(
             [
-                self.create_encoder_layer(i) if not self.config.decoder else self.create_decoder_layer(i)
+                self.create_decoder_layer(i) if i in decoder_layers else self.create_encoder_layer(i)
                 for i in range(config.depth)
             ]
         )

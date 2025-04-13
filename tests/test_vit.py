@@ -39,6 +39,19 @@ class TestViT:
         assert out.shape == (1, 196, 128)
         assert cls_token.shape == (1, 128)
 
+    def test_forward_with_encoder_output_custom_decoder_layers(self, config):
+        x = torch.randn(1, 3, 224, 224)
+        encoder_output = torch.randn(1, 64, 128)
+        config = replace(config, decoder=True, decoder_layers=[0, 2])
+        model = ViT(config)
+        assert model.blocks[0].inter_attention is not None
+        assert model.blocks[1].inter_attention is None
+        assert model.blocks[2].inter_attention is not None
+        with torch.autocast(device_type="cpu", dtype=torch.bfloat16, enabled=True):
+            out, cls_token = model(x, encoder_output=encoder_output)
+        assert out.shape == (1, 196, 128)
+        assert cls_token.shape == (1, 128)
+
     @pytest.mark.parametrize("checkpoint", [False, True])
     def test_backward(self, config, checkpoint):
         x = torch.randn(1, 3, 224, 224, requires_grad=True)
