@@ -1,10 +1,18 @@
 from dataclasses import replace
+from typing import TYPE_CHECKING
 
 import pytest
 import torch
 from torch.testing import assert_close
 
+from vit.helpers import try_import_te
 from vit.vit import ViT, ViTConfig
+
+
+if TYPE_CHECKING:
+    import transformer_engine.pytorch as te  # type: ignore[reportMissingImports]
+else:
+    te = try_import_te()
 
 
 @pytest.fixture
@@ -21,6 +29,20 @@ def config():
 
 
 class TestViT:
+
+    @pytest.mark.parametrize("decoder", [False, True])
+    def test_non_causal_default(self, config, decoder):
+        if te is None:
+            pytest.skip("Transformer Engine is not available")
+        config = replace(config, backend="te", decoder=decoder)
+        model = ViT(config)
+        assert model.create_encoder_layer().self_attn_mask_type == "no_mask"  # type: ignore
+        assert model.create_decoder_layer().enc_dec_attn_mask_type == "no_mask"  # type: ignore
+
+        for block in model.blocks:
+            assert block.self_attn_mask_type == "no_mask"  # type: ignore
+            if hasattr(block, "inter_attention"):
+                assert block.enc_dec_attn_mask_type == "no_mask"  # type: ignore
 
     def test_forward(self, config):
         x = torch.randn(1, 3, 224, 224)
@@ -83,6 +105,8 @@ class TestViT:
 
     @pytest.mark.cuda
     def test_baseline(self, config):
+        if te is None:
+            pytest.skip("Transformer Engine is not available")
         B, C, H, W = 2, 3, 64, 64
         torch.random.manual_seed(0)
 
