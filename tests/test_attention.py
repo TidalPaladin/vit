@@ -1,14 +1,23 @@
+from typing import TYPE_CHECKING
+
 import pytest
 import torch
 from torch.testing import assert_close
 
 from vit.attention import MultiheadAttention
+from vit.helpers import try_import_te
+
+
+if TYPE_CHECKING:
+    import transformer_engine.pytorch as te  # type: ignore[reportMissingImports]
+else:
+    te = try_import_te()
 
 
 class TestMultiheadAttention:
 
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    @pytest.mark.parametrize("num_gqa_groups", [8, 16])
+    @pytest.mark.parametrize("num_gqa_groups", [8, 4])
     @pytest.mark.parametrize("normalization", ["LayerNorm", "RMSNorm"])
     def test_forward(self, dtype, num_gqa_groups, normalization):
         B, L, D = 16, 128, 128
@@ -21,7 +30,7 @@ class TestMultiheadAttention:
         assert y.shape == (B, L, D)
 
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    @pytest.mark.parametrize("num_gqa_groups", [8, 16])
+    @pytest.mark.parametrize("num_gqa_groups", [8, 4])
     @pytest.mark.parametrize("normalization", ["LayerNorm", "RMSNorm"])
     def test_forward_with_encoder_output(self, dtype, num_gqa_groups, normalization):
         B, L, D = 16, 128, 128
@@ -70,3 +79,88 @@ class TestMultiheadAttention:
         y3 = layer(x)
         y4 = layer(x)
         assert not torch.allclose(y3, y4)
+
+    @pytest.mark.cuda
+    @pytest.mark.parametrize("num_gqa_groups", [8, 4])
+    @pytest.mark.parametrize("normalization", ["LayerNorm", "RMSNorm"])
+    @pytest.mark.parametrize("input_layernorm", [False, True])
+    def test_baseline_self_attention(self, num_gqa_groups, normalization, input_layernorm):
+        if te is None:
+            pytest.skip("Transformer Engine is not available")
+
+        B, L, D = 16, 128, 128
+        layer = MultiheadAttention(
+            D,
+            D // 16,
+            num_gqa_groups=num_gqa_groups,
+            qkv_format="bshd",
+            normalization=normalization,
+            input_layernorm=input_layernorm,
+        ).cuda()
+        baseline = te.MultiheadAttention(
+            D,
+            D // 16,
+            num_gqa_groups=num_gqa_groups,
+            qkv_format="bshd",
+            normalization=normalization,
+            input_layernorm=input_layernorm,
+            attn_mask_type="no_mask",
+        ).cuda()
+
+        layer.eval()
+        baseline.eval()
+
+        # Sync weights
+        for name, param in baseline.named_parameters():
+            layer.get_parameter(name).data.copy_(param.data)
+
+        x = torch.randn(B, L, D, dtype=torch.float32, device="cuda")
+        with torch.autocast(device_type="cuda", dtype=torch.float32):
+            y = layer(x)
+            y_baseline = baseline(x)
+
+        assert_close(y, y_baseline, atol=1e-4, rtol=0)
+
+    @pytest.mark.cuda
+    @pytest.mark.parametrize("num_gqa_groups", [8, 4])
+    @pytest.mark.parametrize("normalization", ["LayerNorm", "RMSNorm"])
+    @pytest.mark.parametrize("input_layernorm", [False, True])
+    def test_baseline_cross_attention(self, num_gqa_groups, normalization, input_layernorm):
+        if te is None:
+            pytest.skip("Transformer Engine is not available")
+
+        B, L, D = 16, 128, 128
+        layer = MultiheadAttention(
+            D,
+            D // 16,
+            num_gqa_groups=num_gqa_groups,
+            qkv_format="bshd",
+            normalization=normalization,
+            input_layernorm=input_layernorm,
+            attention_type="cross",
+        ).cuda()
+        baseline = te.MultiheadAttention(
+            D,
+            D // 16,
+            num_gqa_groups=num_gqa_groups,
+            qkv_format="bshd",
+            normalization=normalization,
+            input_layernorm=input_layernorm,
+            attn_mask_type="no_mask",
+            attention_type="cross",
+        ).cuda()
+
+        layer.eval()
+        baseline.eval()
+
+        # Sync weights
+        for name, param in baseline.named_parameters():
+            layer.get_parameter(name).data.copy_(param.data)
+
+        x = torch.randn(B, L, D, dtype=torch.float32, device="cuda")
+        encoder_output = torch.randn(B, L // 2, D, dtype=torch.float32, device="cuda")
+        with torch.autocast(device_type="cuda", dtype=torch.float32):
+            y = layer(x, encoder_output=encoder_output)
+            y_baseline = baseline(x, encoder_output=encoder_output)
+
+        assert_close(y, y_baseline, atol=1e-3, rtol=0)

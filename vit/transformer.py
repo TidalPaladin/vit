@@ -26,6 +26,7 @@ class TransformerLayer(nn.Module):
         activation: str = "gelu",
         attn_input_format: Literal["sbhd", "bshd"] = "sbhd",
         drop_path_rate: float = 0.0,
+        fuse_qkv_params: bool = False,
         eps: float = 1e-5,
     ):
         super().__init__()
@@ -42,6 +43,8 @@ class TransformerLayer(nn.Module):
             normalization,
             bias,
             attn_input_format,
+            True,
+            fuse_qkv_params,
             eps,
         )
         if layer_type == "decoder":
@@ -56,6 +59,8 @@ class TransformerLayer(nn.Module):
                 normalization,
                 bias,
                 attn_input_format,
+                True,
+                fuse_qkv_params,
                 eps,
             )
         else:
@@ -70,16 +75,16 @@ class TransformerLayer(nn.Module):
         checkpoint_core_mlp: bool = False,
     ) -> Tensor:
         o = self.self_attention(x, checkpoint_core_attention=checkpoint_core_attention)
-        o = x + drop_path(o, self.drop_path_rate, self.training)
+        x = x + drop_path(o, self.drop_path_rate, self.training)
 
         if self.inter_attention is not None:
-            o = self.inter_attention(o, encoder_output, checkpoint_core_attention=checkpoint_core_attention)
-            o = x + drop_path(o, self.drop_path_rate, self.training)
+            o = self.inter_attention(x, encoder_output, checkpoint_core_attention=checkpoint_core_attention)
+            x = x + drop_path(o, self.drop_path_rate, self.training)
 
         if self.training and checkpoint_core_mlp:
-            o = checkpoint(self.layernorm_mlp, o, use_reentrant=False)
+            o = checkpoint(self.layernorm_mlp, x, use_reentrant=False)
         else:
-            o = self.layernorm_mlp(o)
+            o = self.layernorm_mlp(x)
         assert isinstance(o, Tensor)
-        o = x + drop_path(o, self.drop_path_rate, self.training)
-        return o
+        x = x + drop_path(o, self.drop_path_rate, self.training)
+        return x

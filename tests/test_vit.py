@@ -1,9 +1,18 @@
 from dataclasses import replace
+from typing import TYPE_CHECKING
 
 import pytest
 import torch
+from torch.testing import assert_close
 
+from vit.helpers import try_import_te
 from vit.vit import ViT, ViTConfig
+
+
+if TYPE_CHECKING:
+    import transformer_engine.pytorch as te  # type: ignore[reportMissingImports]
+else:
+    te = try_import_te()
 
 
 @pytest.fixture
@@ -20,6 +29,20 @@ def config():
 
 
 class TestViT:
+
+    @pytest.mark.parametrize("decoder", [False, True])
+    def test_non_causal_default(self, config, decoder):
+        if te is None:
+            pytest.skip("Transformer Engine is not available")
+        config = replace(config, backend="te", decoder=decoder)
+        model = ViT(config)
+        assert model.create_encoder_layer().self_attn_mask_type == "no_mask"  # type: ignore
+        assert model.create_decoder_layer().enc_dec_attn_mask_type == "no_mask"  # type: ignore
+
+        for block in model.blocks:
+            assert block.self_attn_mask_type == "no_mask"  # type: ignore
+            if hasattr(block, "inter_attention"):
+                assert block.enc_dec_attn_mask_type == "no_mask"  # type: ignore
 
     def test_forward(self, config):
         x = torch.randn(1, 3, 224, 224)
@@ -80,24 +103,26 @@ class TestViT:
             assert param.grad is not None, f"{name} has no gradient"
             assert not param.grad.isnan().any(), f"{name} has nan gradient"
 
+    @pytest.mark.cuda
+    def test_baseline(self, config):
+        if te is None:
+            pytest.skip("Transformer Engine is not available")
+        B, C, H, W = 2, 3, 64, 64
+        torch.random.manual_seed(0)
 
-#    @pytest.mark.skip(reason="Incomplete")
-#    def test_baseline(self, config):
-#        B, C, H, W = 2, 3, 64, 64
-#        torch.random.manual_seed(0)
-#        baseline = ViTBaseline(config).to("cuda")
-#        layer = ViT(config).to("cuda")
-#        x = torch.randn(B, C, H, W, device="cuda")
-#
-#        layer.eval()
-#        baseline.eval()
-#
-#        # Sync weights
-#        for name, param in baseline.named_parameters():
-#            layer.get_parameter(name).data.copy_(param.data)
-#
-#        with torch.autocast(device_type="cuda", dtype=torch.float32):
-#            y = layer(x)
-#            y_baseline = baseline(x)
-#        assert_close(y, y_baseline, atol=1e-4, rtol=0)
-#
+        baseline_config = replace(config, backend="te")
+        baseline = ViT(baseline_config).to("cuda")
+        layer = ViT(config).to("cuda")
+        x = torch.randn(B, C, H, W, device="cuda")
+
+        layer.eval()
+        baseline.eval()
+
+        # Sync weights
+        for name, param in baseline.named_parameters():
+            layer.get_parameter(name).data.copy_(param.data)
+
+        with torch.autocast(device_type="cuda", dtype=torch.float32):
+            y = layer(x)
+            y_baseline = baseline(x)
+        assert_close(y, y_baseline, atol=1e-4, rtol=0)

@@ -1,13 +1,13 @@
-from typing import Literal, Tuple, cast
+from typing import Literal, Tuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange
+from einops import rearrange, repeat
 from torch import Tensor
-from torch.utils.checkpoint import checkpoint
 
-from .helpers import DEFAULT_TRUNC_STD, compile_is_disabled
+from .fused import LayerNormLinear, Linear
+from .helpers import compile_is_disabled
 
 
 def apply_qkv_norm(
@@ -44,7 +44,7 @@ def apply_qkv_norm(
 
 
 @torch.compile(fullgraph=True, mode="reduce-overhead", disable=compile_is_disabled())
-def forward_input_projection(
+def forward_input_projection_fused(
     # fmt: off
     q: Tensor, k: Tensor, v: Tensor,
     query_weight: Tensor, key_weight: Tensor, value_weight: Tensor,
@@ -76,105 +76,37 @@ def forward_input_projection(
     return q, k, v
 
 
-class InputProjection(nn.Module):
-    def __init__(
-        self,
-        hidden_size: int,
-        num_attention_heads: int,
-        normalization: str,
-        bias: bool,
-        num_gqa_groups: int,
-        qkv_format: Literal["sbhd", "bshd"],
-        eps: float = 1e-5,
-    ):
-        super().__init__()
-        self.num_attention_heads = num_attention_heads
-        self.normalization = normalization
-        self.num_gqa_groups = num_gqa_groups
-        self.qkv_format = qkv_format
-        self.eps = eps
+@torch.compile(fullgraph=True, mode="reduce-overhead", disable=compile_is_disabled())
+def forward_input_projection(
+    # fmt: off
+    q: Tensor, k: Tensor, v: Tensor,
+    query_weight: Tensor, key_weight: Tensor, value_weight: Tensor,
+    query_bias: Tensor | None, key_bias: Tensor | None, value_bias: Tensor | None,
+    normalization: str,
+    layer_norm_weight: Tensor, layer_norm_bias: Tensor | None,
+    qkv_format: Literal["sbhd", "bshd"],
+    num_attention_heads: int,
+    num_gqa_groups: int,
+    eps: float,
+) -> Tuple[Tensor, Tensor, Tensor]:
+    q, k, v = apply_qkv_norm(q, k, v, normalization, layer_norm_weight, layer_norm_bias, eps)
 
-        self.layer_norm_weight = nn.Parameter(torch.empty(hidden_size))
-        self.layer_norm_bias = nn.Parameter(torch.zeros(hidden_size)) if normalization == "LayerNorm" else None
+    q = F.linear(q, query_weight, query_bias)
+    k = F.linear(k, key_weight, key_bias)
+    v = F.linear(v, value_weight, value_bias)
 
-        q_dim = hidden_size
-        kv_dim = hidden_size // num_attention_heads * num_gqa_groups
+    if qkv_format == "sbhd":
+        q = rearrange(q, "s b (h d) -> b h s d", h=num_attention_heads)
+        k = rearrange(k, "s b (g h d) -> b h (g s) d", d=q.shape[-1], g=num_gqa_groups)
+        v = rearrange(v, "s b (g h d) -> b h (g s) d", d=q.shape[-1], g=num_gqa_groups)
+    elif qkv_format == "bshd":
+        q = rearrange(q, "b s (h d) -> b h s d", h=num_attention_heads)
+        k = rearrange(k, "b s (g h d) -> b h (g s) d", d=q.shape[-1], g=num_gqa_groups)
+        v = rearrange(v, "b s (g h d) -> b h (g s) d", d=q.shape[-1], g=num_gqa_groups)
+    else:
+        raise ValueError(f"Invalid qkv_format: {qkv_format}")
 
-        self.query_weight = nn.Parameter(torch.empty(q_dim, hidden_size))
-        self.key_weight = nn.Parameter(torch.empty(kv_dim, hidden_size))
-        self.value_weight = nn.Parameter(torch.empty(kv_dim, hidden_size))
-        self.query_bias = nn.Parameter(torch.zeros(hidden_size)) if bias else None
-        self.key_bias = nn.Parameter(torch.zeros(kv_dim)) if bias else None
-        self.value_bias = nn.Parameter(torch.zeros(kv_dim)) if bias else None
-        self.reset_parameters()
-
-    def reset_parameters(self) -> None:
-        nn.init.trunc_normal_(self.query_weight, std=DEFAULT_TRUNC_STD)
-        nn.init.trunc_normal_(self.key_weight, std=DEFAULT_TRUNC_STD)
-        nn.init.trunc_normal_(self.value_weight, std=DEFAULT_TRUNC_STD)
-        nn.init.ones_(self.layer_norm_weight)
-        if self.query_bias is not None:
-            nn.init.zeros_(self.query_bias)
-        if self.key_bias is not None:
-            nn.init.zeros_(self.key_bias)
-        if self.value_bias is not None:
-            nn.init.zeros_(self.value_bias)
-        if self.layer_norm_bias is not None:
-            nn.init.zeros_(self.layer_norm_bias)
-
-    def forward(
-        self, x: Tensor, encoder_output: Tensor | None = None, checkpoint_core_attention: bool = False
-    ) -> Tuple[Tensor, Tensor, Tensor]:
-        if encoder_output is not None:
-            q = x
-            k = v = encoder_output
-        else:
-            q = k = v = x
-
-        if self.training and checkpoint_core_attention:
-            y = checkpoint(
-                forward_input_projection,
-                q,
-                k,
-                v,
-                self.query_weight,
-                self.key_weight,
-                self.value_weight,
-                self.query_bias,
-                self.key_bias,
-                self.value_bias,
-                self.normalization,
-                self.layer_norm_weight,
-                self.layer_norm_bias,
-                self.qkv_format,
-                self.num_attention_heads,
-                self.num_gqa_groups,
-                self.eps,
-                use_reentrant=False,
-            )
-        else:
-            y = forward_input_projection(
-                q,
-                k,
-                v,
-                self.query_weight,
-                self.key_weight,
-                self.value_weight,
-                self.query_bias,
-                self.key_bias,
-                self.value_bias,
-                self.normalization,
-                self.layer_norm_weight,
-                self.layer_norm_bias,
-                cast(Literal["sbhd", "bshd"], self.qkv_format),
-                self.num_attention_heads,
-                self.num_gqa_groups,
-                self.eps,
-            )
-
-        assert isinstance(y, tuple) and len(y) == 3
-        assert all(isinstance(t, Tensor) for t in y)
-        return cast(Tuple[Tensor, Tensor, Tensor], y)
+    return q, k, v
 
 
 @torch.compile(fullgraph=True, mode="reduce-overhead", disable=compile_is_disabled())
@@ -213,32 +145,92 @@ class MultiheadAttention(nn.Module):
         normalization: Literal["LayerNorm", "RMSNorm"] = "LayerNorm",
         bias: bool = True,
         qkv_format: Literal["sbhd", "bshd"] = "sbhd",
+        input_layernorm: bool = False,
+        fuse_qkv_params: bool = False,
         eps: float = 1e-5,
     ):
         super().__init__()
-        assert kv_channels is None or kv_channels == hidden_size, "kv_channels must be None or equal to hidden_size"
+        kv_channels = kv_channels if kv_channels else (hidden_size // num_attention_heads)
         num_gqa_groups = num_gqa_groups or num_attention_heads
         self.attention_dropout = attention_dropout
         self.layer_number = layer_number
         self.attention_type = attention_type
+        self.qkv_format = qkv_format
+        self.num_attention_heads = num_attention_heads
+        self.fuse_qkv_params = fuse_qkv_params
 
-        self.layernorm_qkv = InputProjection(
-            hidden_size, num_attention_heads, normalization, bias, num_gqa_groups, qkv_format, eps
-        )
+        self.num_gqa_groups = num_attention_heads if num_gqa_groups is None else num_gqa_groups
+        assert (
+            num_attention_heads % self.num_gqa_groups == 0
+        ), "The number of attention heads must be divisible by the number of GQA groups!"
+        self.hidden_size_per_attention_head = kv_channels
+        self.hidden_size_q = self.hidden_size_per_attention_head * num_attention_heads
+        self.hidden_size_kv = self.hidden_size_per_attention_head * self.num_gqa_groups
+
+        parameters_split = {
+            "query": self.hidden_size_q,
+            "key": self.hidden_size_kv,
+            "value": self.hidden_size_kv,
+        }
+
+        match (input_layernorm, attention_type):
+            case (False, "self"):
+                self.qkv = Linear(
+                    hidden_size,
+                    self.hidden_size_q + 2 * self.hidden_size_kv,
+                    bias=bias,
+                    parameters_split=parameters_split,
+                )
+            case (True, "self"):
+                self.layernorm_qkv = LayerNormLinear(
+                    hidden_size,
+                    self.hidden_size_q + 2 * self.hidden_size_kv,
+                    bias=bias,
+                    parameters_split=parameters_split,
+                    normalization=normalization,
+                    eps=eps,
+                )
+            case (False, "cross"):
+                self.query_layer = Linear(
+                    hidden_size,
+                    self.hidden_size_q,
+                    bias=bias,
+                )
+                self.key_value = Linear(
+                    hidden_size,
+                    2 * self.hidden_size_kv,
+                    bias=bias,
+                    parameters_split=("key", "value"),
+                )
+            case (True, "cross"):
+                self.layernorm_query = LayerNormLinear(
+                    hidden_size,
+                    self.hidden_size_q,
+                    parameters_split=("query",) if not fuse_qkv_params else None,
+                    bias=bias,
+                )
+                self.key_value = Linear(
+                    hidden_size,
+                    2 * self.hidden_size_kv,
+                    bias=bias,
+                    parameters_split=("key", "value"),
+                )
+            case _:
+                raise ValueError(f"Invalid input_layernorm: {input_layernorm} and attention_type: {attention_type}")
+
         self.proj = nn.Linear(hidden_size, hidden_size, bias=bias)
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
-        self.layernorm_qkv.reset_parameters()
+        if hasattr(self, "layernorm_qkv"):
+            self.layernorm_qkv.reset_parameters()
+        if hasattr(self, "layernorm_query"):
+            self.layernorm_query.reset_parameters()
+        if hasattr(self, "key_value"):
+            self.key_value.reset_parameters()
+        if hasattr(self, "query_layer"):
+            self.query_layer.reset_parameters()
         self.proj.reset_parameters()
-
-    @property
-    def qkv_format(self) -> Literal["sbhd", "bshd"]:
-        return cast(Literal["sbhd", "bshd"], self.layernorm_qkv.qkv_format)
-
-    @property
-    def num_attention_heads(self) -> int:
-        return self.layernorm_qkv.num_attention_heads
 
     def forward(
         self,
@@ -246,25 +238,46 @@ class MultiheadAttention(nn.Module):
         encoder_output: Tensor | None = None,
         checkpoint_core_attention: bool = False,
     ) -> Tensor:
-        q, k, v = self.layernorm_qkv(x, encoder_output, checkpoint_core_attention)
-
-        if self.training and checkpoint_core_attention:
-            o = checkpoint(
-                forward_attention,
-                q,
-                k,
-                v,
-                self.proj.weight,
-                self.proj.bias,
-                self.qkv_format,
-                self.attention_dropout,
-                self.training,
-                use_reentrant=False,
+        # Packed
+        if hasattr(self, "qkv") and self.qkv is not None:
+            q, k, v = self.qkv(x).split([self.hidden_size_q, self.hidden_size_kv, self.hidden_size_kv], dim=-1)
+        elif hasattr(self, "layernorm_qkv") and self.layernorm_qkv is not None:
+            q, k, v = self.layernorm_qkv(x).split(
+                [self.hidden_size_q, self.hidden_size_kv, self.hidden_size_kv], dim=-1
             )
+        elif hasattr(self, "query_layer") and self.query_layer is not None:
+            q = self.query_layer(x)
+            k, v = self.key_value(encoder_output).split([self.hidden_size_kv, self.hidden_size_kv], dim=-1)
+        elif hasattr(self, "layernorm_query") and self.layernorm_query is not None:
+            q = self.layernorm_query(x)
+            k, v = self.key_value(encoder_output).split([self.hidden_size_kv, self.hidden_size_kv], dim=-1)
         else:
-            o = forward_attention(
-                q, k, v, self.proj.weight, self.proj.bias, self.qkv_format, self.attention_dropout, self.training
-            )
+            raise AssertionError("Invalid configuration")
 
-        assert isinstance(o, Tensor)
+        if self.qkv_format == "sbhd":
+            q = rearrange(q, "s b (h d) -> b h s d", h=self.num_attention_heads)
+            k = rearrange(k, "s b (h d) -> b h s d", d=q.shape[-1])
+            v = rearrange(v, "s b (h d) -> b h s d", d=q.shape[-1])
+        elif self.qkv_format == "bshd":
+            q = rearrange(q, "b s (h d) -> b h s d", h=self.num_attention_heads)
+            k = rearrange(k, "b s (h d) -> b h s d", d=q.shape[-1])
+            v = rearrange(v, "b s (h d) -> b h s d", d=q.shape[-1])
+        else:
+            raise ValueError(f"Invalid qkv_format: {self.qkv_format}")
+
+        k = repeat(k, "b h s d -> b (h g) s d", g=q.shape[1] // k.shape[1])
+        v = repeat(v, "b h s d -> b (h g) s d", g=q.shape[1] // v.shape[1])
+
+        dropout = 0.0 if not self.training else self.attention_dropout
+        self._q = q
+        self._k = k
+        self._v = v
+        o = F.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=dropout, is_causal=False)
+
+        if self.qkv_format == "sbhd":
+            o = rearrange(o, "b h s d -> s b (h d)")
+        elif self.qkv_format == "bshd":
+            o = rearrange(o, "b h s d -> b s (h d)")
+
+        o = F.linear(o, self.proj.weight, self.proj.bias)
         return o
