@@ -1,4 +1,4 @@
-from typing import Callable
+from typing import Callable, Dict, Sequence
 
 import torch
 import torch.nn as nn
@@ -16,11 +16,12 @@ def forward_layer_norm_linear(
     normalization: str,
     layer_norm_weight: Tensor,
     layer_norm_bias: Tensor | None,
+    eps: float,
 ) -> Tensor:
     if normalization == "LayerNorm":
-        x = F.layer_norm(x, x.shape[-1:], weight=layer_norm_weight, bias=layer_norm_bias)
+        x = F.layer_norm(x, x.shape[-1:], weight=layer_norm_weight, bias=layer_norm_bias, eps=eps)
     elif normalization == "RMSNorm":
-        x = F.rms_norm(x, x.shape[-1:], weight=layer_norm_weight)
+        x = F.rms_norm(x, x.shape[-1:], weight=layer_norm_weight, eps=eps)
     else:
         raise ValueError(f"Invalid normalization: {normalization}")
     return F.linear(x, weight, bias)
@@ -34,28 +35,104 @@ class LayerNormLinear(nn.Module):
         out_features: int,
         bias: bool = True,
         normalization: str = "LayerNorm",
+        parameters_split: Dict[str, int] | Sequence[str] | None = None,
+        eps: float = 1e-5,
     ):
         super().__init__()
         self.normalization = normalization
-
-        self.weight = nn.Parameter(torch.empty(out_features, in_features))
-        self.bias = nn.Parameter(torch.zeros(out_features)) if bias else None
+        self.in_features = in_features
+        self.out_features = out_features
+        self.use_bias = bias
         self.layer_norm_weight = nn.Parameter(torch.empty(in_features))
         self.layer_norm_bias = nn.Parameter(torch.zeros(in_features)) if normalization == "LayerNorm" else None
-        self.reset_parameters()
+        self.eps = eps
+
+        # Contiguous buffers for params
+        weight_tensor = torch.empty(self.out_features, self.in_features)
+        bias_tensor = None
+        if self.use_bias:
+            bias_tensor = torch.empty(self.out_features)
+
+        # Configure parameter splits
+        self.weight_names = []
+        self.bias_names = []
+        self.parameter_split_sizes = []
+        if parameters_split is None:
+            # Split into a single parameter by default
+            self.weight_names = ["weight"]
+            self.bias_names = ["bias"]
+            self.parameter_split_sizes = [out_features]
+        elif not parameters_split:
+            raise ValueError("Cannot split weight buffer into 0 parameters")
+        elif isinstance(parameters_split, dict):
+            # Split parameters with provided sizes
+            for name, split_size in parameters_split.items():
+                self.weight_names.append(f"{name.rstrip('_')}_weight")
+                self.bias_names.append(f"{name.rstrip('_')}_bias")
+                self.parameter_split_sizes.append(split_size)
+        elif all(isinstance(name, str) for name in parameters_split):
+            # Split parameters evenly
+            split_size = out_features // len(parameters_split)
+            for name in parameters_split:
+                self.weight_names.append(f"{name.rstrip('_')}_weight")
+                self.bias_names.append(f"{name.rstrip('_')}_bias")
+                self.parameter_split_sizes.append(split_size)
+        else:
+            raise TypeError("Invalid configuration for parameters split")
+
+        # Make sure parameter splits are valid
+        if sum(self.parameter_split_sizes) != out_features:
+            raise ValueError(
+                f"Trying to split weight buffer ({out_features=}) " f"with split sizes {self.parameter_split_sizes}"
+            )
+
+        # Construct weight parameters
+        # Note: Register weights together so that they are adjacent to
+        # each other in LayerNormLinear.parameters(). This makes it
+        # more likely that they will stay contiguous if the weights
+        # are manipulated externally, e.g. by FSDP.
+        offset = 0
+        for i, split_size in enumerate(self.parameter_split_sizes):
+            split_start = offset
+            offset += split_size
+            split_end = offset
+
+            # Construct weight parameter
+            param = torch.nn.Parameter(weight_tensor[split_start:split_end])
+            nn.init.trunc_normal_(param, std=DEFAULT_TRUNC_STD)
+            self.register_parameter(self.weight_names[i], param)
+
+        # Construct bias parameters if needed
+        if self.use_bias:
+            offset = 0
+            for i, split_size in enumerate(self.parameter_split_sizes):
+                split_start = offset
+                offset += split_size
+                split_end = offset
+                assert bias_tensor is not None
+                param = torch.nn.Parameter(bias_tensor[split_start:split_end])
+                nn.init.zeros_(param)
+                self.register_parameter(self.bias_names[i], param)
+        else:
+            for name in self.bias_names:
+                self.register_parameter(name, None)
 
     def reset_parameters(self) -> None:
-        nn.init.trunc_normal_(self.weight, std=DEFAULT_TRUNC_STD)
-        if self.bias is not None:
-            nn.init.zeros_(self.bias)
         if self.layer_norm_weight is not None:
             nn.init.ones_(self.layer_norm_weight)
         if self.layer_norm_bias is not None:
             nn.init.zeros_(self.layer_norm_bias)
+        for name in self.weight_names:
+            nn.init.trunc_normal_(getattr(self, name), std=DEFAULT_TRUNC_STD)
+        for name in self.bias_names:
+            if hasattr(self, name) and getattr(self, name) is not None:
+                nn.init.zeros_(getattr(self, name))
 
     def forward(self, x: Tensor) -> Tensor:
+        weight = torch.cat([getattr(self, name) for name in self.weight_names], dim=0)
+        bias = torch.cat([getattr(self, name) for name in self.bias_names], dim=0) if self.use_bias else None
         return forward_layer_norm_linear(
-            x, self.weight, self.bias, self.normalization, self.layer_norm_weight, self.layer_norm_bias
+            x, weight, bias, self.normalization, self.layer_norm_weight, self.layer_norm_bias, self.eps
         )
 
 
@@ -71,7 +148,6 @@ def forward_layer_norm_mlp(
     layer_norm_bias: Tensor | None,
     activation: Callable[[Tensor], Tensor],
     eps: float,
-    training: bool,
 ) -> Tensor:
     if normalization == "LayerNorm":
         x = F.layer_norm(x, x.shape[-1:], weight=layer_norm_weight, bias=layer_norm_bias, eps=eps)
@@ -94,7 +170,7 @@ class LayerNormMLP(nn.Module):
         ffn_hidden_size: int,
         bias: bool = True,
         normalization: str = "LayerNorm",
-        activation: str = "srelu",
+        activation: str = "gelu",
         eps: float = 1e-5,
     ):
         super().__init__()
@@ -134,5 +210,97 @@ class LayerNormMLP(nn.Module):
             self.layer_norm_bias,
             self.activation,
             self.eps,
-            self.training,
         )
+
+
+class Linear(nn.Module):
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        bias: bool = True,
+        parameters_split: Dict[str, int] | Sequence[str] | None = None,
+    ):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.use_bias = bias
+
+        # Contiguous buffers for params
+        weight_tensor = torch.empty(out_features, in_features)
+        bias_tensor = None
+        if bias:
+            bias_tensor = torch.empty(out_features)
+
+        # Configure parameter splits
+        self.weight_names = []
+        self.bias_names = []
+        self.parameter_split_sizes = []
+        if parameters_split is None:
+            # Split into a single parameter by default
+            self.weight_names = ["weight"]
+            self.bias_names = ["bias"]
+            self.parameter_split_sizes = [out_features]
+        elif not parameters_split:
+            raise ValueError("Cannot split weight buffer into 0 parameters")
+        elif isinstance(parameters_split, dict):
+            # Split parameters with provided sizes
+            for name, split_size in parameters_split.items():
+                self.weight_names.append(f"{name.rstrip('_')}_weight")
+                self.bias_names.append(f"{name.rstrip('_')}_bias")
+                self.parameter_split_sizes.append(split_size)
+        elif all(isinstance(name, str) for name in parameters_split):
+            # Split parameters evenly
+            split_size = out_features // len(parameters_split)
+            for name in parameters_split:
+                self.weight_names.append(f"{name.rstrip('_')}_weight")
+                self.bias_names.append(f"{name.rstrip('_')}_bias")
+                self.parameter_split_sizes.append(split_size)
+        else:
+            raise TypeError("Invalid configuration for parameters split")
+
+        # Make sure parameter splits are valid
+        if sum(self.parameter_split_sizes) != out_features:
+            raise ValueError(
+                f"Trying to split weight buffer ({out_features=}) " f"with split sizes {self.parameter_split_sizes}"
+            )
+
+        # Construct weight parameters
+        offset = 0
+        for i, split_size in enumerate(self.parameter_split_sizes):
+            split_start = offset
+            offset += split_size
+            split_end = offset
+
+            # Construct weight parameter
+            param = torch.nn.Parameter(weight_tensor[split_start:split_end])
+            nn.init.trunc_normal_(param, std=DEFAULT_TRUNC_STD)
+            self.register_parameter(self.weight_names[i], param)
+
+        # Construct bias parameters if needed
+        if self.use_bias:
+            offset = 0
+            for i, split_size in enumerate(self.parameter_split_sizes):
+                split_start = offset
+                offset += split_size
+                split_end = offset
+                assert bias_tensor is not None
+                param = torch.nn.Parameter(bias_tensor[split_start:split_end])
+                nn.init.zeros_(param)
+                self.register_parameter(self.bias_names[i], param)
+        else:
+            for name in self.bias_names:
+                self.register_parameter(name, None)
+
+    def reset_parameters(self) -> None:
+        for name in self.weight_names:
+            nn.init.trunc_normal_(getattr(self, name), std=DEFAULT_TRUNC_STD)
+        for name in self.bias_names:
+            if hasattr(self, name) and getattr(self, name) is not None:
+                nn.init.zeros_(getattr(self, name))
+
+    def forward(self, x: Tensor) -> Tensor:
+        weight = torch.cat([getattr(self, name) for name in self.weight_names], dim=0)
+        bias = torch.cat([getattr(self, name) for name in self.bias_names], dim=0) if self.use_bias else None
+        return F.linear(x, weight, bias)

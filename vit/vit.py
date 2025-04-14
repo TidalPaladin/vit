@@ -134,6 +134,7 @@ class ViT(nn.Module):
                 layer = TransformerLayer(**_kwargs)
             case "te":
                 check_te_installed(te)
+                _kwargs["self_attn_mask_type"] = "no_mask"
                 layer = te.TransformerLayer(**_kwargs)
             case _:
                 raise ValueError(f"Invalid backend: {self.config.backend}")
@@ -163,6 +164,7 @@ class ViT(nn.Module):
                 layer = TransformerLayer(**_kwargs)
             case "te":
                 check_te_installed(te)
+                _kwargs["self_attn_mask_type"] = "no_mask"
                 layer = te.TransformerLayer(**_kwargs)
             case _:
                 raise ValueError(f"Invalid backend: {self.config.backend}")

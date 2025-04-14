@@ -2,6 +2,7 @@ from dataclasses import replace
 
 import pytest
 import torch
+from torch.testing import assert_close
 
 from vit.vit import ViT, ViTConfig
 
@@ -80,24 +81,24 @@ class TestViT:
             assert param.grad is not None, f"{name} has no gradient"
             assert not param.grad.isnan().any(), f"{name} has nan gradient"
 
+    @pytest.mark.cuda
+    def test_baseline(self, config):
+        B, C, H, W = 2, 3, 64, 64
+        torch.random.manual_seed(0)
 
-#    @pytest.mark.skip(reason="Incomplete")
-#    def test_baseline(self, config):
-#        B, C, H, W = 2, 3, 64, 64
-#        torch.random.manual_seed(0)
-#        baseline = ViTBaseline(config).to("cuda")
-#        layer = ViT(config).to("cuda")
-#        x = torch.randn(B, C, H, W, device="cuda")
-#
-#        layer.eval()
-#        baseline.eval()
-#
-#        # Sync weights
-#        for name, param in baseline.named_parameters():
-#            layer.get_parameter(name).data.copy_(param.data)
-#
-#        with torch.autocast(device_type="cuda", dtype=torch.float32):
-#            y = layer(x)
-#            y_baseline = baseline(x)
-#        assert_close(y, y_baseline, atol=1e-4, rtol=0)
-#
+        baseline_config = replace(config, backend="te")
+        baseline = ViT(baseline_config).to("cuda")
+        layer = ViT(config).to("cuda")
+        x = torch.randn(B, C, H, W, device="cuda")
+
+        layer.eval()
+        baseline.eval()
+
+        # Sync weights
+        for name, param in baseline.named_parameters():
+            layer.get_parameter(name).data.copy_(param.data)
+
+        with torch.autocast(device_type="cuda", dtype=torch.float32):
+            y = layer(x)
+            y_baseline = baseline(x)
+        assert_close(y, y_baseline, atol=1e-4, rtol=0)
