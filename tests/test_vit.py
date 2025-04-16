@@ -1,8 +1,9 @@
 from dataclasses import replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 import torch
+import torch.nn as nn
 from torch.testing import assert_close
 
 from vit.helpers import try_import_te
@@ -26,6 +27,16 @@ def config():
         num_attention_heads=128 // 16,
     )
     return config
+
+
+def assert_all_requires_grad(module: Any):
+    assert isinstance(module, nn.Module)
+    assert all(p.requires_grad for p in module.parameters())
+
+
+def assert_none_requires_grad(module: Any):
+    assert isinstance(module, nn.Module)
+    assert not any(p.requires_grad for p in module.parameters())
 
 
 class TestViT:
@@ -126,3 +137,65 @@ class TestViT:
             y = layer(x)
             y_baseline = baseline(x)
         assert_close(y, y_baseline, atol=1e-4, rtol=0)
+
+    @pytest.mark.parametrize("backend", ["pytorch", "te"])
+    def test_mlp_requires_grad(self, config, backend):
+        if backend == "te" and te is None:
+            pytest.skip("Transformer Engine is not available")
+        config = replace(config, backend=backend, decoder=True)
+        model = ViT(config)
+        for block in model.blocks:
+            assert_all_requires_grad(block.layernorm_mlp)
+            assert_all_requires_grad(block.self_attention)
+            assert_all_requires_grad(block.inter_attention)
+        model.mlp_requires_grad_(False)
+        for block in model.blocks:
+            assert_none_requires_grad(block.layernorm_mlp)
+            assert_all_requires_grad(block.self_attention)
+            assert_all_requires_grad(block.inter_attention)
+
+    @pytest.mark.parametrize("backend", ["pytorch", "te"])
+    def test_self_attention_requires_grad(self, config, backend):
+        if backend == "te" and te is None:
+            pytest.skip("Transformer Engine is not available")
+        config = replace(config, backend=backend, decoder=True)
+        model = ViT(config)
+        for block in model.blocks:
+            assert_all_requires_grad(block.layernorm_mlp)
+            assert_all_requires_grad(block.self_attention)
+            assert_all_requires_grad(block.inter_attention)
+        model.self_attention_requires_grad_(False)
+        for block in model.blocks:
+            assert_all_requires_grad(block.layernorm_mlp)
+            assert_none_requires_grad(block.self_attention)
+            assert_all_requires_grad(block.inter_attention)
+
+    @pytest.mark.parametrize("backend", ["pytorch", "te"])
+    def test_inter_attention_requires_grad(self, config, backend):
+        if backend == "te" and te is None:
+            pytest.skip("Transformer Engine is not available")
+        config = replace(config, backend=backend, decoder=True)
+        model = ViT(config)
+        for block in model.blocks:
+            assert_all_requires_grad(block.layernorm_mlp)
+            assert_all_requires_grad(block.self_attention)
+            assert_all_requires_grad(block.inter_attention)
+        model.inter_attention_requires_grad_(False)
+        for block in model.blocks:
+            assert_all_requires_grad(block.layernorm_mlp)
+            assert_all_requires_grad(block.self_attention)
+            assert_none_requires_grad(block.inter_attention)
+
+    @pytest.mark.parametrize("backend", ["pytorch", "te"])
+    def test_inter_attention_requires_grad_encoder_only(self, config, backend):
+        if backend == "te" and te is None:
+            pytest.skip("Transformer Engine is not available")
+        config = replace(config, backend=backend)
+        model = ViT(config)
+        for block in model.blocks:
+            assert_all_requires_grad(block.layernorm_mlp)
+            assert_all_requires_grad(block.self_attention)
+        model.inter_attention_requires_grad_(False)
+        for block in model.blocks:
+            assert_all_requires_grad(block.layernorm_mlp)
+            assert_all_requires_grad(block.self_attention)

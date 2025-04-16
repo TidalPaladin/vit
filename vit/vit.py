@@ -41,8 +41,12 @@ class ViTConfig:
 
     # Other
     checkpoint: bool = False
-
     backend: Backend = DEFAULT_BACKEND
+
+    # Trainable blocks
+    mlp_requires_grad: bool = True
+    self_attention_requires_grad: bool = True
+    inter_attention_requires_grad: bool = True
 
     @property
     def device_type(self) -> Literal["cpu", "cuda"]:
@@ -105,6 +109,10 @@ class ViT(nn.Module):
                 for i in range(config.depth)
             ]
         )
+
+        self.mlp_requires_grad_(self.config.mlp_requires_grad)
+        self.self_attention_requires_grad_(self.config.self_attention_requires_grad)
+        self.inter_attention_requires_grad_(self.config.inter_attention_requires_grad)
 
     @property
     def config(self) -> ViTConfig:
@@ -283,3 +291,19 @@ class ViT(nn.Module):
         x = x[:, 1:, :].contiguous()
 
         return x, cls_token
+
+    def mlp_requires_grad_(self, requires_grad: bool = True) -> None:
+        for block in self.blocks:
+            layer = cast(nn.Module, block.layernorm_mlp)
+            layer.requires_grad_(requires_grad)
+
+    def self_attention_requires_grad_(self, requires_grad: bool = True) -> None:
+        for block in self.blocks:
+            layer = cast(nn.Module, block.self_attention)
+            layer.requires_grad_(requires_grad)
+
+    def inter_attention_requires_grad_(self, requires_grad: bool = True) -> None:
+        for block in self.blocks:
+            if hasattr(block, "inter_attention") and block.inter_attention is not None:
+                layer = cast(nn.Module, block.inter_attention)
+                layer.requires_grad_(requires_grad)
