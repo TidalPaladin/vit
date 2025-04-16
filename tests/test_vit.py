@@ -41,6 +41,18 @@ def assert_none_requires_grad(module: Any):
 
 class TestViT:
 
+    def test_config_from_yaml_str(self, config):
+        config_str = config.to_yaml()
+        config_from_str = ViTConfig.from_yaml(config_str)
+        assert config == config_from_str
+
+    def test_config_from_yaml_path(self, config, tmp_path):
+        path = tmp_path / "config.yaml"
+        with open(path, "w") as f:
+            f.write(config.to_yaml())
+        config_from_path = ViTConfig.from_yaml(path)
+        assert config == config_from_path
+
     @pytest.mark.parametrize("decoder", [False, True])
     def test_non_causal_default(self, config, decoder):
         if te is None:
