@@ -1,8 +1,10 @@
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, ClassVar, Dict, Literal, Sequence, Tuple, Type, cast
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, Literal, Self, Sequence, Tuple, Type, cast
 
 import torch
 import torch.nn as nn
+import yaml
 from einops.layers.torch import Reduce
 from torch import Tensor
 
@@ -76,6 +78,25 @@ class ViTConfig:
             drop_path_rate=self.drop_path_rate,
             attn_input_format="bshd",
         )
+
+    @classmethod
+    def from_yaml(cls: Type[Self], path: str | Path) -> Self:
+        if isinstance(path, Path):
+            if not path.is_file():
+                raise FileNotFoundError(f"File not found: {path}")
+            with open(path, "r") as f:
+                config = yaml.full_load(f)
+            return cls(**config)
+
+        elif isinstance(path, str) and path.endswith(".yaml"):
+            return cls.from_yaml(Path(path))
+
+        else:
+            config = yaml.full_load(path)
+            return cls(**config)
+
+    def to_yaml(self) -> str:
+        return yaml.dump(self.__dict__)
 
 
 class ViT(nn.Module):
