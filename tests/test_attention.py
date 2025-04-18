@@ -35,13 +35,39 @@ class TestMultiheadAttention:
     def test_forward_with_encoder_output(self, dtype, num_gqa_groups, normalization):
         B, L, D = 16, 128, 128
         multihead_attention = MultiheadAttention(
-            D, D // 16, num_gqa_groups=num_gqa_groups, qkv_format="bshd", normalization=normalization
+            D,
+            D // 16,
+            num_gqa_groups=num_gqa_groups,
+            qkv_format="bshd",
+            normalization=normalization,
+            attention_type="cross",
         )
         x = torch.randn(B, L, D, dtype=dtype)
         encoder_output = torch.randn(B, L // 2, D, dtype=dtype)
         with torch.autocast(device_type="cpu", dtype=dtype):
             y = multihead_attention(x, encoder_output)
         assert y.shape == (B, L, D)
+
+    @pytest.mark.parametrize("decoder", [False, True])
+    def test_forward_attention_weights(self, decoder):
+        B, L, D = 16, 128, 128
+        multihead_attention = MultiheadAttention(
+            D,
+            D // 16,
+            num_gqa_groups=8,
+            qkv_format="bshd",
+            normalization="LayerNorm",
+            attention_type="cross" if decoder else "self",
+        )
+        multihead_attention.track_attention_weights()
+        x = torch.randn(B, L, D)
+        encoder_output = torch.randn(B, L // 2, D)
+        with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+            multihead_attention(x, encoder_output=encoder_output)
+        assert multihead_attention.attention_weights is not None
+        assert multihead_attention.attention_weights.shape == (B, D // 16, L, L // 2 if decoder else L)
+        q_sum = multihead_attention.attention_weights.sum(dim=-1)
+        assert_close(q_sum, torch.ones_like(q_sum))
 
     def test_permute(self):
         B, L, D = 16, 128, 128

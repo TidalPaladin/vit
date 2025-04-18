@@ -1,3 +1,4 @@
+import math
 from typing import Literal, Tuple
 
 import torch
@@ -132,7 +133,12 @@ def forward_attention(
     return o
 
 
+def forward_attention_matrix(x: Tensor): ...
+
+
 class MultiheadAttention(nn.Module):
+    attention_weights: Tensor | None = None
+
     def __init__(
         self,
         hidden_size: int,
@@ -158,6 +164,8 @@ class MultiheadAttention(nn.Module):
         self.qkv_format = qkv_format
         self.num_attention_heads = num_attention_heads
         self.fuse_qkv_params = fuse_qkv_params
+        self._track_attention_weights = False
+        self.attention_weights = None
 
         self.num_gqa_groups = num_attention_heads if num_gqa_groups is None else num_gqa_groups
         assert (
@@ -232,6 +240,9 @@ class MultiheadAttention(nn.Module):
             self.query_layer.reset_parameters()
         self.proj.reset_parameters()
 
+    def track_attention_weights(self, track: bool = True) -> None:
+        self._track_attention_weights = track
+
     def forward(
         self,
         x: Tensor,
@@ -272,6 +283,14 @@ class MultiheadAttention(nn.Module):
         self._q = q
         self._k = k
         self._v = v
+
+        # Optional attention weight tracking
+        if self._track_attention_weights:
+            with torch.no_grad():
+                scale = math.sqrt(self.hidden_size_per_attention_head)
+                weights = (q @ k.mT).div(scale).softmax(dim=-1)
+                self.attention_weights = weights
+
         o = F.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=dropout, is_causal=False)
 
         if self.qkv_format == "sbhd":
