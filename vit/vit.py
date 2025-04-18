@@ -20,6 +20,22 @@ else:
     te = try_import_te()
 
 
+def vit_config_constructor(loader, node):
+    values = loader.construct_mapping(node, deep=True)
+    return ViTConfig(**values)
+
+
+def register_constructors():
+    tags = [
+        "tag:yaml.org,2002:python/object:vit.vit.ViTConfig",
+        "tag:yaml.org,2002:python/object:vit.ViTConfig",
+    ]
+    loaders = [yaml.SafeLoader, yaml.FullLoader, yaml.UnsafeLoader]
+    for tag in tags:
+        for loader in loaders:
+            loader.add_constructor(tag, vit_config_constructor)
+
+
 @dataclass(frozen=True)
 class ViTConfig:
     # Inputs
@@ -328,3 +344,6 @@ class ViT(nn.Module):
             if hasattr(block, "inter_attention") and block.inter_attention is not None:
                 layer = cast(nn.Module, block.inter_attention)
                 layer.requires_grad_(requires_grad)
+
+
+register_constructors()
