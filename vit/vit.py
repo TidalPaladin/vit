@@ -305,7 +305,7 @@ class ViT(nn.Module):
 
         return mask
 
-    def create_distance_mask(self, q: Tensor) -> Tensor:
+    def create_distance_mask(self, q: Tensor, token_mask: Tensor | None = None) -> Tensor:
         q.shape[0]
         device = q.device
         original_size = q.shape[2:]
@@ -318,7 +318,11 @@ class ViT(nn.Module):
                 torch.arange(tokenized_size[1], device=device, dtype=torch.float32),
             ),
             dim=-1,
-        )
+        ).view(1, -1, 2)
+
+        # Apply token mask
+        if token_mask is not None:
+            grid = apply_mask(token_mask, grid)
 
         qpos = grid.view(-1, 1, 2)
         kvpos = grid.view(1, -1, 2)
@@ -344,7 +348,7 @@ class ViT(nn.Module):
 
         # Prepare distance mask
         if self.config.distance_mask_layers:
-            distance_mask = self.create_distance_mask(x)
+            distance_mask = self.create_distance_mask(x, mask)
             self_attn_mask_type = "arbitrary"
         else:
             distance_mask = None

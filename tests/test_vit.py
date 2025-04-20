@@ -101,7 +101,8 @@ class TestViT:
         assert out.shape == (1, 196, 128)
         assert cls_token.shape == (1, 128)
 
-    def test_forward_with_distance_mask(self, config):
+    @pytest.mark.parametrize("mask", [False, True])
+    def test_forward_with_distance_mask(self, config, mask):
         x = torch.randn(1, 3, 224, 224)
         model1 = ViT(config)
         config = replace(config, distance_mask_radius=4, distance_mask_layers=list(range(config.depth)))
@@ -109,12 +110,14 @@ class TestViT:
         model1.eval()
         model2.eval()
 
+        mask = model1.create_mask(x, 0.5, 1) if mask else None
+
         for name, param in model1.named_parameters():
             model2.get_parameter(name).data.copy_(param.data)
 
         with torch.autocast(device_type="cpu", dtype=torch.bfloat16, enabled=True):
-            out1, cls_token1 = model1(x)
-            out2, cls_token2 = model2(x)
+            out1, cls_token1 = model1(x, mask=mask)
+            out2, cls_token2 = model2(x, mask=mask)
         assert not torch.allclose(out1, out2)
         assert not torch.allclose(cls_token1, cls_token2)
 
