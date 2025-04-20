@@ -103,7 +103,7 @@ class TestViT:
 
     @pytest.mark.parametrize("mask", [False, True])
     def test_forward_with_distance_mask(self, config, mask):
-        x = torch.randn(1, 3, 224, 224)
+        x = torch.randn(2, 3, 224, 224)
         model1 = ViT(config)
         config = replace(config, distance_mask_radius=4, distance_mask_layers=list(range(config.depth)))
         model2 = ViT(config)

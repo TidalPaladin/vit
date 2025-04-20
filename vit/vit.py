@@ -306,26 +306,31 @@ class ViT(nn.Module):
         return mask
 
     def create_distance_mask(self, q: Tensor, token_mask: Tensor | None = None) -> Tensor:
-        q.shape[0]
+        B = q.shape[0]
         device = q.device
         original_size = q.shape[2:]
         tokenized_size = self.stem.tokenized_size(cast(Any, original_size))
 
         # Create coordinate grid of tokenized size
-        grid = torch.stack(
-            torch.meshgrid(
-                torch.arange(tokenized_size[0], device=device, dtype=torch.float32),
-                torch.arange(tokenized_size[1], device=device, dtype=torch.float32),
-            ),
-            dim=-1,
-        ).view(1, -1, 2)
+        grid = (
+            torch.stack(
+                torch.meshgrid(
+                    torch.arange(tokenized_size[0], device=device, dtype=torch.float32),
+                    torch.arange(tokenized_size[1], device=device, dtype=torch.float32),
+                ),
+                dim=-1,
+            )
+            .view(1, -1, 2)
+            .expand(B, -1, -1)
+        )
 
         # Apply token mask
         if token_mask is not None:
+            grid = grid.expand(token_mask.shape[0], -1, -1)
             grid = apply_mask(token_mask, grid)
 
-        qpos = grid.view(-1, 1, 2)
-        kvpos = grid.view(1, -1, 2)
+        qpos = grid.view(B, -1, 1, 2)
+        kvpos = grid.view(B, 1, -1, 2)
         dist = (qpos - kvpos).norm(dim=-1)
         assert self.config.distance_mask_radius is not None
         mask = dist <= self.config.distance_mask_radius
@@ -335,7 +340,7 @@ class ViT(nn.Module):
         if self.config.backend == "te":
             mask.logical_not_()
 
-        return mask.unsqueeze_(0).unsqueeze_(0)
+        return mask.unsqueeze_(1)
 
     def forward(
         self,
@@ -366,7 +371,7 @@ class ViT(nn.Module):
         if distance_mask is not None:
             L = distance_mask.shape[2]
             fill_value = 0 if self.config.backend == "te" else 1
-            _distance_mask = distance_mask.new_full((1, 1, L + 1, L + 1), fill_value)
+            _distance_mask = distance_mask.new_full((B, 1, L + 1, L + 1), fill_value)
             _distance_mask[:, :, 1:, 1:] = distance_mask
             distance_mask = _distance_mask
 
