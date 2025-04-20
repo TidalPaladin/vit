@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Dict, Literal, Self, Sequence, Tuple, Type, cast
 
@@ -65,6 +65,10 @@ class ViTConfig:
     mlp_requires_grad: bool = True
     self_attention_requires_grad: bool = True
     inter_attention_requires_grad: bool = True
+
+    # Token masking by distance
+    distance_mask_radius: int = 4
+    distance_mask_layers: Sequence[int] = field(default_factory=list)
 
     @property
     def device_type(self) -> Literal["cpu", "cuda"]:
@@ -301,6 +305,34 @@ class ViT(nn.Module):
 
         return mask
 
+    def create_distance_mask(self, q: Tensor) -> Tensor:
+        q.shape[0]
+        device = q.device
+        original_size = q.shape[2:]
+        tokenized_size = self.stem.tokenized_size(cast(Any, original_size))
+
+        # Create coordinate grid of tokenized size
+        grid = torch.stack(
+            torch.meshgrid(
+                torch.arange(tokenized_size[0], device=device, dtype=torch.float32),
+                torch.arange(tokenized_size[1], device=device, dtype=torch.float32),
+            ),
+            dim=-1,
+        )
+
+        qpos = grid.view(-1, 1, 2)
+        kvpos = grid.view(1, -1, 2)
+        dist = (qpos - kvpos).norm(dim=-1)
+        assert self.config.distance_mask_radius is not None
+        mask = dist <= self.config.distance_mask_radius
+
+        # TE and PyTorch use different conventions for the mask.
+        # PyTorch uses 1 for unmasked, TE uses 1 for masked.
+        if self.config.backend == "te":
+            mask.logical_not_()
+
+        return mask.unsqueeze_(0).unsqueeze_(0)
+
     def forward(
         self,
         x: Tensor,
@@ -310,6 +342,14 @@ class ViT(nn.Module):
         B, C, *original_size = x.shape
         self.stem.tokenized_size(cast(Any, tuple(original_size)))
 
+        # Prepare distance mask
+        if self.config.distance_mask_layers:
+            distance_mask = self.create_distance_mask(x)
+            self_attn_mask_type = "arbitrary"
+        else:
+            distance_mask = None
+            self_attn_mask_type = None
+
         # Tokenize and apply mask
         x = self.stem(x)
         if mask is not None:
@@ -318,10 +358,34 @@ class ViT(nn.Module):
         # Add CLS token
         x = torch.cat([self.cls_token.view(1, 1, -1).expand(B, -1, -1), x], dim=1)
 
+        # Add distance mask entry for CLS token
+        if distance_mask is not None:
+            L = distance_mask.shape[2]
+            fill_value = 0 if self.config.backend == "te" else 1
+            _distance_mask = distance_mask.new_full((1, 1, L + 1, L + 1), fill_value)
+            _distance_mask[:, :, 1:, 1:] = distance_mask
+            distance_mask = _distance_mask
+
         # Transformer blocks and output norm
-        for block in self.blocks:
+        for i, block in enumerate(self.blocks):
             block = cast(TransformerLayer, block)
-            x = block(x, encoder_output=encoder_output, checkpoint_core_attention=self.config.checkpoint)
+            _self_attn_mask_type = (
+                self_attn_mask_type
+                if self.config.distance_mask_layers is not None and i in self.config.distance_mask_layers
+                else None
+            )
+            _attention_mask = (
+                distance_mask
+                if self.config.distance_mask_layers is not None and i in self.config.distance_mask_layers
+                else None
+            )
+            x = block(
+                x,
+                encoder_output=encoder_output,
+                checkpoint_core_attention=self.config.checkpoint,
+                self_attn_mask_type=_self_attn_mask_type,
+                attention_mask=_attention_mask,
+            )
 
         # Extract CLS token
         cls_token = x[:, 0, :].contiguous()

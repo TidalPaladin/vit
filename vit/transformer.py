@@ -73,12 +73,27 @@ class TransformerLayer(nn.Module):
         encoder_output: Tensor | None = None,
         checkpoint_core_attention: bool = False,
         checkpoint_core_mlp: bool = False,
+        self_attn_mask_type: Literal["arbitrary", "causal", "no_mask"] | None = None,
+        enc_dec_attn_mask_type: Literal["arbitrary", "causal", "no_mask"] | None = None,
+        attention_mask: Tensor | None = None,
+        enc_dec_attention_mask: Tensor | None = None,
     ) -> Tensor:
-        o = self.self_attention(x, checkpoint_core_attention=checkpoint_core_attention)
+        o = self.self_attention(
+            x,
+            checkpoint_core_attention=checkpoint_core_attention,
+            attn_mask_type=self_attn_mask_type,
+            attention_mask=attention_mask,
+        )
         x = x + drop_path(o, self.drop_path_rate, self.training)
 
         if self.inter_attention is not None:
-            o = self.inter_attention(x, encoder_output, checkpoint_core_attention=checkpoint_core_attention)
+            o = self.inter_attention(
+                x,
+                encoder_output,
+                checkpoint_core_attention=checkpoint_core_attention,
+                attn_mask_type=enc_dec_attn_mask_type,
+                attention_mask=enc_dec_attention_mask,
+            )
             x = x + drop_path(o, self.drop_path_rate, self.training)
 
         if self.training and checkpoint_core_mlp:

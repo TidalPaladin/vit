@@ -248,7 +248,11 @@ class MultiheadAttention(nn.Module):
         x: Tensor,
         encoder_output: Tensor | None = None,
         checkpoint_core_attention: bool = False,
+        attn_mask_type: Literal["arbitrary", "causal", "no_mask"] | None = None,
+        attention_mask: Tensor | None = None,
     ) -> Tensor:
+        assert attn_mask_type in (None, "causal", "no_mask", "arbitrary")
+
         # Packed
         if hasattr(self, "qkv") and self.qkv is not None:
             q, k, v = self.qkv(x).split([self.hidden_size_q, self.hidden_size_kv, self.hidden_size_kv], dim=-1)
@@ -291,7 +295,9 @@ class MultiheadAttention(nn.Module):
                 weights = (q @ k.mT).div(scale).softmax(dim=-1)
                 self.attention_weights = weights
 
-        o = F.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=dropout, is_causal=False)
+        o = F.scaled_dot_product_attention(
+            q, k, v, attn_mask=attention_mask, dropout_p=dropout, is_causal=attn_mask_type == "causal"
+        )
 
         if self.qkv_format == "sbhd":
             o = rearrange(o, "b h s d -> s b (h d)")

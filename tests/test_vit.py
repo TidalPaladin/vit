@@ -101,6 +101,41 @@ class TestViT:
         assert out.shape == (1, 196, 128)
         assert cls_token.shape == (1, 128)
 
+    def test_forward_with_distance_mask(self, config):
+        x = torch.randn(1, 3, 224, 224)
+        model1 = ViT(config)
+        config = replace(config, distance_mask_radius=4, distance_mask_layers=list(range(config.depth)))
+        model2 = ViT(config)
+        model1.eval()
+        model2.eval()
+
+        for name, param in model1.named_parameters():
+            model2.get_parameter(name).data.copy_(param.data)
+
+        with torch.autocast(device_type="cpu", dtype=torch.bfloat16, enabled=True):
+            out1, cls_token1 = model1(x)
+            out2, cls_token2 = model2(x)
+        assert not torch.allclose(out1, out2)
+        assert not torch.allclose(cls_token1, cls_token2)
+
+    def test_forward_with_distance_mask_and_encoder_output(self, config):
+        x = torch.randn(1, 3, 224, 224)
+        encoder_output = torch.randn(1, 64, 128)
+        model1 = ViT(config)
+        config = replace(config, distance_mask_radius=4, distance_mask_layers=list(range(config.depth)))
+        model2 = ViT(config)
+        model1.eval()
+        model2.eval()
+
+        for name, param in model1.named_parameters():
+            model2.get_parameter(name).data.copy_(param.data)
+
+        with torch.autocast(device_type="cpu", dtype=torch.bfloat16, enabled=True):
+            out1, cls_token1 = model1(x, encoder_output=encoder_output)
+            out2, cls_token2 = model2(x, encoder_output=encoder_output)
+        assert not torch.allclose(out1, out2)
+        assert not torch.allclose(cls_token1, cls_token2)
+
     @pytest.mark.parametrize("checkpoint", [False, True])
     def test_backward(self, config, checkpoint):
         x = torch.randn(1, 3, 224, 224, requires_grad=True)
@@ -127,11 +162,14 @@ class TestViT:
             assert not param.grad.isnan().any(), f"{name} has nan gradient"
 
     @pytest.mark.cuda
-    def test_baseline(self, config):
+    @pytest.mark.parametrize("distance_mask", [False, True])
+    def test_baseline(self, config, distance_mask):
         if te is None:
             pytest.skip("Transformer Engine is not available")
         B, C, H, W = 2, 3, 64, 64
         torch.random.manual_seed(0)
+        if distance_mask:
+            config = replace(config, distance_mask_radius=4, distance_mask_layers=list(range(config.depth)))
 
         baseline_config = replace(config, backend="te")
         baseline = ViT(baseline_config).to("cuda")
@@ -211,3 +249,10 @@ class TestViT:
         for block in model.blocks:
             assert_all_requires_grad(block.layernorm_mlp)
             assert_all_requires_grad(block.self_attention)
+
+    def test_distance_mask(self, config):
+        config = replace(config, distance_mask_radius=4, distance_mask_layers=[0, 1])
+        model = ViT(config)
+        x = torch.randn(1, 3, 224, 224)
+        mask = model.create_distance_mask(x)
+        assert mask.shape == (1, 1, 196, 196)
