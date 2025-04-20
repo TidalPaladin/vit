@@ -317,6 +317,7 @@ class ViT(nn.Module):
                 torch.meshgrid(
                     torch.arange(tokenized_size[0], device=device, dtype=torch.float32),
                     torch.arange(tokenized_size[1], device=device, dtype=torch.float32),
+                    indexing="ij",
                 ),
                 dim=-1,
             )
