@@ -74,15 +74,19 @@ class TestPatchEmbed2d:
 class TestConvNextPatchEmbed2d:
 
     @pytest.mark.parametrize("normalization", ["LayerNorm", "RMSNorm"])
-    def test_forward(self, backend, normalization):
-        B, C, H, W = 2, 3, 64, 64
+    @pytest.mark.parametrize("convnext_patch_size", [(2, 2), (4, 4)])
+    def test_forward(self, backend, normalization, convnext_patch_size):
+        B, C, H, W = 2, 3, 128, 128
         D_model = 64
         device_type = "cuda" if backend == "te" else "cpu"
-        layer = ConvNextPatchEmbed2d(C, D_model, (4, 4), normalization=normalization, backend=backend).to(device_type)
+        layer = ConvNextPatchEmbed2d(
+            C, D_model, (8, 8), normalization=normalization, backend=backend, convnext_patch_size=convnext_patch_size
+        ).to(device_type)
+        assert layer.patch.stem.kernel_size == convnext_patch_size
         x = torch.randn(B, C, H, W, device=device_type)
         with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
             y = layer(x)
-        assert y.shape == (B, math.prod((H // 4, W // 4)), D_model)
+        assert y.shape == (B, math.prod((H // 8, W // 8)), D_model)
 
     def test_forward_additional_features(self, backend):
         B, C, H, W = 2, 3, 64, 64

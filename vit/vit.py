@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Dict, Literal, Self, Sequence, Tuple, Type, cast
 
@@ -70,6 +70,7 @@ class ViTConfig:
     # ConvNext patch embedding
     convnext_patch_embed: bool = False
     convnext_depth: int = 2
+    convnext_patch_size: Sequence[int] = field(default_factory=lambda: [2, 2])
 
     @property
     def device_type(self) -> Literal["cpu", "cuda"]:
@@ -140,6 +141,7 @@ class ViT(nn.Module):
                 normalization=config.normalization,
                 backend=config.backend,
                 depth=config.convnext_depth,
+                convnext_patch_size=config.convnext_patch_size,
             )
         else:
             self.stem = PatchEmbed2d(
