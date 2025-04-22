@@ -90,26 +90,31 @@ class ConvNextPatchEmbed2d(PatchEmbed2d):
         backend: Backend = DEFAULT_BACKEND,
         eps: float = 1e-5,
         depth: int = 2,
+        convnext_patch_size: Sequence[int] = [2, 2],
         **kwargs,
     ):
         super().__init__(in_channels, embed_dim, patch_size, normalization, backend, eps)
         check_convnext_installed(convnext)
         assert len(set(patch_size)) == 1, "Patch size must be the same for all dimensions"
         assert all(p % 2 == 0 for p in patch_size), "Patch size must be even"
+        assert len(set(convnext_patch_size)) == 1, "ConvNext patch size must be the same for all dimensions"
+        assert all(p % 2 == 0 for p in convnext_patch_size), "ConvNext patch size must be even"
+        assert convnext_patch_size[0] < patch_size[0], "ConvNext patch size must be less than the input patch size"
+        assert convnext_patch_size[1] < patch_size[1], "ConvNext patch size must be less than the input patch size"
 
         # Determine how many levels we need to match the expected patch size on the output
         # NOTE: We use a single conv on the last level since that level is ready for the transformer
-        needed_levels = round(math.log2(max(patch_size)))
-        depths = [depth if i == needed_levels - 1 else 1 for i in range(needed_levels)]
+        needed_levels = round(math.log2(max(patch_size))) - round(math.log2(max(convnext_patch_size)))
+        depths = [depth] * needed_levels
 
         # Increment the width of each level by 2x, matching embed_dim on the last level
-        hidden_sizes = list(reversed([embed_dim // (2**i) for i in range(needed_levels)]))
+        hidden_sizes = list(reversed([embed_dim // (2 ** (i + 1)) for i in range(needed_levels)]))
         ffn_hidden_sizes = [d * 4 for d in hidden_sizes]
 
         # NOTE: This approach allows leakage between adjacent tokens, which may impact masked image modeling tasks.
         config = convnext.ConvNextConfig(
             in_channels=in_channels,
-            patch_size=[2, 2],
+            patch_size=convnext_patch_size,
             kernel_size=[3, 3],
             depths=depths,
             hidden_sizes=hidden_sizes,
@@ -122,3 +127,20 @@ class ConvNextPatchEmbed2d(PatchEmbed2d):
         )
         config = replace(config, **kwargs)
         self.patch = config.instantiate()
+        self.final_conv = nn.Conv2d(hidden_sizes[-1], embed_dim, 2, stride=2)
+
+    def forward(self, x: Tensor, additional_features: Tensor | None = None) -> Tensor:
+        P1, P2 = self.patch_size
+        B, _, H, W = x.shape
+        Ht, Wt = self.tokenized_size((H, W))
+
+        y = rearrange(x, "b c (h p1) (w p2) -> (b h w) c p1 p2", p1=P1, p2=P2)
+        y = self.patch(y)
+        y = self.final_conv(y)
+        y = rearrange(y, "(b h w) c () () -> b (h w) c", b=B, h=Ht, w=Wt)
+
+        pos = self.pos_enc((Ht, Wt))
+        if additional_features is not None:
+            y = y + additional_features
+        y = y + pos
+        return self.norm(y)
