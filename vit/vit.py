@@ -56,6 +56,7 @@ class ViTConfig:
     drop_path_rate: float = 0.0
     decoder: bool = False
     decoder_layers: Sequence[int] | None = None
+    num_register_tokens: int = 0
 
     # Other
     checkpoint: bool = False
@@ -124,6 +125,7 @@ class ViT(nn.Module):
 
         # CLS token
         self.cls_token = nn.Parameter(torch.randn(config.hidden_size))
+        self.register_tokens = nn.Parameter(torch.randn(config.num_register_tokens, config.hidden_size))
 
         # Stem tokenizer
         self.stem = PatchEmbed2d(
@@ -315,17 +317,24 @@ class ViT(nn.Module):
         if mask is not None:
             x = apply_mask(mask, x)
 
-        # Add CLS token
-        x = torch.cat([self.cls_token.view(1, 1, -1).expand(B, -1, -1), x], dim=1)
+        # Add CLS token and register tokens
+        x = torch.cat(
+            [
+                self.cls_token.view(1, 1, self.config.hidden_size).expand(B, -1, -1),
+                self.register_tokens.view(1, -1, self.config.hidden_size).expand(B, -1, -1),
+                x,
+            ],
+            dim=1,
+        )
 
         # Transformer blocks and output norm
         for block in self.blocks:
             block = cast(TransformerLayer, block)
             x = block(x, encoder_output=encoder_output, checkpoint_core_attention=self.config.checkpoint)
 
-        # Extract CLS token
+        # Extract CLS token and features, dropping register tokens
         cls_token = x[:, 0, :].contiguous()
-        x = x[:, 1:, :].contiguous()
+        x = x[:, 1 + self.config.num_register_tokens :, :].contiguous()
 
         return x, cls_token
 
