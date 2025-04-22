@@ -67,7 +67,9 @@ class TestViT:
             if hasattr(block, "inter_attention"):
                 assert block.enc_dec_attn_mask_type == "no_mask"  # type: ignore
 
-    def test_forward(self, config):
+    @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
+    def test_forward(self, config, num_register_tokens):
+        config = replace(config, num_register_tokens=num_register_tokens)
         x = torch.randn(1, 3, 224, 224)
         model = ViT(config)
         with torch.autocast(device_type="cpu", dtype=torch.bfloat16, enabled=True):
