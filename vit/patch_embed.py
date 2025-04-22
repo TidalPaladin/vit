@@ -1,17 +1,28 @@
+import math
+from dataclasses import replace
 from typing import TYPE_CHECKING, Sequence, Tuple
 
 import torch.nn as nn
 from einops import rearrange
 from torch import Tensor
 
-from .helpers import DEFAULT_BACKEND, Backend, check_te_installed, try_import_te
+from .helpers import (
+    DEFAULT_BACKEND,
+    Backend,
+    check_convnext_installed,
+    check_te_installed,
+    try_import_convnext,
+    try_import_te,
+)
 from .pos_enc import RelativeFactorizedPosition
 
 
 if TYPE_CHECKING:
+    import convnext  # type: ignore[reportMissingImports]
     import transformer_engine.pytorch as te  # type: ignore[reportMissingImports]
 else:
     te = try_import_te()
+    convnext = try_import_convnext()
 
 
 class PatchEmbed2d(nn.Module):
@@ -66,3 +77,48 @@ class PatchEmbed2d(nn.Module):
             y = y + additional_features
         y = y + pos
         return self.norm(y)
+
+
+class ConvNextPatchEmbed2d(PatchEmbed2d):
+
+    def __init__(
+        self,
+        in_channels: int,
+        embed_dim: int,
+        patch_size: Sequence[int],
+        normalization: str = "LayerNorm",
+        backend: Backend = DEFAULT_BACKEND,
+        eps: float = 1e-5,
+        depth: int = 2,
+        **kwargs,
+    ):
+        super().__init__(in_channels, embed_dim, patch_size, normalization, backend, eps)
+        check_convnext_installed(convnext)
+        assert len(set(patch_size)) == 1, "Patch size must be the same for all dimensions"
+        assert all(p % 2 == 0 for p in patch_size), "Patch size must be even"
+
+        # Determine how many levels we need to match the expected patch size on the output
+        # NOTE: We use a single conv on the last level since that level is ready for the transformer
+        needed_levels = round(math.log2(max(patch_size)))
+        depths = [depth if i == needed_levels - 1 else 1 for i in range(needed_levels)]
+
+        # Increment the width of each level by 2x, matching embed_dim on the last level
+        hidden_sizes = list(reversed([embed_dim // (2**i) for i in range(needed_levels)]))
+        ffn_hidden_sizes = [d * 4 for d in hidden_sizes]
+
+        # NOTE: This approach allows leakage between adjacent tokens, which may impact masked image modeling tasks.
+        config = convnext.ConvNextConfig(
+            in_channels=in_channels,
+            patch_size=[2, 2],
+            kernel_size=[3, 3],
+            depths=depths,
+            hidden_sizes=hidden_sizes,
+            ffn_hidden_sizes=ffn_hidden_sizes,
+            activation="srelu",
+            backend=backend,
+            checkpoint=True,
+            drop_path_rate=0.0,
+            normalization=normalization,
+        )
+        config = replace(config, **kwargs)
+        self.patch = config.instantiate()

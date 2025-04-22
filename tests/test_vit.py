@@ -67,9 +67,10 @@ class TestViT:
             if hasattr(block, "inter_attention"):
                 assert block.enc_dec_attn_mask_type == "no_mask"  # type: ignore
 
+    @pytest.mark.parametrize("convnext_patch_embed", [False, True])
     @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
-    def test_forward(self, config, num_register_tokens):
-        config = replace(config, num_register_tokens=num_register_tokens)
+    def test_forward(self, config, num_register_tokens, convnext_patch_embed):
+        config = replace(config, num_register_tokens=num_register_tokens, convnext_patch_embed=convnext_patch_embed)
         x = torch.randn(1, 3, 224, 224)
         model = ViT(config)
         with torch.autocast(device_type="cpu", dtype=torch.bfloat16, enabled=True):

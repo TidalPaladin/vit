@@ -74,3 +74,21 @@ def check_te_installed(te: Any) -> Any:
             "transformer_engine is not installed. "
             "Please install it with `pip install --no-build-isolation transformer-engine[pytorch]`"
         )
+
+
+def try_import_convnext() -> Any:
+    try:
+        import convnext
+
+        return convnext
+
+    except ImportError:
+        return None
+
+
+def check_convnext_installed(convnext: Any) -> Any:
+    if convnext is None:
+        raise ImportError(
+            "convnext is not installed. "
+            "Please install the `convnext` extra or with `pip install 'convnext @ git+https://github.com/TidalPaladin/convnext.git'`"
+        )

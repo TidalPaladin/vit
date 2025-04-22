@@ -21,6 +21,9 @@ license = {text = "Apache"}
 dynamic = ["version"]
 
 [project.optional-dependencies]
+convnext = [
+  "convnext @ git+https://github.com/TidalPaladin/convnext.git",
+]
 
 [tool.autoflake]
 remove-all-unused-imports = true
@@ -59,23 +62,6 @@ pythonPlatform = "Linux"
 [tool.pdm]
 version = { source = "scm" }
 
-[tool.pdm.dev-dependencies]
-test = [
-  "pytest",
-  "pytest-mock",
-  "pytest-cov",
-  "pytest-env",
-  "coverage",
-  "pdbpp",
-]
-quality = [
-  "autoflake",
-  "autopep8",
-  "black",
-  "flake8",
-  "isort",
-]
-
 [tool.pytest.ini_options]
 markers = [
   "ci_skip",
@@ -89,3 +75,21 @@ TORCH_COMPILE = "0"
 # Sample script config
 #[project.scripts]
 #foo = "project.cli.__main__:main"
+
+[dependency-groups]
+quality = [
+    "autoflake",
+    "autopep8",
+    "black",
+    "flake8",
+    "isort",
+]
+test = [
+    "pytest",
+    "pytest-mock",
+    "pytest-cov",
+    "pytest-env",
+    "coverage",
+    "pdbpp",
+    "convnext @ git+https://github.com/TidalPaladin/convnext.git",
+]
