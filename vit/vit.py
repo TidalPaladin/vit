@@ -9,7 +9,7 @@ from einops.layers.torch import Reduce
 from torch import Tensor
 
 from .helpers import DEFAULT_BACKEND, DEFAULT_TRUNC_STD, Backend, check_te_installed, try_import_te
-from .patch_embed import PatchEmbed2d
+from .patch_embed import ConvNextPatchEmbed2d, PatchEmbed2d
 from .tokens import apply_mask, create_mask
 from .transformer import TransformerLayer
 
@@ -66,6 +66,10 @@ class ViTConfig:
     mlp_requires_grad: bool = True
     self_attention_requires_grad: bool = True
     inter_attention_requires_grad: bool = True
+
+    # ConvNext patch embedding
+    convnext_patch_embed: bool = False
+    convnext_depth: int = 2
 
     @property
     def device_type(self) -> Literal["cpu", "cuda"]:
@@ -128,13 +132,23 @@ class ViT(nn.Module):
         self.register_tokens = nn.Parameter(torch.randn(config.num_register_tokens, config.hidden_size))
 
         # Stem tokenizer
-        self.stem = PatchEmbed2d(
-            config.in_channels,
-            config.hidden_size,
-            cast(Tuple[int, int], tuple(config.patch_size)),
-            normalization=config.normalization,
-            backend=config.backend,
-        )
+        if config.convnext_patch_embed:
+            self.stem = ConvNextPatchEmbed2d(
+                config.in_channels,
+                config.hidden_size,
+                cast(Tuple[int, int], tuple(config.patch_size)),
+                normalization=config.normalization,
+                backend=config.backend,
+                depth=config.convnext_depth,
+            )
+        else:
+            self.stem = PatchEmbed2d(
+                config.in_channels,
+                config.hidden_size,
+                cast(Tuple[int, int], tuple(config.patch_size)),
+                normalization=config.normalization,
+                backend=config.backend,
+            )
 
         # Transformer blocks
         if self.config.decoder:
