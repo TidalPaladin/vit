@@ -4,7 +4,6 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from .fused import LayerNormMLP
 from .helpers import DEFAULT_BACKEND, Backend, check_te_installed, compile_is_disabled, try_import_te
 
 
@@ -47,9 +46,7 @@ class RelativeFactorizedPosition(nn.Module):
     Computes relative factorized position encodings.
 
     A grid of positions in the interval :math:`[-1, 1]` is first created.
-    This grid is then projected into a higher-dimensional space using a multi-layer perceptron (MLP).
-    The output is then normalized using a layer normalization. This computation is performed in float32 precision
-    to ensure stability at high resolution, and mamtul precision is set to 'high' for this step.
+    This grid is then projected into a higher-dimensional space using a single linear projection.
 
     Args:
         d_in:
@@ -67,11 +64,9 @@ class RelativeFactorizedPosition(nn.Module):
         match backend:
             case "pytorch":
                 self.linear = nn.Linear(d_in, d_out)
-                self.mlp = LayerNormMLP(d_out, d_out, activation="srelu", eps=eps)
             case "te":
                 check_te_installed(te)
                 self.linear = te.Linear(d_in, d_out)
-                self.mlp = te.LayerNormMLP(d_out, d_out, activation="srelu", eps=eps)
             case _:
                 raise ValueError(f"Backend {backend} not supported")
 
@@ -79,5 +74,4 @@ class RelativeFactorizedPosition(nn.Module):
         with torch.no_grad():
             grid = create_grid(dims, device=cast(Tensor, self.linear.weight).device)
         result = self.linear(grid)
-        result = self.mlp(result)
         return result
