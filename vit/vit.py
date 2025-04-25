@@ -8,8 +8,8 @@ import yaml
 from einops.layers.torch import Reduce
 from torch import Tensor
 
-from .fused import LayerNormMLP
-from .helpers import DEFAULT_BACKEND, DEFAULT_TRUNC_STD, Backend, check_te_installed, try_import_te
+from .fused import LayerNormLinear, LayerNormMLP
+from .helpers import DEFAULT_BACKEND, Backend, check_te_installed, try_import_te
 from .patch_embed import ConvNextPatchEmbed2d, PatchEmbed2d
 from .tokens import apply_mask, create_mask
 from .transformer import TransformerLayer
@@ -249,12 +249,13 @@ class ViT(nn.Module):
             case _:
                 raise ValueError(f"Invalid normalization: {self.config.normalization}")
 
-    def create_head(self, out_dim: int, pool_type: str | None = None) -> nn.Module:
+    def create_head(self, out_dim: int, pool_type: str | None = None, mlp: bool = False) -> nn.Module:
         r"""Creates a head for the model.
 
         Args:
             out_dim: Dimension of the output.
             pool_type: Type of pooling to apply, or ``None`` to skip pooling.
+            mlp: Whether to use a MLP instead of a linear layer.
 
         """
         layer = nn.Sequential()
@@ -271,17 +272,33 @@ class ViT(nn.Module):
                 raise ValueError(f"Invalid pool type: {pool_type}")
 
         # Normalization + Linear
-        layer.add_module("norm", self.create_norm(self.config.isotropic_output_dim))
-        match self.config.backend:
-            case "pytorch":
-                linear = nn.Linear(self.config.isotropic_output_dim, out_dim)
-                nn.init.trunc_normal_(linear.weight, std=DEFAULT_TRUNC_STD)
-            case "te":
-                check_te_installed(te)
-                linear = te.Linear(self.config.isotropic_output_dim, out_dim)
-            case _:
-                raise ValueError(f"Invalid backend: {self.config.backend}")
-        layer.add_module("linear", linear)
+        if mlp:
+            layer.add_module("layernorm_mlp", self.create_mlp(out_dim))
+        else:
+            match self.config.backend:
+                case "pytorch":
+                    layer.add_module(
+                        "layernorm_linear",
+                        LayerNormLinear(
+                            self.config.isotropic_output_dim,
+                            out_dim,
+                            bias=self.config.bias,
+                            normalization=self.config.normalization,
+                        ),
+                    )
+                case "te":
+                    check_te_installed(te)
+                    layer.add_module(
+                        "layernorm_linear",
+                        te.LayerNormLinear(
+                            self.config.isotropic_output_dim,
+                            out_dim,
+                            bias=self.config.bias,
+                            normalization=self.config.normalization,
+                        ),
+                    )
+                case _:
+                    raise ValueError(f"Invalid backend: {self.config.backend}")
 
         return layer
 
