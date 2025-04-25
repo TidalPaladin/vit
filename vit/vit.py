@@ -8,6 +8,7 @@ import yaml
 from einops.layers.torch import Reduce
 from torch import Tensor
 
+from .fused import LayerNormMLP
 from .helpers import DEFAULT_BACKEND, DEFAULT_TRUNC_STD, Backend, check_te_installed, try_import_te
 from .patch_embed import ConvNextPatchEmbed2d, PatchEmbed2d
 from .tokens import apply_mask, create_mask
@@ -282,6 +283,47 @@ class ViT(nn.Module):
                 raise ValueError(f"Invalid backend: {self.config.backend}")
         layer.add_module("linear", linear)
 
+        return layer
+
+    def create_mlp(self, out_dim: int) -> nn.Module:
+        r"""Creates a MLP with a final output projection to `out_dim`.
+
+        Args:
+            out_dim: Dimension of the output.
+
+        """
+        layer = nn.Sequential()
+        match self.config.backend:
+            case "pytorch":
+                layer.add_module(
+                    "mlp",
+                    LayerNormMLP(
+                        self.config.isotropic_output_dim,
+                        self.config.ffn_hidden_size,
+                        bias=self.config.bias,
+                        normalization=self.config.normalization,
+                        activation=self.config.activation,
+                    ),
+                )
+                layer.add_module("dropout", nn.Dropout(self.config.hidden_dropout))
+                layer.add_module("output", nn.Linear(self.config.isotropic_output_dim, out_dim))
+            case "te":
+                check_te_installed(te)
+                layer.add_module(
+                    "mlp",
+                    te.LayerNormMLP(
+                        self.config.isotropic_output_dim,
+                        self.config.ffn_hidden_size,
+                        out_dim,
+                        bias=self.config.bias,
+                        normalization=self.config.normalization,
+                        activation=self.config.activation,
+                    ),
+                )
+                layer.add_module("dropout", nn.Dropout(self.config.hidden_dropout))
+                layer.add_module("output", te.Linear(self.config.isotropic_output_dim, out_dim))
+            case _:
+                raise ValueError(f"Invalid backend: {self.config.backend}")
         return layer
 
     def create_mask(
