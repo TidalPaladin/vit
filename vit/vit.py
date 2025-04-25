@@ -251,18 +251,20 @@ class ViT(nn.Module):
 
     def create_head(
         self,
-        out_dim: int,
+        out_dim: int | None = None,
         pool_type: str | None = None,
         mlp: bool = False,
-        activation: str | None = None,
+        **kwargs,
     ) -> nn.Module:
         r"""Creates a head for the model.
 
         Args:
-            out_dim: Dimension of the output.
+            out_dim: Dimension of the output. If ``None``, the output will have the same dimension as the model's output.
             pool_type: Type of pooling to apply, or ``None`` to skip pooling.
             mlp: Whether to use a MLP instead of a linear layer.
-            activation: Activation function to use (for MLP), or ``None`` to use the backbone's activation.
+
+        Keyword Args:
+            Additional keyword arguments to pass to the MLP or LayerNormLinear.
         """
         layer = nn.Sequential()
 
@@ -279,17 +281,18 @@ class ViT(nn.Module):
 
         # Normalization + Linear
         if mlp:
-            layer.add_module("layernorm_mlp", self.create_mlp(out_dim, activation))
+            layer.add_module("layernorm_mlp", self.create_mlp(out_dim, **kwargs))
         else:
+            kwargs.setdefault("bias", self.config.bias)
+            kwargs.setdefault("normalization", self.config.normalization)
             match self.config.backend:
                 case "pytorch":
                     layer.add_module(
                         "layernorm_linear",
                         LayerNormLinear(
                             self.config.isotropic_output_dim,
-                            out_dim,
-                            bias=self.config.bias,
-                            normalization=self.config.normalization,
+                            out_dim or self.config.isotropic_output_dim,
+                            **kwargs,
                         ),
                     )
                 case "te":
@@ -298,9 +301,8 @@ class ViT(nn.Module):
                         "layernorm_linear",
                         te.LayerNormLinear(
                             self.config.isotropic_output_dim,
-                            out_dim,
-                            bias=self.config.bias,
-                            normalization=self.config.normalization,
+                            out_dim or self.config.isotropic_output_dim,
+                            **kwargs,
                         ),
                     )
                 case _:
@@ -308,14 +310,19 @@ class ViT(nn.Module):
 
         return layer
 
-    def create_mlp(self, out_dim: int, activation: str | None = None) -> nn.Module:
-        r"""Creates a MLP with a final output projection to `out_dim`.
+    def create_mlp(self, out_dim: int | None = None, **kwargs) -> nn.Module:
+        r"""Creates a MLP. If `out_dim` is provided, it will be followed by a final output projection to `out_dim`.
 
         Args:
             out_dim: Dimension of the output.
-            activation: Activation function to use, or ``None`` to use the backbone's activation.
 
+        Keyword Args:
+            Additional keyword arguments to pass to the MLP.
         """
+        kwargs.setdefault("activation", self.config.activation)
+        kwargs.setdefault("bias", self.config.bias)
+        kwargs.setdefault("normalization", self.config.normalization)
+
         layer = nn.Sequential()
         match self.config.backend:
             case "pytorch":
@@ -324,13 +331,12 @@ class ViT(nn.Module):
                     LayerNormMLP(
                         self.config.isotropic_output_dim,
                         self.config.ffn_hidden_size,
-                        bias=self.config.bias,
-                        normalization=self.config.normalization,
-                        activation=activation or self.config.activation,
+                        **kwargs,
                     ),
                 )
-                layer.add_module("dropout", nn.Dropout(self.config.hidden_dropout))
-                layer.add_module("output", nn.Linear(self.config.isotropic_output_dim, out_dim))
+                if out_dim is not None:
+                    layer.add_module("dropout", nn.Dropout(self.config.hidden_dropout))
+                    layer.add_module("output", nn.Linear(self.config.isotropic_output_dim, out_dim))
             case "te":
                 check_te_installed(te)
                 layer.add_module(
@@ -338,14 +344,13 @@ class ViT(nn.Module):
                     te.LayerNormMLP(
                         self.config.isotropic_output_dim,
                         self.config.ffn_hidden_size,
-                        out_dim,
-                        bias=self.config.bias,
-                        normalization=self.config.normalization,
-                        activation=activation or self.config.activation,
+                        out_dim or self.config.isotropic_output_dim,
+                        **kwargs,
                     ),
                 )
-                layer.add_module("dropout", nn.Dropout(self.config.hidden_dropout))
-                layer.add_module("output", te.Linear(self.config.isotropic_output_dim, out_dim))
+                if out_dim is not None:
+                    layer.add_module("dropout", nn.Dropout(self.config.hidden_dropout))
+                    layer.add_module("output", te.Linear(self.config.isotropic_output_dim, out_dim))
             case _:
                 raise ValueError(f"Invalid backend: {self.config.backend}")
         return layer

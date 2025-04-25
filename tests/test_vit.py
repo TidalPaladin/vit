@@ -217,7 +217,8 @@ class TestViT:
 
     @pytest.mark.parametrize("backend", ["pytorch", "te"])
     @pytest.mark.parametrize("mlp", [False, True])
-    def test_forward_head_no_pooling(self, backend, config, mlp):
+    @pytest.mark.parametrize("out_dim", [1, None])
+    def test_forward_head_no_pooling(self, backend, config, mlp, out_dim):
         if backend == "te" and te is None:
             pytest.skip("Transformer Engine is not available")
         config = replace(config, backend=backend)
@@ -225,17 +226,18 @@ class TestViT:
 
         x = torch.randn(1, 3, 224, 224, device=device)
         model = ViT(config).to(device)
-        head = model.create_head(1, mlp=mlp)
+        head = model.create_head(out_dim, mlp=mlp)
         head = head.to(device)
         with torch.autocast(device_type=device, dtype=torch.bfloat16, enabled=True):
             out, cls_token = model(x)
             out = head(cls_token)
-        assert out.shape == (1, 1)
+        assert out.shape == (1, out_dim or config.isotropic_output_dim)
 
     @pytest.mark.parametrize("backend", ["pytorch", "te"])
     @pytest.mark.parametrize("mlp", [False, True])
     @pytest.mark.parametrize("pool_type", ["avg", "max"])
-    def test_forward_head_pooling(self, backend, config, mlp, pool_type):
+    @pytest.mark.parametrize("out_dim", [1, None])
+    def test_forward_head_pooling(self, backend, config, mlp, pool_type, out_dim):
         if backend == "te" and te is None:
             pytest.skip("Transformer Engine is not available")
         config = replace(config, backend=backend)
@@ -243,9 +245,9 @@ class TestViT:
 
         x = torch.randn(1, 3, 224, 224, device=device)
         model = ViT(config).to(device)
-        head = model.create_head(1, mlp=mlp, pool_type=pool_type)
+        head = model.create_head(out_dim, mlp=mlp, pool_type=pool_type)
         head = head.to(device)
         with torch.autocast(device_type=device, dtype=torch.bfloat16, enabled=True):
             out, _ = model(x)
             out = head(out)
-        assert out.shape == (1, 1)
+        assert out.shape == (1, out_dim or config.isotropic_output_dim)
