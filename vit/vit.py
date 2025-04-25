@@ -249,14 +249,20 @@ class ViT(nn.Module):
             case _:
                 raise ValueError(f"Invalid normalization: {self.config.normalization}")
 
-    def create_head(self, out_dim: int, pool_type: str | None = None, mlp: bool = False) -> nn.Module:
+    def create_head(
+        self,
+        out_dim: int,
+        pool_type: str | None = None,
+        mlp: bool = False,
+        activation: str | None = None,
+    ) -> nn.Module:
         r"""Creates a head for the model.
 
         Args:
             out_dim: Dimension of the output.
             pool_type: Type of pooling to apply, or ``None`` to skip pooling.
             mlp: Whether to use a MLP instead of a linear layer.
-
+            activation: Activation function to use (for MLP), or ``None`` to use the backbone's activation.
         """
         layer = nn.Sequential()
 
@@ -273,7 +279,7 @@ class ViT(nn.Module):
 
         # Normalization + Linear
         if mlp:
-            layer.add_module("layernorm_mlp", self.create_mlp(out_dim))
+            layer.add_module("layernorm_mlp", self.create_mlp(out_dim, activation))
         else:
             match self.config.backend:
                 case "pytorch":
@@ -302,11 +308,12 @@ class ViT(nn.Module):
 
         return layer
 
-    def create_mlp(self, out_dim: int) -> nn.Module:
+    def create_mlp(self, out_dim: int, activation: str | None = None) -> nn.Module:
         r"""Creates a MLP with a final output projection to `out_dim`.
 
         Args:
             out_dim: Dimension of the output.
+            activation: Activation function to use, or ``None`` to use the backbone's activation.
 
         """
         layer = nn.Sequential()
@@ -319,7 +326,7 @@ class ViT(nn.Module):
                         self.config.ffn_hidden_size,
                         bias=self.config.bias,
                         normalization=self.config.normalization,
-                        activation=self.config.activation,
+                        activation=activation or self.config.activation,
                     ),
                 )
                 layer.add_module("dropout", nn.Dropout(self.config.hidden_dropout))
@@ -334,7 +341,7 @@ class ViT(nn.Module):
                         out_dim,
                         bias=self.config.bias,
                         normalization=self.config.normalization,
-                        activation=self.config.activation,
+                        activation=activation or self.config.activation,
                     ),
                 )
                 layer.add_module("dropout", nn.Dropout(self.config.hidden_dropout))
