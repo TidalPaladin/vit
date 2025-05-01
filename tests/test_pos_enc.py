@@ -25,11 +25,16 @@ def test_create_grid(normalize):
 
 class TestRelativeFactorizedPosition:
 
-    def test_forward(self, backend):
+    @pytest.mark.parametrize("normalization", ["LayerNorm", "RMSNorm"])
+    @pytest.mark.parametrize("bias", [True, False])
+    @pytest.mark.parametrize("activation", ["gelu", "srelu"])
+    def test_forward(self, backend, normalization, bias, activation):
         C, D = 2, 16
         torch.random.manual_seed(0)
         device_type = "cuda" if backend == "te" else "cpu"
-        layer = RelativeFactorizedPosition(C, D, backend=backend).to(device_type)
+        layer = RelativeFactorizedPosition(
+            C, D, 4 * D, normalization=normalization, bias=bias, activation=activation, backend=backend
+        ).to(device_type)
         out = layer((8, 8))
         L = 64
         assert out.shape == (1, L, D)
@@ -38,7 +43,7 @@ class TestRelativeFactorizedPosition:
         C, D = 2, 16
         torch.random.manual_seed(0)
         device_type = "cuda" if backend == "te" else "cpu"
-        layer = RelativeFactorizedPosition(C, D, backend=backend).to(device_type)
+        layer = RelativeFactorizedPosition(C, D, 4 * D, backend=backend).to(device_type)
         out = layer((8, 8))
         out.sum().backward()
         for param in layer.parameters():
@@ -49,8 +54,8 @@ class TestRelativeFactorizedPosition:
     def test_baseline(self):
         C, D = 2, 16
         torch.random.manual_seed(0)
-        baseline = RelativeFactorizedPosition(C, D, backend="pytorch").to("cuda")
-        layer = RelativeFactorizedPosition(C, D, backend="te").to("cuda")
+        baseline = RelativeFactorizedPosition(C, D, 4 * D, backend="pytorch").to("cuda")
+        layer = RelativeFactorizedPosition(C, D, 4 * D, backend="te").to("cuda")
 
         layer.eval()
         baseline.eval()

@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
+from .fused import LayerNormMLP
 from .helpers import DEFAULT_BACKEND, Backend, check_te_installed, compile_is_disabled, try_import_te
 
 
@@ -59,19 +60,35 @@ class RelativeFactorizedPosition(nn.Module):
         * Output - :math:`(1, L, D)` where :math:`L` is the product of input dimensions and :math:`D` is the output dimension
     """
 
-    def __init__(self, d_in: int, d_out: int, backend: Backend = DEFAULT_BACKEND, eps: float = 1e-5):
+    def __init__(
+        self,
+        d_in: int,
+        hidden_size: int,
+        ffn_hidden_size: int,
+        activation: str = "gelu",
+        normalization: str = "LayerNorm",
+        bias: bool = True,
+        backend: Backend = DEFAULT_BACKEND,
+    ):
         super().__init__()
         match backend:
             case "pytorch":
-                self.linear = nn.Linear(d_in, d_out)
+                self.linear = nn.Linear(d_in, hidden_size, bias=bias)
+                self.mlp = LayerNormMLP(
+                    hidden_size, ffn_hidden_size, activation=activation, normalization=normalization, bias=bias
+                )
             case "te":
                 check_te_installed(te)
-                self.linear = te.Linear(d_in, d_out)
+                self.linear = te.Linear(d_in, hidden_size, bias=bias)
+                self.mlp = te.LayerNormMLP(
+                    hidden_size, ffn_hidden_size, activation=activation, normalization=normalization, bias=bias
+                )
             case _:
                 raise ValueError(f"Backend {backend} not supported")
 
     def forward(self, dims: Sequence[int]) -> Tensor:
         with torch.no_grad():
             grid = create_grid(dims, device=cast(Tensor, self.linear.weight).device)
-        result = self.linear(grid)
-        return result
+        y = self.linear(grid)
+        y = self.mlp(y)
+        return y

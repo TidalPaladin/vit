@@ -19,7 +19,7 @@ class TestPatchEmbed2d:
         B, C, H, W = 2, 3, 64, 64
         D_model = 64
         device_type = "cuda" if backend == "te" else "cpu"
-        layer = PatchEmbed2d(C, D_model, (4, 4), normalization=normalization, backend=backend).to(device_type)
+        layer = PatchEmbed2d(C, D_model, D_model, (4, 4), normalization=normalization, backend=backend).to(device_type)
         x = torch.randn(B, C, H, W, device=device_type)
         with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
             y = layer(x)
@@ -29,7 +29,7 @@ class TestPatchEmbed2d:
         B, C, H, W = 2, 3, 64, 64
         D_model = 64
         device_type = "cuda" if backend == "te" else "cpu"
-        layer = PatchEmbed2d(C, D_model, (4, 4), backend=backend).to(device_type)
+        layer = PatchEmbed2d(C, D_model, D_model, (4, 4), backend=backend).to(device_type)
         x = torch.randn(B, C, H, W, device=device_type)
         additional_features = torch.randn(B, H // 4 * W // 4, D_model, device=device_type)
         with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
@@ -40,7 +40,7 @@ class TestPatchEmbed2d:
         B, C, H, W = 2, 3, 64, 64
         D_model = 64
         device_type = "cuda" if backend == "te" else "cpu"
-        layer = PatchEmbed2d(C, D_model, (4, 4), backend=backend).to(device_type)
+        layer = PatchEmbed2d(C, D_model, D_model, (4, 4), backend=backend).to(device_type)
         x = torch.randn(B, C, H, W, requires_grad=True, device=device_type)
         y = layer(x)
         y.sum().backward()
@@ -54,8 +54,8 @@ class TestPatchEmbed2d:
         B, C, H, W = 2, 3, 64, 64
         D_model = 64
         torch.random.manual_seed(0)
-        baseline = PatchEmbed2d(C, D_model, (4, 4), normalization=normalization, backend="pytorch").to("cuda")
-        layer = PatchEmbed2d(C, D_model, (4, 4), normalization=normalization, backend="te").to("cuda")
+        baseline = PatchEmbed2d(C, D_model, D_model, (4, 4), normalization=normalization, backend="pytorch").to("cuda")
+        layer = PatchEmbed2d(C, D_model, D_model, (4, 4), normalization=normalization, backend="te").to("cuda")
         x = torch.randn(B, C, H, W, device="cuda")
 
         layer.eval()
@@ -80,7 +80,13 @@ class TestConvNextPatchEmbed2d:
         D_model = 64
         device_type = "cuda" if backend == "te" else "cpu"
         layer = ConvNextPatchEmbed2d(
-            C, D_model, (8, 8), normalization=normalization, backend=backend, convnext_patch_size=convnext_patch_size
+            C,
+            D_model,
+            D_model,
+            (8, 8),
+            normalization=normalization,
+            backend=backend,
+            convnext_patch_size=convnext_patch_size,
         ).to(device_type)
         assert layer.patch.stem.kernel_size == convnext_patch_size
         x = torch.randn(B, C, H, W, device=device_type)
@@ -92,7 +98,7 @@ class TestConvNextPatchEmbed2d:
         B, C, H, W = 2, 3, 64, 64
         D_model = 64
         device_type = "cuda" if backend == "te" else "cpu"
-        layer = ConvNextPatchEmbed2d(C, D_model, (4, 4), backend=backend).to(device_type)
+        layer = ConvNextPatchEmbed2d(C, D_model, D_model, (4, 4), backend=backend).to(device_type)
         x = torch.randn(B, C, H, W, device=device_type)
         additional_features = torch.randn(B, H // 4 * W // 4, D_model, device=device_type)
         with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
@@ -103,7 +109,7 @@ class TestConvNextPatchEmbed2d:
         B, C, H, W = 2, 3, 64, 64
         D_model = 64
         device_type = "cuda" if backend == "te" else "cpu"
-        layer = ConvNextPatchEmbed2d(C, D_model, (4, 4), backend=backend).to(device_type)
+        layer = ConvNextPatchEmbed2d(C, D_model, D_model, (4, 4), backend=backend).to(device_type)
         x = torch.randn(B, C, H, W, requires_grad=True, device=device_type)
         y = layer(x)
         y.sum().backward()
@@ -117,8 +123,10 @@ class TestConvNextPatchEmbed2d:
         B, C, H, W = 2, 3, 64, 64
         D_model = 64
         torch.random.manual_seed(0)
-        baseline = ConvNextPatchEmbed2d(C, D_model, (4, 4), normalization=normalization, backend="pytorch").to("cuda")
-        layer = ConvNextPatchEmbed2d(C, D_model, (4, 4), normalization=normalization, backend="te").to("cuda")
+        baseline = ConvNextPatchEmbed2d(C, D_model, D_model, (4, 4), normalization=normalization, backend="pytorch").to(
+            "cuda"
+        )
+        layer = ConvNextPatchEmbed2d(C, D_model, D_model, (4, 4), normalization=normalization, backend="te").to("cuda")
         x = torch.randn(B, C, H, W, device="cuda")
 
         layer.eval()
@@ -138,7 +146,9 @@ class TestConvNextPatchEmbed2d:
         B, C, H, W = 2, 3, 64, 64
         D_model = 64
         device_type = "cuda" if backend == "te" else "cpu"
-        layer = ConvNextPatchEmbed2d(C, D_model, (8, 8), normalization=normalization, backend=backend).to(device_type)
+        layer = ConvNextPatchEmbed2d(C, D_model, D_model, (8, 8), normalization=normalization, backend=backend).to(
+            device_type
+        )
         x = torch.randn(B, C, H, W, device=device_type)
         with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
             y = layer(x)
