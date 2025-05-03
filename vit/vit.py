@@ -237,6 +237,7 @@ class ViT(nn.Module):
         _kwargs = self.config.transformer_kwargs
         _kwargs.update(kwargs)
         _kwargs["layer_number"] = i + 1
+        _kwargs.setdefault("layer_type", "decoder")
         match self.config.backend:
             case "pytorch":
                 layer = TransformerLayer(**_kwargs)
