@@ -53,6 +53,43 @@ class TestViT:
         config_from_path = ViTConfig.from_yaml(path)
         assert config == config_from_path
 
+    @pytest.mark.parametrize("batched_tokens", [False, True])
+    @pytest.mark.parametrize("pack_cls", [False, True])
+    @pytest.mark.parametrize("pack_register", [False, True])
+    def test_pack_unpack(self, config, batched_tokens, pack_cls, pack_register):
+        B = 2
+        L_reg = 3
+        L_cls = 2
+        config = replace(
+            config,
+            num_register_tokens=L_reg,
+            num_cls_tokens=L_cls,
+        )
+        model = ViT(config)
+
+        x = torch.randn(B, 196, 128)
+        cls_tokens = torch.randn(B if batched_tokens else 1, L_cls, 128)
+        register_tokens = torch.randn(B if batched_tokens else 1, L_reg, 128)
+
+        packed = model.pack(x, cls_tokens if pack_cls else None, register_tokens if pack_register else None)
+        exp_len = 196 + (L_cls if pack_cls else 0) + (L_reg if pack_register else 0)
+        assert packed.shape == (B, exp_len, 128)
+
+        features, cls_tokens, register_tokens = model.unpack(
+            packed, has_cls_tokens=pack_cls, has_register_tokens=pack_register
+        )
+        assert features.shape == (B, 196, 128)
+        if pack_cls:
+            assert cls_tokens is not None
+            assert cls_tokens.shape == (B, L_cls, 128)
+        else:
+            assert cls_tokens is None
+        if pack_register:
+            assert register_tokens is not None
+            assert register_tokens.shape == (B, L_reg, 128)
+        else:
+            assert register_tokens is None
+
     @pytest.mark.parametrize("decoder", [False, True])
     def test_non_causal_default(self, config, decoder):
         if te is None:
