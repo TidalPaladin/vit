@@ -237,7 +237,7 @@ class ViT(nn.Module):
         _kwargs = self.config.transformer_kwargs
         _kwargs.update(kwargs)
         _kwargs["layer_number"] = i + 1
-        _kwargs["layer_type"] = "decoder"
+        _kwargs.setdefault("layer_type", "decoder")
         match self.config.backend:
             case "pytorch":
                 layer = TransformerLayer(**_kwargs)
@@ -263,6 +263,7 @@ class ViT(nn.Module):
         _kwargs = self.config.transformer_kwargs
         _kwargs.update(kwargs)
         _kwargs["layer_number"] = i + 1
+        _kwargs.setdefault("backend", self.config.backend)
         return CrossAttentionMLP(**_kwargs)
 
     def create_norm(self, hidden_size: int) -> nn.Module:
