@@ -117,6 +117,8 @@ class LayerNormLinear(nn.Module):
             for name in self.bias_names:
                 self.register_parameter(name, None)
 
+        self.reset_parameters()
+
     def reset_parameters(self) -> None:
         if self.layer_norm_weight is not None:
             nn.init.ones_(self.layer_norm_weight)
