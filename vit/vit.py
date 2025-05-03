@@ -426,28 +426,27 @@ class ViT(nn.Module):
         """
         B = features.shape[0]
         if cls_tokens is not None:
-            features = torch.cat(
-                [
-                    features,
-                    cls_tokens.view(1, -1, self.config.hidden_size).expand(B, -1, -1),
-                ],
-                dim=1,
-            )
+            cls_tokens = cls_tokens.view(-1, self.config.num_cls_tokens, self.config.hidden_size).expand(B, -1, -1)
+            features = torch.cat([features, cls_tokens], dim=1)
         if register_tokens is not None:
-            features = torch.cat(
-                [
-                    features,
-                    register_tokens.view(1, -1, self.config.hidden_size).expand(B, -1, -1),
-                ],
-                dim=1,
+            register_tokens = register_tokens.view(-1, self.config.num_register_tokens, self.config.hidden_size).expand(
+                B, -1, -1
             )
+            features = torch.cat([features, register_tokens], dim=1)
         return features
 
-    def unpack(self, packed: Tensor) -> Tuple[Tensor, Tensor | None, Tensor | None]:
+    def unpack(
+        self,
+        packed: Tensor,
+        has_cls_tokens: bool = True,
+        has_register_tokens: bool = True,
+    ) -> Tuple[Tensor, Tensor | None, Tensor | None]:
         r"""Unpacks the features, CLS tokens, and register tokens from a single tensor.
 
         Args:
             packed: Packed tensor to unpack.
+            has_cls_tokens: Whether the packed tensor contains CLS tokens.
+            has_register_tokens: Whether the packed tensor contains register tokens.
 
         Shapes:
             - packed: :math:`(B, L + C + R, D)`
@@ -461,20 +460,14 @@ class ViT(nn.Module):
             register_tokens: Register tokens.
         """
         L_total = packed.shape[1]
-        L_features = L_total - self.config.num_cls_tokens - self.config.num_register_tokens
+        num_cls_tokens = self.config.num_cls_tokens if has_cls_tokens else 0
+        num_register_tokens = self.config.num_register_tokens if has_register_tokens else 0
+        L_features = L_total - num_cls_tokens - num_register_tokens
         features = packed[:, :L_features, :].contiguous()
-        cls_tokens = (
-            packed[:, L_features : L_features + self.config.num_cls_tokens, :].contiguous()
-            if self.config.num_cls_tokens > 0
-            else None
-        )
-        register_tokens = (
-            packed[:, L_features + self.config.num_cls_tokens :, :].contiguous()
-            if self.config.num_register_tokens > 0
-            else None
-        )
-        assert cls_tokens is None or cls_tokens.shape[1] == self.config.num_cls_tokens
-        assert register_tokens is None or register_tokens.shape[1] == self.config.num_register_tokens
+        cls_tokens = packed[:, L_features : L_features + num_cls_tokens, :].contiguous() if num_cls_tokens > 0 else None
+        register_tokens = packed[:, L_features + num_cls_tokens :, :].contiguous() if num_register_tokens > 0 else None
+        assert cls_tokens is None or cls_tokens.shape[1] == num_cls_tokens
+        assert register_tokens is None or register_tokens.shape[1] == num_register_tokens
         return features, cls_tokens, register_tokens
 
     def forward(
