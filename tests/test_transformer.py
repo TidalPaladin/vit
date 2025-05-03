@@ -126,6 +126,7 @@ class TestTransformerLayer:
     @pytest.mark.parametrize("activation", ["gelu", "relu"])
     @pytest.mark.parametrize("bias", [False, True])
     def test_baseline_cross_attention(self, num_gqa_groups, normalization, activation, bias):
+        torch.random.manual_seed(0)
         if te is None:
             pytest.skip("Transformer Engine is not available")
 
