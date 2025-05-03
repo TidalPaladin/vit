@@ -69,14 +69,27 @@ class TestViT:
 
     @pytest.mark.parametrize("convnext_patch_embed", [False, True])
     @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
-    def test_forward(self, config, num_register_tokens, convnext_patch_embed):
-        config = replace(config, num_register_tokens=num_register_tokens, convnext_patch_embed=convnext_patch_embed)
+    @pytest.mark.parametrize("num_cls_tokens", [0, 1, 2])
+    def test_forward(self, config, num_register_tokens, num_cls_tokens, convnext_patch_embed):
+        config = replace(
+            config,
+            num_register_tokens=num_register_tokens,
+            num_cls_tokens=num_cls_tokens,
+            convnext_patch_embed=convnext_patch_embed,
+        )
         x = torch.randn(1, 3, 224, 224)
         model = ViT(config)
         with torch.autocast(device_type="cpu", dtype=torch.bfloat16, enabled=True):
-            out, cls_token = model(x)
+            out, cls_tokens, register_tokens = model(x)
         assert out.shape == (1, 196, 128)
-        assert cls_token.shape == (1, 128)
+        if num_cls_tokens > 0:
+            assert cls_tokens.shape == (1, num_cls_tokens, 128)
+        else:
+            assert cls_tokens is None
+        if num_register_tokens > 0:
+            assert register_tokens.shape == (1, num_register_tokens, 128)
+        else:
+            assert register_tokens is None
 
     def test_forward_with_encoder_output(self, config):
         x = torch.randn(1, 3, 224, 224)
@@ -87,9 +100,9 @@ class TestViT:
         assert model.blocks[1].inter_attention is not None
         assert model.blocks[2].inter_attention is not None
         with torch.autocast(device_type="cpu", dtype=torch.bfloat16, enabled=True):
-            out, cls_token = model(x, encoder_output=encoder_output)
+            out, cls_token, _ = model(x, encoder_output=encoder_output)
         assert out.shape == (1, 196, 128)
-        assert cls_token.shape == (1, 128)
+        assert cls_token.shape == (1, 1, 128)
 
     def test_forward_with_encoder_output_custom_decoder_layers(self, config):
         x = torch.randn(1, 3, 224, 224)
@@ -100,9 +113,9 @@ class TestViT:
         assert model.blocks[1].inter_attention is None
         assert model.blocks[2].inter_attention is not None
         with torch.autocast(device_type="cpu", dtype=torch.bfloat16, enabled=True):
-            out, cls_token = model(x, encoder_output=encoder_output)
+            out, cls_token, _ = model(x, encoder_output=encoder_output)
         assert out.shape == (1, 196, 128)
-        assert cls_token.shape == (1, 128)
+        assert cls_token.shape == (1, 1, 128)
 
     @pytest.mark.parametrize("checkpoint", [False, True])
     def test_backward(self, config, checkpoint):
@@ -110,7 +123,7 @@ class TestViT:
         config = replace(config, checkpoint=checkpoint)
         model = ViT(config)
         with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
-            out, cls_token = model(x)
+            out, cls_token, _ = model(x)
         (out.sum() + cls_token.sum()).backward()
         for name, param in model.named_parameters():
             assert param.grad is not None, f"{name} has no gradient"
@@ -123,7 +136,7 @@ class TestViT:
         config = replace(config, decoder=True, checkpoint=checkpoint)
         model = ViT(config)
         with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
-            out, cls_token = model(x, encoder_output=encoder_output)
+            out, cls_token, _ = model(x, encoder_output=encoder_output)
         (out.sum() + cls_token.sum()).backward()
         for name, param in model.named_parameters():
             assert param.grad is not None, f"{name} has no gradient"
@@ -229,9 +242,9 @@ class TestViT:
         head = model.create_head(out_dim, mlp=mlp)
         head = head.to(device)
         with torch.autocast(device_type=device, dtype=torch.bfloat16, enabled=True):
-            out, cls_token = model(x)
+            out, cls_token, _ = model(x)
             out = head(cls_token)
-        assert out.shape == (1, out_dim or config.isotropic_output_dim)
+        assert out.shape == (1, 1, out_dim or config.isotropic_output_dim)
 
     @pytest.mark.parametrize("backend", ["pytorch", "te"])
     @pytest.mark.parametrize("mlp", [False, True])
@@ -248,6 +261,6 @@ class TestViT:
         head = model.create_head(out_dim, mlp=mlp, pool_type=pool_type)
         head = head.to(device)
         with torch.autocast(device_type=device, dtype=torch.bfloat16, enabled=True):
-            out, _ = model(x)
+            out, _, _ = model(x)
             out = head(out)
         assert out.shape == (1, out_dim or config.isotropic_output_dim)

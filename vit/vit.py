@@ -57,6 +57,7 @@ class ViTConfig:
     drop_path_rate: float = 0.0
     decoder: bool = False
     decoder_layers: Sequence[int] | None = None
+    num_cls_tokens: int = 1
     num_register_tokens: int = 0
 
     # Other
@@ -130,8 +131,18 @@ class ViT(nn.Module):
         self._config = config
 
         # CLS token
-        self.cls_token = nn.Parameter(torch.randn(config.hidden_size))
-        self.register_tokens = nn.Parameter(torch.randn(config.num_register_tokens, config.hidden_size))
+        if config.num_cls_tokens > 0:
+            self.cls_tokens = nn.Parameter(torch.empty(config.num_cls_tokens, config.hidden_size))
+            nn.init.trunc_normal_(self.cls_tokens, std=0.02)
+        else:
+            self.cls_tokens = None
+
+        # Register token
+        if config.num_register_tokens > 0:
+            self.register_tokens = nn.Parameter(torch.empty(config.num_register_tokens, config.hidden_size))
+            nn.init.trunc_normal_(self.register_tokens, std=0.02)
+        else:
+            self.register_tokens = None
 
         # Stem tokenizer
         if config.convnext_patch_embed:
@@ -394,12 +405,84 @@ class ViT(nn.Module):
 
         return mask
 
+    def pack(
+        self,
+        features: Tensor,
+        cls_tokens: Tensor | None = None,
+        register_tokens: Tensor | None = None,
+    ) -> Tensor:
+        r"""Packs the features, CLS tokens, and register tokens into a single tensor.
+
+        Args:
+            features: Features to pack.
+            cls_tokens: CLS tokens to pack.
+            register_tokens: Register tokens to pack.
+
+        Shapes:
+            - features: :math:`(B, L, D)`
+            - cls_tokens: Broadcastable to :math:`(B, C, D)`
+            - register_tokens: Broadcastable to :math:`(B, R, D)`
+            - output: :math:`(B, L + C + R, D)`
+        """
+        B = features.shape[0]
+        if cls_tokens is not None:
+            features = torch.cat(
+                [
+                    features,
+                    cls_tokens.view(1, -1, self.config.hidden_size).expand(B, -1, -1),
+                ],
+                dim=1,
+            )
+        if register_tokens is not None:
+            features = torch.cat(
+                [
+                    features,
+                    register_tokens.view(1, -1, self.config.hidden_size).expand(B, -1, -1),
+                ],
+                dim=1,
+            )
+        return features
+
+    def unpack(self, packed: Tensor) -> Tuple[Tensor, Tensor | None, Tensor | None]:
+        r"""Unpacks the features, CLS tokens, and register tokens from a single tensor.
+
+        Args:
+            packed: Packed tensor to unpack.
+
+        Shapes:
+            - packed: :math:`(B, L + C + R, D)`
+            - features: :math:`(B, L, D)`
+            - cls_tokens: :math:`(B, C, D)`
+            - register_tokens: :math:`(B, R, D)`
+
+        Returns:
+            features: Features.
+            cls_tokens: CLS tokens.
+            register_tokens: Register tokens.
+        """
+        L_total = packed.shape[1]
+        L_features = L_total - self.config.num_cls_tokens - self.config.num_register_tokens
+        features = packed[:, :L_features, :].contiguous()
+        cls_tokens = (
+            packed[:, L_features : L_features + self.config.num_cls_tokens, :].contiguous()
+            if self.config.num_cls_tokens > 0
+            else None
+        )
+        register_tokens = (
+            packed[:, L_features + self.config.num_cls_tokens :, :].contiguous()
+            if self.config.num_register_tokens > 0
+            else None
+        )
+        assert cls_tokens is None or cls_tokens.shape[1] == self.config.num_cls_tokens
+        assert register_tokens is None or register_tokens.shape[1] == self.config.num_register_tokens
+        return features, cls_tokens, register_tokens
+
     def forward(
         self,
         x: Tensor,
         mask: Tensor | None = None,
         encoder_output: Tensor | None = None,
-    ) -> Tuple[Tensor, Tensor]:
+    ) -> Tuple[Tensor, Tensor | None, Tensor | None]:
         B, C, *original_size = x.shape
         self.stem.tokenized_size(cast(Any, tuple(original_size)))
 
@@ -408,26 +491,16 @@ class ViT(nn.Module):
         if mask is not None:
             x = apply_mask(mask, x)
 
-        # Add CLS token and register tokens
-        x = torch.cat(
-            [
-                self.cls_token.view(1, 1, self.config.hidden_size).expand(B, -1, -1),
-                self.register_tokens.view(1, -1, self.config.hidden_size).expand(B, -1, -1),
-                x,
-            ],
-            dim=1,
-        )
+        # Pack features, CLS tokens, and register tokens
+        x = self.pack(x, self.cls_tokens, self.register_tokens)
 
         # Transformer blocks and output norm
         for block in self.blocks:
             block = cast(TransformerLayer, block)
             x = block(x, encoder_output=encoder_output, checkpoint_core_attention=self.config.checkpoint)
 
-        # Extract CLS token and features, dropping register tokens
-        cls_token = x[:, 0, :].contiguous()
-        x = x[:, 1 + self.config.num_register_tokens :, :].contiguous()
-
-        return x, cls_token
+        # Extract features, CLS tokens, and register tokens
+        return self.unpack(x)
 
     def mlp_requires_grad_(self, requires_grad: bool = True) -> None:
         for block in self.blocks:
