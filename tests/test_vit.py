@@ -301,3 +301,18 @@ class TestViT:
             out, _, _ = model(x)
             out = head(out)
         assert out.shape == (1, out_dim or config.isotropic_output_dim)
+
+    def test_cross_attention_block(self, config):
+        x = torch.randn(1, 3, 224, 224)
+        encoder_output = torch.randn(1, 64, 128)
+        config = replace(config, decoder=True)
+        model = ViT(config)
+        layer = model.create_cross_attention_layer()
+        assert model.blocks[0].inter_attention is not None
+        assert model.blocks[1].inter_attention is not None
+        assert model.blocks[2].inter_attention is not None
+        with torch.autocast(device_type="cpu", dtype=torch.bfloat16, enabled=True):
+            out, _, _ = model(x, encoder_output=encoder_output)
+            q = torch.rand_like(out)
+            y = layer(q, encoder_output)
+        assert y.shape == (1, 196, 128)

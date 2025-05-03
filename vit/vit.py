@@ -12,7 +12,7 @@ from .fused import LayerNormLinear, LayerNormMLP
 from .helpers import DEFAULT_BACKEND, Backend, check_te_installed, try_import_te
 from .patch_embed import ConvNextPatchEmbed2d, PatchEmbed2d
 from .tokens import apply_mask, create_mask
-from .transformer import TransformerLayer
+from .transformer import CrossAttentionMLP, TransformerLayer
 
 
 if TYPE_CHECKING:
@@ -248,6 +248,22 @@ class ViT(nn.Module):
             case _:
                 raise ValueError(f"Invalid backend: {self.config.backend}")
         return layer
+
+    def create_cross_attention_layer(self, i: int = 0, **kwargs) -> CrossAttentionMLP:
+        """
+        Creates a cross-attention only decoder layer. This is equivalent to a TransformerLayer
+        without a self-attention module.
+
+        Args:
+            i: Index of the encoder layer. Default is 0.
+
+        Keyword Args:
+            Additional keyword arguments to override default layer parameters.
+        """
+        _kwargs = self.config.transformer_kwargs
+        _kwargs.update(kwargs)
+        _kwargs["layer_number"] = i + 1
+        return CrossAttentionMLP(**_kwargs)
 
     def create_norm(self, hidden_size: int) -> nn.Module:
         match (self.config.normalization, self.config.backend):
