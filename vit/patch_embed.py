@@ -52,16 +52,21 @@ class PatchEmbed2d(nn.Module):
         match (normalization, backend):
             case ("LayerNorm", "pytorch"):
                 self.norm = nn.LayerNorm(hidden_size, eps=eps)
+                self.pos_norm = nn.LayerNorm(hidden_size, eps=eps)
             case ("RMSNorm", "pytorch"):
                 self.norm = nn.RMSNorm(hidden_size, eps=eps)
+                self.pos_norm = nn.RMSNorm(hidden_size, eps=eps)
             case ("LayerNorm", "te"):
                 check_te_installed(te)
                 self.norm = te.LayerNorm(hidden_size, eps=eps)
+                self.pos_norm = te.LayerNorm(hidden_size, eps=eps)
             case ("RMSNorm", "te"):
                 check_te_installed(te)
                 self.norm = te.RMSNorm(hidden_size, eps=eps)
+                self.pos_norm = te.RMSNorm(hidden_size, eps=eps)
             case _:
                 raise ValueError(f"Invalid normalization: {normalization}")
+        nn.init.constant_(self.pos_norm.weight, 0.1)
 
     @property
     def patch_size(self) -> Tuple[int, int]:
@@ -81,11 +86,12 @@ class PatchEmbed2d(nn.Module):
 
         H, W = x.shape[2:]
         dims = self.tokenized_size((H, W))
-        pos = self.pos_enc(dims)
+        pos = self.pos_norm(self.pos_enc(dims))
         if additional_features is not None:
             y = y + additional_features
+        y = self.norm(y)
         y = y + pos
-        return self.norm(y)
+        return y
 
 
 class ConvNextPatchEmbed2d(PatchEmbed2d):
@@ -150,8 +156,9 @@ class ConvNextPatchEmbed2d(PatchEmbed2d):
         y = self.final_conv(y)
         y = rearrange(y, "(b h w) c () () -> b (h w) c", b=B, h=Ht, w=Wt)
 
-        pos = self.pos_enc((Ht, Wt))
+        pos = self.pos_norm(self.pos_enc((Ht, Wt)))
         if additional_features is not None:
             y = y + additional_features
+        y = self.norm(y)
         y = y + pos
-        return self.norm(y)
+        return y
