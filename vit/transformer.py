@@ -80,8 +80,10 @@ class TransformerLayer(nn.Module):
         encoder_output: Tensor | None = None,
         checkpoint_core_attention: bool = False,
         checkpoint_core_mlp: bool = False,
+        core_attention_bias_type: Literal["pre_scale_bias", "post_scale_bias"] = "post_scale_bias",
+        core_attention_bias: Tensor | None = None,
     ) -> Tensor:
-        o = self.self_attention(x, checkpoint_core_attention=checkpoint_core_attention)
+        o = self.self_attention(x, checkpoint_core_attention=checkpoint_core_attention, core_attention_bias_type=core_attention_bias_type, core_attention_bias=core_attention_bias)
         x = x + drop_path(o, self.drop_path_rate, self.training)
 
         if self.inter_attention is not None:
@@ -165,8 +167,10 @@ class CrossAttentionMLP(nn.Module):
         encoder_output: Tensor,
         checkpoint_core_attention: bool = False,
         checkpoint_core_mlp: bool = False,
+        core_attention_bias_type: Literal["pre_scale_bias", "post_scale_bias"] = "post_scale_bias",
+        core_attention_bias: Tensor | None = None,
     ) -> Tensor:
-        o = self.inter_attention(x, encoder_output=encoder_output, checkpoint_core_attention=checkpoint_core_attention)
+        o = self.inter_attention(x, encoder_output=encoder_output, checkpoint_core_attention=checkpoint_core_attention, core_attention_bias_type=core_attention_bias_type, core_attention_bias=core_attention_bias)
         o = self.hidden_dropout(o)
         x = x + drop_path(o, self.drop_path_rate, self.training)
 

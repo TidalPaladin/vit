@@ -2,7 +2,7 @@ import pytest
 import torch
 from torch.testing import assert_close
 
-from vit.pos_enc import RelativeFactorizedPosition, create_grid
+from vit.pos_enc import RelativeFactorizedPosition, create_grid, compute_alibi_slopes, create_2d_alibi_grid
 
 
 @pytest.fixture(params=["pytorch", pytest.param("te", marks=pytest.mark.cuda)])
@@ -22,6 +22,15 @@ def test_create_grid(normalize):
         assert torch.all(grid[0, 0] == torch.tensor([0, 0]))
         assert torch.all(grid[0, -1] == torch.tensor([3, 3]))
 
+
+@pytest.mark.parametrize("num_attention_heads,scale,exp", [
+    (1, 8.0, torch.tensor([2 ** (-8.0 * (0 + 1) / 1)])),
+    (1, 4.0, torch.tensor([2 ** (-4.0 * (0 + 1) / 1)])),
+    (2, 8.0, torch.tensor([2 ** (-8.0 * (0 + 1) / 2), 2 ** (-8.0 * (1 + 1) / 2)])),
+]) 
+def test_compute_alibi_slopes(num_attention_heads, scale, exp):
+    actual = compute_alibi_slopes(num_attention_heads, scale)
+    assert_close(actual, exp, atol=1e-4, rtol=0)
 
 class TestRelativeFactorizedPosition:
 

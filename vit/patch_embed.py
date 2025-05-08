@@ -14,7 +14,6 @@ from .helpers import (
     try_import_convnext,
     try_import_te,
 )
-from .pos_enc import RelativeFactorizedPosition
 
 
 if TYPE_CHECKING:
@@ -31,24 +30,14 @@ class PatchEmbed2d(nn.Module):
         self,
         in_channels: int,
         hidden_size: int,
-        ffn_hidden_size: int,
         patch_size: Sequence[int],
         normalization: str = "LayerNorm",
-        activation: str = "gelu",
         backend: Backend = DEFAULT_BACKEND,
         eps: float = 1e-5,
     ):
         super().__init__()
         self._patch_size = tuple(patch_size)
         self.patch = nn.Conv2d(in_channels, hidden_size, self.patch_size, stride=self.patch_size)
-        self.pos_enc = RelativeFactorizedPosition(
-            2,
-            hidden_size,
-            ffn_hidden_size,
-            backend=backend,
-            normalization=normalization,
-            activation=activation,
-        )
         match (normalization, backend):
             case ("LayerNorm", "pytorch"):
                 self.norm = nn.LayerNorm(hidden_size, eps=eps)
@@ -78,13 +67,8 @@ class PatchEmbed2d(nn.Module):
     def forward(self, x: Tensor, additional_features: Tensor | None = None) -> Tensor:
         y = self.patch(x)
         y = rearrange(y, "b c h w -> b (h w) c")
-
-        H, W = x.shape[2:]
-        dims = self.tokenized_size((H, W))
-        pos = self.pos_enc(dims)
         if additional_features is not None:
             y = y + additional_features
-        y = y + pos
         return self.norm(y)
 
 
@@ -94,17 +78,15 @@ class ConvNextPatchEmbed2d(PatchEmbed2d):
         self,
         in_channels: int,
         hidden_size: int,
-        ffn_hidden_size: int,
         patch_size: Sequence[int],
         normalization: str = "LayerNorm",
-        activation: str = "srelu",
         backend: Backend = DEFAULT_BACKEND,
         eps: float = 1e-5,
         depth: int = 2,
         convnext_patch_size: Sequence[int] = [2, 2],
         **kwargs,
     ):
-        super().__init__(in_channels, hidden_size, ffn_hidden_size, patch_size, normalization, activation, backend, eps)
+        super().__init__(in_channels, hidden_size, patch_size, normalization, backend, eps)
         check_convnext_installed(convnext)
         assert len(set(patch_size)) == 1, "Patch size must be the same for all dimensions"
         assert all(p % 2 == 0 for p in patch_size), "Patch size must be even"
@@ -144,14 +126,11 @@ class ConvNextPatchEmbed2d(PatchEmbed2d):
         P1, P2 = self.patch_size
         B, _, H, W = x.shape
         Ht, Wt = self.tokenized_size((H, W))
-
         y = rearrange(x, "b c (h p1) (w p2) -> (b h w) c p1 p2", p1=P1, p2=P2)
         y = self.patch(y)
         y = self.final_conv(y)
         y = rearrange(y, "(b h w) c () () -> b (h w) c", b=B, h=Ht, w=Wt)
 
-        pos = self.pos_enc((Ht, Wt))
         if additional_features is not None:
             y = y + additional_features
-        y = y + pos
         return self.norm(y)

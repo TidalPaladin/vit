@@ -248,6 +248,8 @@ class MultiheadAttention(nn.Module):
         x: Tensor,
         encoder_output: Tensor | None = None,
         checkpoint_core_attention: bool = False,
+        core_attention_bias_type: Literal["pre_scale_bias", "post_scale_bias"] = "post_scale_bias",
+        core_attention_bias: Tensor | None = None,
     ) -> Tensor:
         # Packed
         if hasattr(self, "qkv") and self.qkv is not None:

@@ -91,11 +91,10 @@ class TestViT:
         else:
             assert register_tokens is None
 
-    @pytest.mark.parametrize("decoder", [False, True])
-    def test_non_causal_default(self, config, decoder):
+    def test_non_causal_default(self, config):
         if te is None:
             pytest.skip("Transformer Engine is not available")
-        config = replace(config, backend="te", decoder=decoder)
+        config = replace(config, backend="te")
         model = ViT(config)
         assert model.create_encoder_layer().self_attn_mask_type == "no_mask"  # type: ignore
         assert model.create_decoder_layer().enc_dec_attn_mask_type == "no_mask"  # type: ignore
@@ -129,32 +128,6 @@ class TestViT:
         else:
             assert register_tokens is None
 
-    def test_forward_with_encoder_output(self, config):
-        x = torch.randn(1, 3, 224, 224)
-        encoder_output = torch.randn(1, 64, 128)
-        config = replace(config, decoder=True)
-        model = ViT(config)
-        assert model.blocks[0].inter_attention is not None
-        assert model.blocks[1].inter_attention is not None
-        assert model.blocks[2].inter_attention is not None
-        with torch.autocast(device_type="cpu", dtype=torch.bfloat16, enabled=True):
-            out, cls_token, _ = model(x, encoder_output=encoder_output)
-        assert out.shape == (1, 196, 128)
-        assert cls_token.shape == (1, 1, 128)
-
-    def test_forward_with_encoder_output_custom_decoder_layers(self, config):
-        x = torch.randn(1, 3, 224, 224)
-        encoder_output = torch.randn(1, 64, 128)
-        config = replace(config, decoder=True, decoder_layers=[0, 2])
-        model = ViT(config)
-        assert model.blocks[0].inter_attention is not None
-        assert model.blocks[1].inter_attention is None
-        assert model.blocks[2].inter_attention is not None
-        with torch.autocast(device_type="cpu", dtype=torch.bfloat16, enabled=True):
-            out, cls_token, _ = model(x, encoder_output=encoder_output)
-        assert out.shape == (1, 196, 128)
-        assert cls_token.shape == (1, 1, 128)
-
     @pytest.mark.parametrize("checkpoint", [False, True])
     def test_backward(self, config, checkpoint):
         x = torch.randn(1, 3, 224, 224, requires_grad=True)
@@ -171,7 +144,7 @@ class TestViT:
     def test_backward_with_encoder_output(self, config, checkpoint):
         x = torch.randn(1, 3, 224, 224, requires_grad=True)
         encoder_output = torch.randn(1, 64, 128)
-        config = replace(config, decoder=True, checkpoint=checkpoint)
+        config = replace(config, checkpoint=checkpoint)
         model = ViT(config)
         with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
             out, cls_token, _ = model(x, encoder_output=encoder_output)
@@ -208,7 +181,7 @@ class TestViT:
     def test_mlp_requires_grad(self, config, backend):
         if backend == "te" and te is None:
             pytest.skip("Transformer Engine is not available")
-        config = replace(config, backend=backend, decoder=True)
+        config = replace(config, backend=backend)
         model = ViT(config)
         for block in model.blocks:
             assert_all_requires_grad(block.layernorm_mlp)
@@ -224,7 +197,7 @@ class TestViT:
     def test_self_attention_requires_grad(self, config, backend):
         if backend == "te" and te is None:
             pytest.skip("Transformer Engine is not available")
-        config = replace(config, backend=backend, decoder=True)
+        config = replace(config, backend=backend)
         model = ViT(config)
         for block in model.blocks:
             assert_all_requires_grad(block.layernorm_mlp)
@@ -235,22 +208,6 @@ class TestViT:
             assert_all_requires_grad(block.layernorm_mlp)
             assert_none_requires_grad(block.self_attention)
             assert_all_requires_grad(block.inter_attention)
-
-    @pytest.mark.parametrize("backend", ["pytorch", "te"])
-    def test_inter_attention_requires_grad(self, config, backend):
-        if backend == "te" and te is None:
-            pytest.skip("Transformer Engine is not available")
-        config = replace(config, backend=backend, decoder=True)
-        model = ViT(config)
-        for block in model.blocks:
-            assert_all_requires_grad(block.layernorm_mlp)
-            assert_all_requires_grad(block.self_attention)
-            assert_all_requires_grad(block.inter_attention)
-        model.inter_attention_requires_grad_(False)
-        for block in model.blocks:
-            assert_all_requires_grad(block.layernorm_mlp)
-            assert_all_requires_grad(block.self_attention)
-            assert_none_requires_grad(block.inter_attention)
 
     @pytest.mark.parametrize("backend", ["pytorch", "te"])
     def test_inter_attention_requires_grad_encoder_only(self, config, backend):

@@ -13,6 +13,7 @@ from .helpers import DEFAULT_BACKEND, Backend, check_te_installed, try_import_te
 from .patch_embed import ConvNextPatchEmbed2d, PatchEmbed2d
 from .tokens import apply_mask, create_mask
 from .transformer import CrossAttentionMLP, TransformerLayer
+from .pos_enc import compute_alibi_slopes, create_2d_alibi_grid, create_grid
 
 
 if TYPE_CHECKING:
@@ -55,8 +56,6 @@ class ViTConfig:
     bias: bool = True
     activation: str = "srelu"
     drop_path_rate: float = 0.0
-    decoder: bool = False
-    decoder_layers: Sequence[int] | None = None
     num_cls_tokens: int = 1
     num_register_tokens: int = 0
 
@@ -149,10 +148,8 @@ class ViT(nn.Module):
             self.stem = ConvNextPatchEmbed2d(
                 config.in_channels,
                 config.hidden_size,
-                config.ffn_hidden_size,
                 cast(Tuple[int, int], tuple(config.patch_size)),
                 normalization=config.normalization,
-                activation=config.activation,
                 backend=config.backend,
                 depth=config.convnext_depth,
                 convnext_patch_size=config.convnext_patch_size,
@@ -161,29 +158,32 @@ class ViT(nn.Module):
             self.stem = PatchEmbed2d(
                 config.in_channels,
                 config.hidden_size,
-                config.ffn_hidden_size,
                 cast(Tuple[int, int], tuple(config.patch_size)),
                 normalization=config.normalization,
-                activation=config.activation,
                 backend=config.backend,
             )
 
+        # Alibi slopes
+        num_spatial_dims = len(config.patch_size)
+        self.distance_slopes = nn.ParameterList([
+            nn.Parameter(compute_alibi_slopes(config.num_attention_heads).view(-1, 1).expand(-1, num_spatial_dims).contiguous())
+            for _ in range(config.depth)
+        ])
+        self.angular_slopes = nn.ParameterList([
+            nn.Parameter(torch.zeros_like(self.distance_slopes[i]))
+            for i in range(config.depth)
+        ])
+
         # Transformer blocks
-        if self.config.decoder:
-            decoder_layers = self.config.decoder_layers or range(config.depth)
-        else:
-            decoder_layers = []
-        decoder_layers = set(decoder_layers)
         self.blocks = nn.ModuleList(
             [
-                self.create_decoder_layer(i) if i in decoder_layers else self.create_encoder_layer(i)
+                self.create_encoder_layer(i)
                 for i in range(config.depth)
             ]
         )
 
         self.mlp_requires_grad_(self.config.mlp_requires_grad)
         self.self_attention_requires_grad_(self.config.self_attention_requires_grad)
-        self.inter_attention_requires_grad_(self.config.inter_attention_requires_grad)
 
     @property
     def config(self) -> ViTConfig:
@@ -491,23 +491,35 @@ class ViT(nn.Module):
         self,
         x: Tensor,
         mask: Tensor | None = None,
-        encoder_output: Tensor | None = None,
     ) -> Tuple[Tensor, Tensor | None, Tensor | None]:
         B, C, *original_size = x.shape
-        self.stem.tokenized_size(cast(Any, tuple(original_size)))
+        tokenized_size = self.stem.tokenized_size(cast(Any, tuple(original_size)))
+
+        # Create grids
+        positions = create_grid(tokenized_size, device=x.device, normalize=False)
 
         # Tokenize and apply mask
         x = self.stem(x)
         if mask is not None:
             x = apply_mask(mask, x)
+            positions = apply_mask(mask, positions)
 
         # Pack features, CLS tokens, and register tokens
         x = self.pack(x, self.cls_tokens, self.register_tokens)
 
         # Transformer blocks and output norm
-        for block in self.blocks:
+        for i, block in enumerate(self.blocks):
+            distance_slopes = self.distance_slopes[i]
+            angular_slopes = self.angular_slopes[i]
+            alibi_grid = create_2d_alibi_grid(positions, positions, distance_slopes, angular_slopes)
+
             block = cast(TransformerLayer, block)
-            x = block(x, encoder_output=encoder_output, checkpoint_core_attention=self.config.checkpoint)
+            x = block(
+                x, 
+                checkpoint_core_attention=self.config.checkpoint, 
+                core_attention_bias_type="post_scale_bias",
+                core_attention_bias=alibi_grid,
+            )
 
         # Extract features, CLS tokens, and register tokens
         return self.unpack(x)
