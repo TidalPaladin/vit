@@ -149,10 +149,8 @@ class ViT(nn.Module):
             self.stem = ConvNextPatchEmbed2d(
                 config.in_channels,
                 config.hidden_size,
-                config.ffn_hidden_size,
                 cast(Tuple[int, int], tuple(config.patch_size)),
                 normalization=config.normalization,
-                activation=config.activation,
                 backend=config.backend,
                 depth=config.convnext_depth,
                 convnext_patch_size=config.convnext_patch_size,
@@ -161,10 +159,8 @@ class ViT(nn.Module):
             self.stem = PatchEmbed2d(
                 config.in_channels,
                 config.hidden_size,
-                config.ffn_hidden_size,
                 cast(Tuple[int, int], tuple(config.patch_size)),
                 normalization=config.normalization,
-                activation=config.activation,
                 backend=config.backend,
             )
 
