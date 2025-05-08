@@ -61,7 +61,7 @@ class PatchEmbed2d(nn.Module):
                 self.pos_norm = te.RMSNorm(hidden_size, eps=eps)
             case _:
                 raise ValueError(f"Invalid normalization: {normalization}")
-        nn.init.constant_(self.pos_enc.linear.weight, 0.1)
+        nn.init.constant_(self.pos_norm.weight, 0.1)
 
     @property
     def patch_size(self) -> Tuple[int, int]:
