@@ -92,3 +92,92 @@ class RelativeFactorizedPosition(nn.Module):
         y = self.linear(grid)
         y = self.mlp(y)
         return y
+
+
+# Taken from TransformerEngine
+
+
+class RotaryPositionEmbedding(torch.nn.Module):
+
+    def __init__(
+        self,
+        dim: int,
+        rotary_percent: float = 1.0,
+        seq_len_interpolation_factor: int | None = None,
+        pretrained_max_position_embeddings: int | None = None,
+        rotary_base: float = 10000.0,
+    ):
+        super().__init__()
+        if rotary_percent < 1.0:
+            dim = int(dim * rotary_percent)
+        self.seq_len_interpolation_factor = seq_len_interpolation_factor
+        self.rotary_base = rotary_base
+        inv_freq = 1.0 / (self.rotary_base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
+        self.register_buffer("inv_freq", inv_freq)
+        self.pretrained_max_position_embeddings = pretrained_max_position_embeddings
+
+    def forward(self, max_seq_len: int, offset: int = 0):
+        """
+        Create rotary position embedding frequencies
+
+        Parameters
+        ----------
+        max_seq_len: int
+            sequence length of a sample
+        offset: int, default = 0
+            fixed offset for freqencies
+        """
+        seq = torch.arange(max_seq_len, device=self.inv_freq.device, dtype=self.inv_freq.dtype) + offset
+
+        if self.pretrained_max_position_embeddings is not None and self.seq_len_interpolation_factor is not None:
+            if max_seq_len > self.pretrained_max_position_embeddings * self.seq_len_interpolation_factor:
+                # dynamic linear scaling (length > position we have learned)
+                seq *= 1 / (max_seq_len / self.pretrained_max_position_embeddings)
+            else:
+                # fixed linear scaling
+                seq *= 1 / self.seq_len_interpolation_factor
+
+        freqs = torch.einsum("i , j -> i j", seq, self.inv_freq)
+        # first part even vector components, second part odd vector components,
+        #  2 * dim in dimension size
+        emb = torch.cat((freqs, freqs), dim=-1)
+        # emb [seq_length, .., dim]
+        return emb.reshape(emb.size(0), 1, 1, emb.size(1))
+
+
+def _rotate_half(x: torch.Tensor) -> torch.Tensor:
+    """
+    change sign so the last dimension becomes [-odd, +even]
+    """
+    x = x.view(x.shape[:-1] + torch.Size((2, x.shape[-1] // 2)))
+    x1, x2 = x.unbind(dim=-2)
+    return torch.cat((-x2, x1), dim=-1)
+
+
+# Taken from TransformerEngine
+def apply_rotary_pos_emb(t: torch.Tensor, freqs: torch.Tensor, tensor_format: str = "sbhd") -> torch.Tensor:
+    assert tensor_format in ("sbhd", "bshd"), (
+        "Only formats `sbhd` or `bshd` are supported for input tensor `t` " f"when fused is False, got {tensor_format}."
+    )
+
+    max_seq_len = freqs.shape[0]
+    cur_seq_len = t.shape[1] if tensor_format == "bshd" else t.shape[0]
+
+    # Only apply the rotary embeddings up to the sequence length of the running
+    # input.
+    assert cur_seq_len <= max_seq_len, f"Rotary Embeddings only supported up to {max_seq_len} sequence length!"
+    freqs = freqs[:cur_seq_len]
+    if tensor_format == "bshd":
+        freqs = freqs.transpose(0, 1)  # [seq, 1, 1, dim] -> [1, seq, 1, dim]
+    # cos/sin first then dtype conversion for better precision
+    cos_ = torch.cos(freqs).to(t.dtype)
+    sin_ = torch.sin(freqs).to(t.dtype)
+
+    rot_dim = freqs.shape[-1]
+    # ideally t_pass is empty so rotary pos embedding is applied to all tensor t
+    t, t_pass = t[..., :rot_dim], t[..., rot_dim:]
+
+    # first part is cosine component
+    # second part is sine component, need to change signs with _rotate_half method
+    t = (t * cos_) + (_rotate_half(t) * sin_)
+    return torch.cat((t, t_pass), dim=-1)

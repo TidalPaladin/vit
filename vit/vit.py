@@ -5,12 +5,14 @@ from typing import TYPE_CHECKING, Any, ClassVar, Dict, Literal, Self, Sequence, 
 import torch
 import torch.nn as nn
 import yaml
+from einops import rearrange
 from einops.layers.torch import Reduce
 from torch import Tensor
 
 from .fused import LayerNormLinear, LayerNormMLP
 from .helpers import DEFAULT_BACKEND, Backend, check_te_installed, try_import_te
 from .patch_embed import ConvNextPatchEmbed2d, PatchEmbed2d
+from .pos_enc import RotaryPositionEmbedding
 from .tokens import apply_mask, create_mask
 from .transformer import CrossAttentionMLP, TransformerLayer
 
@@ -59,6 +61,8 @@ class ViTConfig:
     decoder_layers: Sequence[int] | None = None
     num_cls_tokens: int = 1
     num_register_tokens: int = 0
+    rope_theta: int = 10000
+    rope_interpolation_factor: int | None = None
 
     # Other
     checkpoint: bool = False
@@ -149,10 +153,8 @@ class ViT(nn.Module):
             self.stem = ConvNextPatchEmbed2d(
                 config.in_channels,
                 config.hidden_size,
-                config.ffn_hidden_size,
                 cast(Tuple[int, int], tuple(config.patch_size)),
                 normalization=config.normalization,
-                activation=config.activation,
                 backend=config.backend,
                 depth=config.convnext_depth,
                 convnext_patch_size=config.convnext_patch_size,
@@ -161,12 +163,15 @@ class ViT(nn.Module):
             self.stem = PatchEmbed2d(
                 config.in_channels,
                 config.hidden_size,
-                config.ffn_hidden_size,
                 cast(Tuple[int, int], tuple(config.patch_size)),
                 normalization=config.normalization,
-                activation=config.activation,
                 backend=config.backend,
             )
+        self.pos_emb = RotaryPositionEmbedding(
+            config.hidden_size // config.num_attention_heads,
+            seq_len_interpolation_factor=config.rope_interpolation_factor,
+            rotary_base=config.rope_theta,
+        )
 
         # Transformer blocks
         if self.config.decoder:
@@ -494,12 +499,16 @@ class ViT(nn.Module):
         encoder_output: Tensor | None = None,
     ) -> Tuple[Tensor, Tensor | None, Tensor | None]:
         B, C, *original_size = x.shape
-        self.stem.tokenized_size(cast(Any, tuple(original_size)))
+        Ht, Wt = self.stem.tokenized_size(cast(Any, tuple(original_size)))
+        pos = self.pos_emb(Ht * Wt)
 
         # Tokenize and apply mask
         x = self.stem(x)
         if mask is not None:
             x = apply_mask(mask, x)
+            pos = rearrange(pos, "s () () d -> () s d").expand(B, -1, -1)
+            pos = apply_mask(mask, pos)
+            pos = rearrange(pos, "b s d -> s b () d")
 
         # Pack features, CLS tokens, and register tokens
         x = self.pack(x, self.cls_tokens, self.register_tokens)
@@ -507,7 +516,9 @@ class ViT(nn.Module):
         # Transformer blocks and output norm
         for block in self.blocks:
             block = cast(TransformerLayer, block)
-            x = block(x, encoder_output=encoder_output, checkpoint_core_attention=self.config.checkpoint)
+            x = block(
+                x, encoder_output=encoder_output, checkpoint_core_attention=self.config.checkpoint, rotary_pos_emb=pos
+            )
 
         # Extract features, CLS tokens, and register tokens
         return self.unpack(x)

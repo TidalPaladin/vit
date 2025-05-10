@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, Tuple
 
 import torch.nn as nn
 from torch import Tensor
@@ -80,12 +80,15 @@ class TransformerLayer(nn.Module):
         encoder_output: Tensor | None = None,
         checkpoint_core_attention: bool = False,
         checkpoint_core_mlp: bool = False,
+        rotary_pos_emb: Tensor | Tuple[Tensor, Tensor] | None = None,
     ) -> Tensor:
-        o = self.self_attention(x, checkpoint_core_attention=checkpoint_core_attention)
+        o = self.self_attention(x, rotary_pos_emb=rotary_pos_emb, checkpoint_core_attention=checkpoint_core_attention)
         x = x + drop_path(o, self.drop_path_rate, self.training)
 
         if self.inter_attention is not None:
-            o = self.inter_attention(x, encoder_output, checkpoint_core_attention=checkpoint_core_attention)
+            o = self.inter_attention(
+                x, encoder_output, rotary_pos_emb=rotary_pos_emb, checkpoint_core_attention=checkpoint_core_attention
+            )
             x = x + drop_path(o, self.drop_path_rate, self.training)
 
         if self.training and checkpoint_core_mlp:
@@ -165,8 +168,14 @@ class CrossAttentionMLP(nn.Module):
         encoder_output: Tensor,
         checkpoint_core_attention: bool = False,
         checkpoint_core_mlp: bool = False,
+        rotary_pos_emb: Tuple[Tensor, Tensor] | None = None,
     ) -> Tensor:
-        o = self.inter_attention(x, encoder_output=encoder_output, checkpoint_core_attention=checkpoint_core_attention)
+        o = self.inter_attention(
+            x,
+            encoder_output=encoder_output,
+            rotary_pos_emb=rotary_pos_emb,
+            checkpoint_core_attention=checkpoint_core_attention,
+        )
         o = self.hidden_dropout(o)
         x = x + drop_path(o, self.drop_path_rate, self.training)
 

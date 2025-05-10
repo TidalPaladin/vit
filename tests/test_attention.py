@@ -190,3 +190,54 @@ class TestMultiheadAttention:
             y_baseline = baseline(x, encoder_output=encoder_output)
 
         assert_close(y, y_baseline, atol=1e-3, rtol=0)
+
+    def test_forward_rope(self):
+        B, L, D = 16, 128, 128
+        multihead_attention = MultiheadAttention(D, D // 16, qkv_format="bshd", normalization="LayerNorm")
+        x = torch.randn(B, L, D, dtype=torch.float32)
+        rotary_pos_emb = torch.randn(L, 1, 1, D // 16, dtype=torch.float32)
+        with torch.autocast(device_type="cpu", dtype=torch.float32):
+            y = multihead_attention(x, rotary_pos_emb=rotary_pos_emb)
+        assert y.shape == (B, L, D)
+
+    @pytest.mark.cuda
+    def test_baseline_rope(self):
+        if te is None:
+            pytest.skip("Transformer Engine is not available")
+
+        B, L, D = 16, 128, 128
+        layer = MultiheadAttention(
+            D,
+            D // 16,
+            num_gqa_groups=8,
+            qkv_format="bshd",
+            normalization="LayerNorm",
+            attention_type="self",
+        ).cuda()
+        baseline = te.MultiheadAttention(
+            D,
+            D // 16,
+            num_gqa_groups=8,
+            qkv_format="bshd",
+            normalization="LayerNorm",
+            attn_mask_type="no_mask",
+            attention_type="self",
+        ).cuda()
+
+        layer.eval()
+        baseline.eval()
+
+        # Sync weights
+        for name, param in baseline.named_parameters():
+            layer.get_parameter(name).data.copy_(param.data)
+
+        x = torch.randn(B, L, D, dtype=torch.float32, device="cuda")
+        rotary_pos_emb = torch.randn(L, 1, 1, D // 16, dtype=torch.float32, device="cuda")
+        encoder_output = torch.randn(B, L // 2, D, dtype=torch.float32, device="cuda")
+        with torch.autocast(device_type="cuda", dtype=torch.float32):
+            y = layer(x, encoder_output=encoder_output, rotary_pos_emb=rotary_pos_emb)
+            y_baseline = baseline(x, encoder_output=encoder_output, rotary_pos_emb=rotary_pos_emb)
+            y_baseline_no_rope = baseline(x, encoder_output=encoder_output)
+
+        assert_close(y, y_baseline, atol=1e-3, rtol=0)
+        assert not torch.allclose(y, y_baseline_no_rope, atol=1e-3, rtol=0)

@@ -9,6 +9,7 @@ from torch import Tensor
 
 from .fused import LayerNormLinear, Linear
 from .helpers import compile_is_disabled
+from .pos_enc import apply_rotary_pos_emb
 
 
 def apply_qkv_norm(
@@ -248,6 +249,7 @@ class MultiheadAttention(nn.Module):
         x: Tensor,
         encoder_output: Tensor | None = None,
         checkpoint_core_attention: bool = False,
+        rotary_pos_emb: Tensor | Tuple[Tensor, Tensor] | None = None,
     ) -> Tensor:
         # Packed
         if hasattr(self, "qkv") and self.qkv is not None:
@@ -264,6 +266,29 @@ class MultiheadAttention(nn.Module):
             k, v = self.key_value(encoder_output).split([self.hidden_size_kv, self.hidden_size_kv], dim=-1)
         else:
             raise AssertionError("Invalid configuration")
+
+        if rotary_pos_emb is not None:
+            pos_emb_q, pos_emb_k = (
+                rotary_pos_emb if isinstance(rotary_pos_emb, tuple) else (rotary_pos_emb, rotary_pos_emb)
+            )
+            if self.qkv_format == "sbhd":
+                q = rearrange(q, "s b (h d) -> s b h d", h=self.num_attention_heads)
+                k = rearrange(k, "s b (h d) -> s b h d", h=self.num_attention_heads)
+            elif self.qkv_format == "bshd":
+                q = rearrange(q, "b s (h d) -> b s h d", h=self.num_attention_heads)
+                k = rearrange(k, "b s (h d) -> b s h d", h=self.num_attention_heads)
+            else:
+                raise ValueError(f"Invalid qkv_format: {self.qkv_format}")
+            q = apply_rotary_pos_emb(q, pos_emb_q, self.qkv_format)
+            k = apply_rotary_pos_emb(k, pos_emb_k, self.qkv_format)
+            if self.qkv_format == "sbhd":
+                q = rearrange(q, "s b h d -> s b (h d)")
+                k = rearrange(k, "s b h d -> s b (h d)")
+            elif self.qkv_format == "bshd":
+                q = rearrange(q, "b s h d -> b s (h d)")
+                k = rearrange(k, "b s h d -> b s (h d)")
+            else:
+                raise ValueError(f"Invalid qkv_format: {self.qkv_format}")
 
         if self.qkv_format == "sbhd":
             q = rearrange(q, "s b (h d) -> b h s d", h=self.num_attention_heads)
