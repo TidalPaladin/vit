@@ -4,62 +4,19 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
-
-def mask_is_ragged(mask: Tensor) -> bool:
-    r"""Checks if the mask is ragged.
-
-    A mask is ragged if the number of unmasked tokens is not the same for all batch elements.
-
-    Args:
-        mask: Mask tensor to check
-
-    Shapes:
-        mask - :math:`(N, L)` where :math:`L` is the number of tokens
-    """
-    counts = mask.sum(dim=-1)
-    return cast(bool, (counts != counts[0]).any())
+from .helpers import compile_is_disabled
 
 
-def _apply_with_fill(mask: Tensor, x: Tensor, fill_value: float | Tensor) -> Tensor:
-    N, L, _ = x.shape
-    fill_value = fill_value.type_as(x) if isinstance(fill_value, Tensor) else fill_value
-    mask = mask.view(N, L, 1)
-    return torch.where(mask, x, fill_value)
+# def unapply_mask(mask: Tensor, x: Tensor) -> Tensor:
+#    B, L = mask.shape
+#    D = x.shape[-1]
+#    result = x.new_zeros((B, L, D))
+#    result.masked_scatter_(mask.view(B, L, 1), x)
+#    return result
 
 
-def _apply_non_ragged(mask: Tensor, x: Tensor) -> Tensor:
-    N, _, D = x.shape
-    return torch.masked_select(x, mask.view(N, -1, 1)).reshape(N, -1, D)
-
-
-def _apply_ragged(mask: Tensor, x: Tensor, padding_value: float | Tensor) -> Tensor:
-    N, _, D = x.shape
-
-    # Build indices where we want to put non-padding values
-    unmasked_count = mask.sum(dim=-1)
-    max_tokens = cast(int, unmasked_count.max())
-    indices = torch.stack(
-        [
-            torch.arange(N, device=x.device).view(N, 1).expand(-1, max_tokens),
-            torch.arange(max_tokens, device=x.device).view(1, max_tokens).expand(N, -1),
-        ],
-        dim=-1,
-    )
-    indices = indices[indices[..., -1] < unmasked_count.view(-1, 1)]
-
-    if isinstance(padding_value, Tensor):
-        o = padding_value.type_as(x).broadcast_to((N, max_tokens, D))
-    else:
-        o = x.new_full((N, max_tokens, D), padding_value)
-    return torch.index_put(o, indices.unbind(-1), x[mask])
-
-
-def apply_mask(
-    mask: Tensor,
-    x: Tensor,
-    fill_value: float | Tensor | None = None,
-    padding_value: float | Tensor = 0,
-) -> Tensor:
+@torch.compile(fullgraph=True, disable=compile_is_disabled())
+def apply_mask(mask: Tensor, x: Tensor) -> Tensor:
     r"""Apply the mask to tokens.
 
     It is expected that ``True`` indicates an unmasked token and ``False`` indicates a masked token.
@@ -69,8 +26,6 @@ def apply_mask(
     Args:
         mask: Mask tensor
         x: Input tensor
-        fill_value: Value to fill the masked tokens with. If ``None``, the masked tokens are removed.
-        padding_value: Padding value used when the mask is ragged.
 
     Shapes:
         mask - :math:`(N, L)` where :math:`L` is the number of tokens
@@ -85,23 +40,11 @@ def apply_mask(
             f"Mask and input must match in all dimensions except the last: {x.shape} != {mask.shape}"
         )  # pragma: no cover
 
-    if fill_value is not None:
-        return _apply_with_fill(mask, x, fill_value)
-    elif not mask_is_ragged(mask):
-        return _apply_non_ragged(mask, x)
-    else:
-        return _apply_ragged(mask, x, padding_value)
+    N, _, D = x.shape
+    return torch.masked_select(x, mask.view(N, -1, 1)).reshape(N, -1, D)
 
 
-def unapply_mask(mask: Tensor, x: Tensor) -> Tensor:
-    assert not mask_is_ragged(mask), "Cannot unapply ragged mask"
-    B, L = mask.shape
-    D = x.shape[-1]
-    result = x.new_zeros((B, L, D))
-    result.masked_scatter_(mask.view(B, L, 1), x)
-    return result
-
-
+@torch.compile(fullgraph=True, disable=compile_is_disabled())
 def create_mask(
     size: Sequence[int],
     mask_ratio: float,
@@ -167,6 +110,7 @@ def create_mask(
     return mask
 
 
+@torch.compile(fullgraph=True, disable=compile_is_disabled())
 def generate_non_overlapping_mask(mask1: Tensor, p1: float, p2: float) -> Tensor:
     """Generates a second mask that does not overlap with the first mask.
 

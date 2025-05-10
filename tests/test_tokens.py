@@ -3,57 +3,24 @@ import torch
 import torch.nn.functional as F
 from torch.testing import assert_close
 
-from vit.tokens import apply_mask, create_mask, generate_non_overlapping_mask, mask_is_ragged, unapply_mask
+from vit.tokens import apply_mask, create_mask, generate_non_overlapping_mask
 
 
 @pytest.mark.parametrize(
     "mask, exp",
     [
-        (([True, True], [True, True]), False),
-        (([True, False], [True, True]), True),
-        (([False, True], [True, True]), True),
-        (([False, False], [True, True]), True),
-        (([False, False], [False, False]), False),
+        (([True, True], [True, True]), torch.tensor([[0, 1], [0, 1]])),
+        (([True, False], [False, True]), torch.tensor([[0], [1]])),
+        (([False, True], [True, False]), torch.tensor([[1], [0]])),
+        (([False, False], [False, False]), torch.tensor([[], []])),
     ],
 )
-def test_is_ragged(mask, exp):
-    assert mask_is_ragged(torch.tensor(mask, dtype=torch.bool)) == exp
-
-
-@pytest.mark.parametrize(
-    "mask, fill_value, padding_value, exp",
-    [
-        # Non-ragged
-        (([True, True], [True, True]), None, 0, torch.tensor([[0, 1], [0, 1]])),
-        (([True, False], [False, True]), None, 0, torch.tensor([[0], [1]])),
-        (([False, True], [True, False]), None, 0, torch.tensor([[1], [0]])),
-        (([False, False], [False, False]), None, 0, torch.tensor([[], []])),
-        (([True, False], [False, True]), -1.0, 0, torch.tensor([[0, -1.0], [-1.0, 1]])),
-        (([True, False], [False, True]), torch.tensor(-1.0), 0, torch.tensor([[0, -1.0], [-1.0, 1]])),
-        # Ragged
-        (([True, False], [True, True]), None, 0, torch.tensor([[0, 0], [0, 1]])),
-        (([False, True], [True, True]), None, 0, torch.tensor([[1, 0], [0, 1]])),
-        (([True, False], [True, True]), None, -1.0, torch.tensor([[0, -1.0], [0, 1]])),
-        (([False, True], [True, True]), None, -1.0, torch.tensor([[1, -1.0], [0, 1]])),
-        (([False, True], [True, True]), -1.0, 0, torch.tensor([[-1.0, 1], [0, 1]])),
-    ],
-)
-def test_apply(mask, fill_value, padding_value, exp):
+def test_apply(mask, exp):
     mask = torch.tensor(mask, dtype=torch.bool)
     N, L = mask.shape
     x = torch.arange(L).view(1, L, 1).expand(N, L, 1)
-    o = apply_mask(mask, x, fill_value, padding_value)
+    o = apply_mask(mask, x)
     assert_close(o, exp.view_as(o).type_as(o))
-
-
-def test_unapply():
-    B, L, D = 2, 10, 32
-    x = torch.randn((B, L, D))
-    mask = create_mask((L,), 0.5, batch_size=B)
-    y = apply_mask(mask, x)
-    x2 = unapply_mask(mask, y)
-    assert_close(x2[mask], x[mask])
-    assert_close(x2[~mask], x2.new_zeros(x2.shape)[~mask])
 
 
 class TestCreateMask:

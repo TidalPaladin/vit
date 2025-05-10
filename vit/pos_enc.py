@@ -1,17 +1,9 @@
-from typing import TYPE_CHECKING, Sequence, cast
+from typing import Sequence
 
 import torch
-import torch.nn as nn
 from torch import Tensor
 
-from .fused import LayerNormMLP
-from .helpers import DEFAULT_BACKEND, Backend, check_te_installed, compile_is_disabled, try_import_te
-
-
-if TYPE_CHECKING:
-    import transformer_engine.pytorch as te  # type: ignore[reportMissingImports]
-else:
-    te = try_import_te()
+from .helpers import compile_is_disabled
 
 
 @torch.compile(fullgraph=True, disable=compile_is_disabled())
@@ -19,7 +11,7 @@ def create_grid(
     dims: Sequence[int],
     dtype: torch.dtype = torch.float32,
     device: torch.device = torch.device("cpu"),
-    normalize: bool = True,
+    normalize: bool = False,
 ) -> Tensor:
     r"""Create a grid of coordinate values given the size of each dimension.
 
@@ -42,53 +34,19 @@ def create_grid(
     return grid.view(1, -1, len(dims))
 
 
-class RelativeFactorizedPosition(nn.Module):
-    """
-    Computes relative factorized position encodings.
-
-    A grid of positions in the interval :math:`[-1, 1]` is first created.
-    This grid is then projected into a higher-dimensional space using a single linear projection.
+def compute_alibi_slopes(num_attention_heads: int, scale: float = 8.0) -> Tensor:
+    r"""Compute AliBi slopes for a given number of attention heads.
 
     Args:
-        d_in:
-            Input dimension size
-        d_out:
-            Output dimension size
+        num_attention_heads: Number of attention heads.
+        scale: Scale of the mask.
 
     Shapes:
-        * Input - :math:`(C,)` where :math:`C` is the number of input dimensions
-        * Output - :math:`(1, L, D)` where :math:`L` is the product of input dimensions and :math:`D` is the output dimension
+        - output: :math:`(N)` where :math:`N` is the number of attention heads.
+
+    Returns:
+        AliBi slopes.
     """
-
-    def __init__(
-        self,
-        d_in: int,
-        hidden_size: int,
-        ffn_hidden_size: int,
-        activation: str = "gelu",
-        normalization: str = "LayerNorm",
-        bias: bool = True,
-        backend: Backend = DEFAULT_BACKEND,
-    ):
-        super().__init__()
-        match backend:
-            case "pytorch":
-                self.linear = nn.Linear(d_in, hidden_size, bias=bias)
-                self.mlp = LayerNormMLP(
-                    hidden_size, ffn_hidden_size, activation=activation, normalization=normalization, bias=bias
-                )
-            case "te":
-                check_te_installed(te)
-                self.linear = te.Linear(d_in, hidden_size, bias=bias)
-                self.mlp = te.LayerNormMLP(
-                    hidden_size, ffn_hidden_size, activation=activation, normalization=normalization, bias=bias
-                )
-            case _:
-                raise ValueError(f"Backend {backend} not supported")
-
-    def forward(self, dims: Sequence[int]) -> Tensor:
-        with torch.no_grad():
-            grid = create_grid(dims, device=cast(Tensor, self.linear.weight).device)
-        y = self.linear(grid)
-        y = self.mlp(y)
-        return y
+    i = torch.arange(num_attention_heads)
+    exponent = -scale * (i + 1) / num_attention_heads
+    return (2**exponent).float()
