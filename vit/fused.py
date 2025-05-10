@@ -18,8 +18,8 @@ class NormLinear(nn.Module):
 
     def __init__(self, in_features: int, out_features: int, bias: bool = True):
         super().__init__()
+        self.norm = nn.RMSNorm(in_features)
         self.linear = nn.Linear(in_features, out_features, bias=bias)
-        self.norm = nn.RMSNorm(out_features)
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
