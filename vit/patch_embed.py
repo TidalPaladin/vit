@@ -35,8 +35,10 @@ class PatchEmbed2d(nn.Module):
         patch_size: Sequence[int],
         normalization: str = "LayerNorm",
         activation: str = "gelu",
+        dropout: float = 0.0,
         backend: Backend = DEFAULT_BACKEND,
         eps: float = 1e-5,
+        pos_scale: float = 0.1,
     ):
         super().__init__()
         self._patch_size = tuple(patch_size)
@@ -49,6 +51,7 @@ class PatchEmbed2d(nn.Module):
             normalization=normalization,
             activation=activation,
         )
+        self.dropout = nn.Dropout(dropout)
         match (normalization, backend):
             case ("LayerNorm", "pytorch"):
                 self.norm = nn.LayerNorm(hidden_size, eps=eps)
@@ -66,7 +69,7 @@ class PatchEmbed2d(nn.Module):
                 self.pos_norm = te.RMSNorm(hidden_size, eps=eps)
             case _:
                 raise ValueError(f"Invalid normalization: {normalization}")
-        nn.init.constant_(self.pos_norm.weight, 0.1)
+        nn.init.constant_(self.pos_norm.weight, pos_scale)
 
     @property
     def patch_size(self) -> Tuple[int, int]:
@@ -87,6 +90,7 @@ class PatchEmbed2d(nn.Module):
         H, W = x.shape[2:]
         dims = self.tokenized_size((H, W))
         pos = self.pos_norm(self.pos_enc(dims))
+        pos = self.dropout(pos)
         if additional_features is not None:
             y = y + additional_features
         y = self.norm(y)
@@ -104,13 +108,26 @@ class ConvNextPatchEmbed2d(PatchEmbed2d):
         patch_size: Sequence[int],
         normalization: str = "LayerNorm",
         activation: str = "srelu",
+        dropout: float = 0.0,
         backend: Backend = DEFAULT_BACKEND,
         eps: float = 1e-5,
+        pos_scale: float = 0.1,
         depth: int = 2,
         convnext_patch_size: Sequence[int] = [2, 2],
         **kwargs,
     ):
-        super().__init__(in_channels, hidden_size, ffn_hidden_size, patch_size, normalization, activation, backend, eps)
+        super().__init__(
+            in_channels,
+            hidden_size,
+            ffn_hidden_size,
+            patch_size,
+            normalization,
+            activation,
+            dropout,
+            backend,
+            eps,
+            pos_scale,
+        )
         check_convnext_installed(convnext)
         assert len(set(patch_size)) == 1, "Patch size must be the same for all dimensions"
         assert all(p % 2 == 0 for p in patch_size), "Patch size must be even"
@@ -157,6 +174,7 @@ class ConvNextPatchEmbed2d(PatchEmbed2d):
         y = rearrange(y, "(b h w) c () () -> b (h w) c", b=B, h=Ht, w=Wt)
 
         pos = self.pos_norm(self.pos_enc((Ht, Wt)))
+        pos = self.dropout(pos)
         if additional_features is not None:
             y = y + additional_features
         y = self.norm(y)
