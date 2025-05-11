@@ -152,8 +152,8 @@ class AliBi(nn.Module):
     def forward(self, q_pos: Tensor, k_pos: Tensor, mask: Tensor | None = None) -> Tensor:
         if mask is not None:
             B = mask.shape[0]
-            q_pos = apply_mask(q_pos.expand(B, -1, -1), mask)
-            k_pos = apply_mask(k_pos.expand(B, -1, -1), mask)
+            q_pos = apply_mask(mask, q_pos.expand(B, -1, -1))
+            k_pos = apply_mask(mask, k_pos.expand(B, -1, -1))
         distance = rearrange(create_distance_grid(q_pos, k_pos), "b lq lk -> b () lq lk")
         slopes = rearrange(self.slopes, "h -> () h () ()").neg_()
         return distance * slopes

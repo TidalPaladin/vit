@@ -522,6 +522,8 @@ class ViT(nn.Module):
         # Transformer blocks and output norm
         for block in self.blocks:
             block = cast(TransformerLayer, block)
+            if bias is not None:
+                bias = bias.type_as(x)
             x = block(
                 x, 
                 checkpoint_core_attention=self.config.checkpoint, 
