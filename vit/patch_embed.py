@@ -6,6 +6,7 @@ import torch.nn as nn
 from einops import rearrange
 from torch import Tensor
 
+from .pos_enc import RelativeFactorizedPosition
 from .helpers import (
     DEFAULT_BACKEND,
     Backend,
@@ -30,27 +31,45 @@ class PatchEmbed2d(nn.Module):
         self,
         in_channels: int,
         hidden_size: int,
+        ffn_hidden_size: int,
         patch_size: Sequence[int],
         normalization: str = "LayerNorm",
+        activation: str = "gelu",
+        dropout: float = 0.0,
         backend: Backend = DEFAULT_BACKEND,
         eps: float = 1e-5,
+        pos_scale: float = 0.1,
     ):
         super().__init__()
         self._patch_size = tuple(patch_size)
         self.patch = nn.Conv2d(in_channels, hidden_size, self.patch_size, stride=self.patch_size)
+        self.pos_enc = RelativeFactorizedPosition(
+            2,
+            hidden_size,
+            ffn_hidden_size,
+            backend=backend,
+            normalization=normalization,
+            activation=activation,
+        )
+        self.dropout = nn.Dropout(dropout)
         match (normalization, backend):
             case ("LayerNorm", "pytorch"):
                 self.norm = nn.LayerNorm(hidden_size, eps=eps)
+                self.pos_norm = nn.LayerNorm(hidden_size, eps=eps)
             case ("RMSNorm", "pytorch"):
                 self.norm = nn.RMSNorm(hidden_size, eps=eps)
+                self.pos_norm = nn.RMSNorm(hidden_size, eps=eps)
             case ("LayerNorm", "te"):
                 check_te_installed(te)
                 self.norm = te.LayerNorm(hidden_size, eps=eps)
+                self.pos_norm = te.LayerNorm(hidden_size, eps=eps)
             case ("RMSNorm", "te"):
                 check_te_installed(te)
                 self.norm = te.RMSNorm(hidden_size, eps=eps)
+                self.pos_norm = te.RMSNorm(hidden_size, eps=eps)
             case _:
                 raise ValueError(f"Invalid normalization: {normalization}")
+        nn.init.constant_(self.pos_norm.weight, pos_scale)
 
     @property
     def patch_size(self) -> Tuple[int, int]:
@@ -67,9 +86,16 @@ class PatchEmbed2d(nn.Module):
     def forward(self, x: Tensor, additional_features: Tensor | None = None) -> Tensor:
         y = self.patch(x)
         y = rearrange(y, "b c h w -> b (h w) c")
+
+        H, W = x.shape[2:]
+        dims = self.tokenized_size((H, W))
+        pos = self.pos_norm(self.pos_enc(dims))
+        pos = self.dropout(pos)
         if additional_features is not None:
             y = y + additional_features
-        return self.norm(y)
+        y = self.norm(y)
+        y = y + pos
+        return y
 
 
 class ConvNextPatchEmbed2d(PatchEmbed2d):
@@ -78,15 +104,30 @@ class ConvNextPatchEmbed2d(PatchEmbed2d):
         self,
         in_channels: int,
         hidden_size: int,
+        ffn_hidden_size: int,
         patch_size: Sequence[int],
         normalization: str = "LayerNorm",
+        activation: str = "srelu",
+        dropout: float = 0.0,
         backend: Backend = DEFAULT_BACKEND,
         eps: float = 1e-5,
+        pos_scale: float = 0.1,
         depth: int = 2,
         convnext_patch_size: Sequence[int] = [2, 2],
         **kwargs,
     ):
-        super().__init__(in_channels, hidden_size, patch_size, normalization, backend, eps)
+        super().__init__(
+            in_channels,
+            hidden_size,
+            ffn_hidden_size,
+            patch_size,
+            normalization,
+            activation,
+            dropout,
+            backend,
+            eps,
+            pos_scale,
+        )
         check_convnext_installed(convnext)
         assert len(set(patch_size)) == 1, "Patch size must be the same for all dimensions"
         assert all(p % 2 == 0 for p in patch_size), "Patch size must be even"
@@ -131,6 +172,10 @@ class ConvNextPatchEmbed2d(PatchEmbed2d):
         y = self.final_conv(y)
         y = rearrange(y, "(b h w) c () () -> b (h w) c", b=B, h=Ht, w=Wt)
 
+        pos = self.pos_norm(self.pos_enc((Ht, Wt)))
+        pos = self.dropout(pos)
         if additional_features is not None:
             y = y + additional_features
-        return self.norm(y)
+        y = self.norm(y)
+        y = y + pos
+        return y

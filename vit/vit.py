@@ -58,6 +58,7 @@ class ViTConfig:
     drop_path_rate: float = 0.0
     num_cls_tokens: int = 1
     num_register_tokens: int = 0
+    pos_scale: float = 0.1
 
     # Other
     checkpoint: bool = False
@@ -148,9 +149,13 @@ class ViT(nn.Module):
             self.stem = ConvNextPatchEmbed2d(
                 config.in_channels,
                 config.hidden_size,
+                config.ffn_hidden_size,
                 cast(Tuple[int, int], tuple(config.patch_size)),
                 normalization=config.normalization,
+                activation=config.activation,
+                dropout=config.hidden_dropout,
                 backend=config.backend,
+                pos_scale=config.pos_scale,
                 depth=config.convnext_depth,
                 convnext_patch_size=config.convnext_patch_size,
             )
@@ -158,9 +163,13 @@ class ViT(nn.Module):
             self.stem = PatchEmbed2d(
                 config.in_channels,
                 config.hidden_size,
+                config.ffn_hidden_size,
                 cast(Tuple[int, int], tuple(config.patch_size)),
                 normalization=config.normalization,
+                activation=config.activation,
+                dropout=config.hidden_dropout,
                 backend=config.backend,
+                pos_scale=config.pos_scale,
             )
 
         # Alibi slopes
