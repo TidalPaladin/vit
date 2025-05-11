@@ -2,7 +2,7 @@ import pytest
 import torch
 from torch.testing import assert_close
 
-from vit.pos_enc import RelativeFactorizedPosition, create_grid, compute_alibi_slopes, create_2d_alibi_grid
+from vit.pos_enc import RelativeFactorizedPosition, create_grid, compute_alibi_slopes
 
 
 @pytest.fixture(params=["pytorch", pytest.param("te", marks=pytest.mark.cuda)])

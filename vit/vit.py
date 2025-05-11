@@ -13,7 +13,7 @@ from .helpers import DEFAULT_BACKEND, Backend, check_te_installed, try_import_te
 from .patch_embed import ConvNextPatchEmbed2d, PatchEmbed2d
 from .tokens import apply_mask, create_mask
 from .transformer import CrossAttentionMLP, TransformerLayer
-from .pos_enc import compute_alibi_slopes, create_2d_alibi_grid, create_grid, create_distance_grid
+from .pos_enc import create_grid, AliBi
 
 
 if TYPE_CHECKING:
@@ -59,6 +59,7 @@ class ViTConfig:
     num_cls_tokens: int = 1
     num_register_tokens: int = 0
     pos_scale: float = 0.1
+    alibi_scale: float = 0.0
 
     # Other
     checkpoint: bool = False
@@ -173,11 +174,10 @@ class ViT(nn.Module):
             )
 
         # Alibi slopes
-        num_spatial_dims = len(config.patch_size)
-        self.distance_slopes = nn.ParameterList([
-            nn.Parameter(compute_alibi_slopes(config.num_attention_heads).view(-1, 1).expand(-1, num_spatial_dims).contiguous())
-            for _ in range(config.depth)
-        ])
+        if config.alibi_scale > 0:
+            self.alibi = AliBi(config.num_attention_heads, config.alibi_scale)
+        else:
+            self.alibi = None
 
         # Transformer blocks
         self.blocks = nn.ModuleList(
@@ -501,29 +501,32 @@ class ViT(nn.Module):
         tokenized_size = self.stem.tokenized_size(cast(Any, tuple(original_size)))
 
         # Create grids
-        positions = create_grid(tokenized_size, device=x.device, normalize=False)
-        distances = create_distance_grid(positions, positions)
+        if self.alibi is not None:
+            positions = create_grid(tokenized_size, device=x.device, normalize=False)
+            bias = self.alibi(positions, positions, mask)
+            if (num_extra_tokens := self.config.num_cls_tokens + self.config.num_register_tokens) > 0:
+                raise NotImplementedError("Extra tokens are not supported with ALiBi")
+            bias_type = "post_scale_bias"
+        else:
+            bias = None
+            bias_type = "no_bias"
 
         # Tokenize and apply mask
         x = self.stem(x)
         if mask is not None:
             x = apply_mask(mask, x)
-            positions = apply_mask(mask, positions)
 
         # Pack features, CLS tokens, and register tokens
         x = self.pack(x, self.cls_tokens, self.register_tokens)
 
         # Transformer blocks and output norm
-        for i, block in enumerate(self.blocks):
-            distance_slopes = self.distance_slopes[i]
-            alibi_grid = create_2d_alibi_grid(positions, positions, distance_slopes)
-
+        for block in self.blocks:
             block = cast(TransformerLayer, block)
             x = block(
                 x, 
                 checkpoint_core_attention=self.config.checkpoint, 
-                core_attention_bias_type="post_scale_bias",
-                core_attention_bias=alibi_grid,
+                core_attention_bias_type=bias_type,
+                core_attention_bias=bias,
             )
 
         # Extract features, CLS tokens, and register tokens

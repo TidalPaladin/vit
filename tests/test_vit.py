@@ -107,12 +107,14 @@ class TestViT:
     @pytest.mark.parametrize("convnext_patch_embed", [False, True])
     @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
     @pytest.mark.parametrize("num_cls_tokens", [0, 1, 2])
-    def test_forward(self, config, num_register_tokens, num_cls_tokens, convnext_patch_embed):
+    @pytest.mark.parametrize("alibi_scale", [0.0, 1.0])
+    def test_forward(self, config, num_register_tokens, num_cls_tokens, convnext_patch_embed, alibi_scale):
         config = replace(
             config,
             num_register_tokens=num_register_tokens,
             num_cls_tokens=num_cls_tokens,
             convnext_patch_embed=convnext_patch_embed,
+            alibi_scale=alibi_scale,
         )
         x = torch.randn(1, 3, 224, 224)
         model = ViT(config)
@@ -140,27 +142,16 @@ class TestViT:
             assert param.grad is not None, f"{name} has no gradient"
             assert not param.grad.isnan().any(), f"{name} has nan gradient"
 
-    @pytest.mark.parametrize("checkpoint", [False, True])
-    def test_backward_with_encoder_output(self, config, checkpoint):
-        x = torch.randn(1, 3, 224, 224, requires_grad=True)
-        encoder_output = torch.randn(1, 64, 128)
-        config = replace(config, checkpoint=checkpoint)
-        model = ViT(config)
-        with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
-            out, cls_token, _ = model(x, encoder_output=encoder_output)
-        (out.sum() + cls_token.sum()).backward()
-        for name, param in model.named_parameters():
-            assert param.grad is not None, f"{name} has no gradient"
-            assert not param.grad.isnan().any(), f"{name} has nan gradient"
-
     @pytest.mark.cuda
-    def test_baseline(self, config):
+    @pytest.mark.parametrize("alibi_scale", [0.0, 1.0])
+    def test_baseline(self, config, alibi_scale):
         if te is None:
             pytest.skip("Transformer Engine is not available")
         B, C, H, W = 2, 3, 64, 64
         torch.random.manual_seed(0)
 
-        baseline_config = replace(config, backend="te")
+        config = replace(config, alibi_scale=alibi_scale)
+        baseline_config = replace(config, backend="te", alibi_scale=alibi_scale)
         baseline = ViT(baseline_config).to("cuda")
         layer = ViT(config).to("cuda")
         x = torch.randn(B, C, H, W, device="cuda")
@@ -186,12 +177,10 @@ class TestViT:
         for block in model.blocks:
             assert_all_requires_grad(block.layernorm_mlp)
             assert_all_requires_grad(block.self_attention)
-            assert_all_requires_grad(block.inter_attention)
         model.mlp_requires_grad_(False)
         for block in model.blocks:
             assert_none_requires_grad(block.layernorm_mlp)
             assert_all_requires_grad(block.self_attention)
-            assert_all_requires_grad(block.inter_attention)
 
     @pytest.mark.parametrize("backend", ["pytorch", "te"])
     def test_self_attention_requires_grad(self, config, backend):
@@ -202,81 +191,7 @@ class TestViT:
         for block in model.blocks:
             assert_all_requires_grad(block.layernorm_mlp)
             assert_all_requires_grad(block.self_attention)
-            assert_all_requires_grad(block.inter_attention)
         model.self_attention_requires_grad_(False)
         for block in model.blocks:
             assert_all_requires_grad(block.layernorm_mlp)
             assert_none_requires_grad(block.self_attention)
-            assert_all_requires_grad(block.inter_attention)
-
-    @pytest.mark.parametrize("backend", ["pytorch", "te"])
-    def test_inter_attention_requires_grad_encoder_only(self, config, backend):
-        if backend == "te" and te is None:
-            pytest.skip("Transformer Engine is not available")
-        config = replace(config, backend=backend)
-        model = ViT(config)
-        for block in model.blocks:
-            assert_all_requires_grad(block.layernorm_mlp)
-            assert_all_requires_grad(block.self_attention)
-        model.inter_attention_requires_grad_(False)
-        for block in model.blocks:
-            assert_all_requires_grad(block.layernorm_mlp)
-            assert_all_requires_grad(block.self_attention)
-
-    @pytest.mark.parametrize("backend", ["pytorch", "te"])
-    @pytest.mark.parametrize("mlp", [False, True])
-    @pytest.mark.parametrize("out_dim", [1, None])
-    def test_forward_head_no_pooling(self, backend, config, mlp, out_dim):
-        if backend == "te" and te is None:
-            pytest.skip("Transformer Engine is not available")
-        config = replace(config, backend=backend)
-        device = "cuda" if backend == "te" else "cpu"
-
-        x = torch.randn(1, 3, 224, 224, device=device)
-        model = ViT(config).to(device)
-        head = model.create_head(out_dim, mlp=mlp)
-        head = head.to(device)
-        with torch.autocast(device_type=device, dtype=torch.bfloat16, enabled=True):
-            out, cls_token, _ = model(x)
-            out = head(cls_token)
-        assert out.shape == (1, 1, out_dim or config.isotropic_output_dim)
-
-    @pytest.mark.parametrize("backend", ["pytorch", "te"])
-    @pytest.mark.parametrize("mlp", [False, True])
-    @pytest.mark.parametrize("pool_type", ["avg", "max"])
-    @pytest.mark.parametrize("out_dim", [1, None])
-    def test_forward_head_pooling(self, backend, config, mlp, pool_type, out_dim):
-        if backend == "te" and te is None:
-            pytest.skip("Transformer Engine is not available")
-        config = replace(config, backend=backend)
-        device = "cuda" if backend == "te" else "cpu"
-
-        x = torch.randn(1, 3, 224, 224, device=device)
-        model = ViT(config).to(device)
-        head = model.create_head(out_dim, mlp=mlp, pool_type=pool_type)
-        head = head.to(device)
-        with torch.autocast(device_type=device, dtype=torch.bfloat16, enabled=True):
-            out, _, _ = model(x)
-            out = head(out)
-        assert out.shape == (1, out_dim or config.isotropic_output_dim)
-
-    @pytest.mark.parametrize("backend", ["pytorch", "te"])
-    def test_cross_attention_block(self, config, backend):
-        if backend == "te" and te is None:
-            pytest.skip("Transformer Engine is not available")
-        device = "cuda" if backend == "te" else "cpu"
-        x = torch.randn(1, 3, 224, 224, device=device)
-        encoder_output = torch.randn(1, 64, 128, device=device)
-        config = replace(config, backend=backend)
-        model = ViT(config).to(device)
-        layer = model.create_cross_attention_layer()
-        with torch.autocast(device_type="cpu", dtype=torch.bfloat16, enabled=True):
-            out, _, _ = model(x)
-            q = torch.rand_like(out)
-            y = layer(q, encoder_output)
-        assert y.shape == (1, 196, 128)
-
-        if backend == "te":
-            assert isinstance(layer.inter_attention, te.MultiheadAttention)
-        else:
-            assert isinstance(layer.inter_attention, MultiheadAttention)

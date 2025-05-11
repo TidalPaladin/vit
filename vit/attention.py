@@ -293,7 +293,7 @@ class MultiheadAttention(nn.Module):
                 weights = (q @ k.mT).div(scale).softmax(dim=-1)
                 self.attention_weights = weights
 
-        o = F.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=dropout, is_causal=False)
+        o = F.scaled_dot_product_attention(q, k, v, attn_mask=core_attention_bias, dropout_p=dropout, is_causal=False)
 
         if self.qkv_format == "sbhd":
             o = rearrange(o, "b h s d -> s b (h d)")

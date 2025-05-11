@@ -50,26 +50,27 @@ class PatchEmbed2d(nn.Module):
             backend=backend,
             normalization=normalization,
             activation=activation,
-        )
+        ) if pos_scale > 0 else None
         self.dropout = nn.Dropout(dropout)
         match (normalization, backend):
             case ("LayerNorm", "pytorch"):
                 self.norm = nn.LayerNorm(hidden_size, eps=eps)
-                self.pos_norm = nn.LayerNorm(hidden_size, eps=eps)
+                self.pos_norm = nn.LayerNorm(hidden_size, eps=eps) if pos_scale > 0 else None
             case ("RMSNorm", "pytorch"):
                 self.norm = nn.RMSNorm(hidden_size, eps=eps)
-                self.pos_norm = nn.RMSNorm(hidden_size, eps=eps)
+                self.pos_norm = nn.RMSNorm(hidden_size, eps=eps) if pos_scale > 0 else None
             case ("LayerNorm", "te"):
                 check_te_installed(te)
                 self.norm = te.LayerNorm(hidden_size, eps=eps)
-                self.pos_norm = te.LayerNorm(hidden_size, eps=eps)
+                self.pos_norm = te.LayerNorm(hidden_size, eps=eps) if pos_scale > 0 else None
             case ("RMSNorm", "te"):
                 check_te_installed(te)
                 self.norm = te.RMSNorm(hidden_size, eps=eps)
-                self.pos_norm = te.RMSNorm(hidden_size, eps=eps)
+                self.pos_norm = te.RMSNorm(hidden_size, eps=eps) if pos_scale > 0 else None
             case _:
                 raise ValueError(f"Invalid normalization: {normalization}")
-        nn.init.constant_(self.pos_norm.weight, pos_scale)
+        if self.pos_norm is not None:
+            nn.init.constant_(self.pos_norm.weight, pos_scale)
 
     @property
     def patch_size(self) -> Tuple[int, int]:
@@ -89,12 +90,14 @@ class PatchEmbed2d(nn.Module):
 
         H, W = x.shape[2:]
         dims = self.tokenized_size((H, W))
-        pos = self.pos_norm(self.pos_enc(dims))
-        pos = self.dropout(pos)
+        if self.pos_enc is not None:
+            pos = self.pos_norm(self.pos_enc(dims))
+            pos = self.dropout(pos)
         if additional_features is not None:
             y = y + additional_features
         y = self.norm(y)
-        y = y + pos
+        if self.pos_enc is not None:
+            y = y + pos
         return y
 
 
@@ -172,10 +175,12 @@ class ConvNextPatchEmbed2d(PatchEmbed2d):
         y = self.final_conv(y)
         y = rearrange(y, "(b h w) c () () -> b (h w) c", b=B, h=Ht, w=Wt)
 
-        pos = self.pos_norm(self.pos_enc((Ht, Wt)))
-        pos = self.dropout(pos)
+        if self.pos_enc is not None:
+            pos = self.pos_norm(self.pos_enc((Ht, Wt)))
+            pos = self.dropout(pos)
         if additional_features is not None:
             y = y + additional_features
         y = self.norm(y)
-        y = y + pos
+        if self.pos_enc is not None:
+            y = y + pos
         return y
