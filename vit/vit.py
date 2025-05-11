@@ -13,7 +13,7 @@ from .helpers import DEFAULT_BACKEND, Backend, check_te_installed, try_import_te
 from .patch_embed import ConvNextPatchEmbed2d, PatchEmbed2d
 from .tokens import apply_mask, create_mask
 from .transformer import CrossAttentionMLP, TransformerLayer
-from .pos_enc import compute_alibi_slopes, create_2d_alibi_grid, create_grid
+from .pos_enc import compute_alibi_slopes, create_2d_alibi_grid, create_grid, create_distance_grid
 
 
 if TYPE_CHECKING:
@@ -168,10 +168,6 @@ class ViT(nn.Module):
         self.distance_slopes = nn.ParameterList([
             nn.Parameter(compute_alibi_slopes(config.num_attention_heads).view(-1, 1).expand(-1, num_spatial_dims).contiguous())
             for _ in range(config.depth)
-        ])
-        self.angular_slopes = nn.ParameterList([
-            nn.Parameter(torch.zeros_like(self.distance_slopes[i]))
-            for i in range(config.depth)
         ])
 
         # Transformer blocks
@@ -497,6 +493,7 @@ class ViT(nn.Module):
 
         # Create grids
         positions = create_grid(tokenized_size, device=x.device, normalize=False)
+        distances = create_distance_grid(positions, positions)
 
         # Tokenize and apply mask
         x = self.stem(x)
@@ -510,8 +507,7 @@ class ViT(nn.Module):
         # Transformer blocks and output norm
         for i, block in enumerate(self.blocks):
             distance_slopes = self.distance_slopes[i]
-            angular_slopes = self.angular_slopes[i]
-            alibi_grid = create_2d_alibi_grid(positions, positions, distance_slopes, angular_slopes)
+            alibi_grid = create_2d_alibi_grid(positions, positions, distance_slopes)
 
             block = cast(TransformerLayer, block)
             x = block(

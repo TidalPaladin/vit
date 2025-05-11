@@ -60,44 +60,33 @@ def compute_alibi_slopes(num_attention_heads: int, scale: float = 8.0) -> Tensor
     return (2 ** exponent).float()
 
 
-def create_2d_alibi_grid(
-    q_pos: Tensor,
-    k_pos: Tensor,
-    distance_slopes: Tensor, 
-    angular_slopes: Tensor
-) -> Tensor:
-    r"""Create AliBi bias grid for a 2D input.
+@torch.no_grad()
+def create_distance_grid(q_pos: Tensor, k_pos: Tensor) -> Tensor:
+    r"""Create distance grid for a 2D input.
 
     Args:
         q_pos: Positions of the queries.
         k_pos: Positions of the keys.
-        distance_slopes: AliBi slopes for distance.
-        angular_slopes: AliBi slopes for angular.
 
     Shapes:
-        - output: :math:`(N)` where :math:`N` is the number of attention heads.
+        - q_pos: :math:`(B, Lq, C)`
+        - k_pos: :math:`(B, Lk, C)`
+        - output: :math:`(B, Lq, Lk)`
 
     Returns:
-        AliBi slopes.
+        Euclidean distance grid.
     """
     if q_pos.shape[0] != k_pos.shape[0]:
         raise ValueError("q_pos and k_pos must have the same batch size")
     if not q_pos.shape[-1] == k_pos.shape[-1] == 2:
         raise ValueError("q_pos and k_pos must have the same number of spatial dimensions")
 
-    # Expand to B, H, Lq, Lk, C
+    # Compute the distance bias between the query and key positions
     B, Lq, C = q_pos.shape
     _, Lk, _ = k_pos.shape
-    q_pos = q_pos.view(B, 1, Lq, 1, C)
-    k_pos = k_pos.view(B, 1, 1, Lk, C)
-
-    # Compute the distance bias between the query and key positions
-    with torch.no_grad():
-        delta = (q_pos - k_pos)
-
-    distance_bias = torch.norm(delta.abs() * distance_slopes.view(1, -1, 1, 1, 1), dim=-1)
-    angular_bias = torch.norm((delta * angular_slopes.view(1, -1, 1, 1, 1)).relu(), dim=-1)
-    return distance_bias + angular_bias
+    q_pos = q_pos.view(B, Lq, 1, C)
+    k_pos = k_pos.view(B, 1, Lk, C)
+    return (q_pos - k_pos).norm(p=2, dim=-1)
 
 
 class RelativeFactorizedPosition(nn.Module):
