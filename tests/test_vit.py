@@ -26,6 +26,7 @@ def config():
         hidden_size=128,
         ffn_hidden_size=256,
         num_attention_heads=128 // 16,
+        image_size=(224, 224),
     )
     return config
 
@@ -108,14 +109,18 @@ class TestViT:
     @pytest.mark.parametrize("convnext_patch_embed", [False, True])
     @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
     @pytest.mark.parametrize("num_cls_tokens", [0, 1, 2])
-    def test_forward(self, config, num_register_tokens, num_cls_tokens, convnext_patch_embed):
+    @pytest.mark.parametrize("pos_emb", ["rf", "learnable"])
+    def test_forward(self, config, num_register_tokens, num_cls_tokens, pos_emb, convnext_patch_embed):
+        H, W = 224, 224
         config = replace(
             config,
             num_register_tokens=num_register_tokens,
             num_cls_tokens=num_cls_tokens,
             convnext_patch_embed=convnext_patch_embed,
+            pos_emb=pos_emb,
+            image_size=(H, W),
         )
-        x = torch.randn(1, 3, 224, 224)
+        x = torch.randn(1, 3, H, W)
         model = ViT(config)
         with torch.autocast(device_type="cpu", dtype=torch.bfloat16, enabled=True):
             out, cls_tokens, register_tokens = model(x)

@@ -1,8 +1,10 @@
+import math
+
 import pytest
 import torch
 from torch.testing import assert_close
 
-from vit.pos_enc import RelativeFactorizedPosition, create_grid
+from vit.pos_enc import LearnablePosition, RelativeFactorizedPosition, create_grid
 
 
 @pytest.fixture(params=["pytorch", pytest.param("te", marks=pytest.mark.cuda)])
@@ -68,3 +70,25 @@ class TestRelativeFactorizedPosition:
             y = layer((8, 8))
             y_baseline = baseline((8, 8))
         assert_close(y, y_baseline, atol=1e-4, rtol=0)
+
+
+class TestLearnablePosition:
+
+    @pytest.mark.parametrize("emb_size", [(4, 4), (8, 8)])
+    @pytest.mark.parametrize("grid_size", [(4, 4), (8, 8)])
+    def test_forward(self, emb_size, grid_size):
+        hidden_size = 16
+        layer = LearnablePosition(hidden_size, emb_size).to("cuda")
+        out = layer(grid_size)
+        assert out.shape == (1, math.prod(grid_size), hidden_size)
+
+    @pytest.mark.parametrize("emb_size", [(4, 4), (8, 8)])
+    @pytest.mark.parametrize("grid_size", [(4, 4), (8, 8)])
+    def test_backward(self, emb_size, grid_size):
+        hidden_size = 16
+        layer = LearnablePosition(hidden_size, emb_size).to("cuda")
+        out = layer(grid_size)
+        out.sum().backward()
+        for param in layer.parameters():
+            assert param.grad is not None
+            assert not param.grad.isnan().any()

@@ -59,7 +59,8 @@ class ViTConfig:
     decoder_layers: Sequence[int] | None = None
     num_cls_tokens: int = 1
     num_register_tokens: int = 0
-    pos_scale: float = 0.1
+    image_size: Sequence[int] | None = None
+    pos_emb: Literal["rf", "learnable"] = "learnable"
 
     # Other
     checkpoint: bool = False
@@ -154,9 +155,9 @@ class ViT(nn.Module):
                 cast(Tuple[int, int], tuple(config.patch_size)),
                 normalization=config.normalization,
                 activation=config.activation,
-                dropout=config.hidden_dropout,
                 backend=config.backend,
-                pos_scale=config.pos_scale,
+                pos_emb=config.pos_emb,
+                image_size=config.image_size,
                 depth=config.convnext_depth,
                 convnext_patch_size=config.convnext_patch_size,
             )
@@ -168,9 +169,9 @@ class ViT(nn.Module):
                 cast(Tuple[int, int], tuple(config.patch_size)),
                 normalization=config.normalization,
                 activation=config.activation,
-                dropout=config.hidden_dropout,
                 backend=config.backend,
-                pos_scale=config.pos_scale,
+                pos_emb=config.pos_emb,
+                image_size=config.image_size,
             )
 
         # Transformer blocks

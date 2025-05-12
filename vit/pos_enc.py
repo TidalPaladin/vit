@@ -1,7 +1,9 @@
+import math
 from typing import TYPE_CHECKING, Sequence, cast
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch import Tensor
 
 from .fused import LayerNormMLP
@@ -92,3 +94,46 @@ class RelativeFactorizedPosition(nn.Module):
         y = self.linear(grid)
         y = self.mlp(y)
         return y
+
+
+class LearnablePosition(nn.Module):
+    """
+    Learnable position encodings.
+
+
+    Args:
+        hidden_size:
+            Embedding dimension size
+        grid_size:
+            Size of the embedding grid
+
+    Shapes:
+        * Input - :math:`(C,)` where :math:`C` is the number of input dimensions
+        * Output - :math:`(1, L, D)` where :math:`L` is the product of input dimensions and :math:`D` is the output dimension
+    """
+
+    def __init__(self, hidden_size: int, grid_size: Sequence[int]):
+        super().__init__()
+        self._grid_size = list(grid_size)
+        self._hidden_size = hidden_size
+        self.grid = nn.Parameter(torch.randn(len(self), hidden_size))
+
+    @property
+    def grid_size(self) -> Sequence[int]:
+        return self._grid_size
+
+    def __len__(self) -> int:
+        return math.prod(self.grid_size)
+
+    def forward(self, dims: Sequence[int]) -> Tensor:
+        if len(dims) != len(self.grid_size):
+            raise ValueError(f"Expected {len(self.grid_size)} dimensions, got {len(dims)}")
+        # No interpolation
+        elif list(dims) == list(self.grid_size):
+            grid = self.grid
+        # Interpolate
+        else:
+            grid = self.grid.view(1, *self.grid_size, self._hidden_size).movedim(-1, 1)
+            grid = F.interpolate(grid, dims, mode="bilinear", align_corners=False)
+            grid = grid.movedim(1, -1)
+        return grid.view(1, -1, self._hidden_size)

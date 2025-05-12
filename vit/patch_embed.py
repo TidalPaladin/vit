@@ -1,6 +1,7 @@
 import math
 from dataclasses import replace
-from typing import TYPE_CHECKING, Sequence, Tuple
+from functools import partial
+from typing import TYPE_CHECKING, Literal, Sequence, Tuple
 
 import torch.nn as nn
 from einops import rearrange
@@ -14,7 +15,7 @@ from .helpers import (
     try_import_convnext,
     try_import_te,
 )
-from .pos_enc import RelativeFactorizedPosition
+from .pos_enc import LearnablePosition, RelativeFactorizedPosition
 
 
 if TYPE_CHECKING:
@@ -35,41 +36,51 @@ class PatchEmbed2d(nn.Module):
         patch_size: Sequence[int],
         normalization: str = "LayerNorm",
         activation: str = "gelu",
-        dropout: float = 0.0,
         backend: Backend = DEFAULT_BACKEND,
         eps: float = 1e-5,
-        pos_scale: float = 0.1,
+        pos_emb: Literal["rf", "learnable"] = "learnable",
+        image_size: Sequence[int] | None = None,
     ):
         super().__init__()
         self._patch_size = tuple(patch_size)
-        self.patch = nn.Conv2d(in_channels, hidden_size, self.patch_size, stride=self.patch_size)
-        self.pos_enc = RelativeFactorizedPosition(
-            2,
-            hidden_size,
-            ffn_hidden_size,
-            backend=backend,
-            normalization=normalization,
-            activation=activation,
-        )
-        self.dropout = nn.Dropout(dropout)
+
+        # Patch embedding and normalization
         match (normalization, backend):
             case ("LayerNorm", "pytorch"):
-                self.norm = nn.LayerNorm(hidden_size, eps=eps)
-                self.pos_norm = nn.LayerNorm(hidden_size, eps=eps)
+                norm_layer = partial(nn.LayerNorm, eps=eps)
             case ("RMSNorm", "pytorch"):
-                self.norm = nn.RMSNorm(hidden_size, eps=eps)
-                self.pos_norm = nn.RMSNorm(hidden_size, eps=eps)
+                norm_layer = partial(nn.RMSNorm, eps=eps)
             case ("LayerNorm", "te"):
                 check_te_installed(te)
-                self.norm = te.LayerNorm(hidden_size, eps=eps)
-                self.pos_norm = te.LayerNorm(hidden_size, eps=eps)
+                norm_layer = partial(te.LayerNorm, eps=eps)
             case ("RMSNorm", "te"):
                 check_te_installed(te)
-                self.norm = te.RMSNorm(hidden_size, eps=eps)
-                self.pos_norm = te.RMSNorm(hidden_size, eps=eps)
+                norm_layer = partial(te.RMSNorm, eps=eps)
             case _:
                 raise ValueError(f"Invalid normalization: {normalization}")
-        nn.init.constant_(self.pos_norm.weight, pos_scale)
+        self.patch = nn.Conv2d(in_channels, hidden_size, self.patch_size, stride=self.patch_size)
+        self.norm = norm_layer(hidden_size)
+
+        # Position encoding
+        match pos_emb:
+            case "rf":
+                self.pos_enc = RelativeFactorizedPosition(
+                    2,
+                    hidden_size,
+                    ffn_hidden_size,
+                    backend=backend,
+                    normalization=normalization,
+                    activation=activation,
+                )
+                self.pos_norm = norm_layer(hidden_size)
+            case "learnable":
+                if image_size is None:
+                    raise ValueError("image_size must be provided for learnable position encoding")
+                tokenized_size = self.tokenized_size(tuple(image_size))
+                self.pos_enc = LearnablePosition(hidden_size, tokenized_size)
+                self.pos_norm = nn.Identity()
+            case _:
+                raise ValueError(f"Invalid position encoding: {pos_emb}")
 
     @property
     def patch_size(self) -> Tuple[int, int]:
@@ -90,7 +101,6 @@ class PatchEmbed2d(nn.Module):
         H, W = x.shape[2:]
         dims = self.tokenized_size((H, W))
         pos = self.pos_norm(self.pos_enc(dims))
-        pos = self.dropout(pos)
         if additional_features is not None:
             y = y + additional_features
         y = self.norm(y)
@@ -108,10 +118,10 @@ class ConvNextPatchEmbed2d(PatchEmbed2d):
         patch_size: Sequence[int],
         normalization: str = "LayerNorm",
         activation: str = "srelu",
-        dropout: float = 0.0,
         backend: Backend = DEFAULT_BACKEND,
         eps: float = 1e-5,
-        pos_scale: float = 0.1,
+        pos_emb: Literal["rf", "learnable"] = "learnable",
+        image_size: Sequence[int] | None = None,
         depth: int = 2,
         convnext_patch_size: Sequence[int] = [2, 2],
         **kwargs,
@@ -123,10 +133,10 @@ class ConvNextPatchEmbed2d(PatchEmbed2d):
             patch_size,
             normalization,
             activation,
-            dropout,
             backend,
             eps,
-            pos_scale,
+            pos_emb,
+            image_size,
         )
         check_convnext_installed(convnext)
         assert len(set(patch_size)) == 1, "Patch size must be the same for all dimensions"
@@ -174,7 +184,6 @@ class ConvNextPatchEmbed2d(PatchEmbed2d):
         y = rearrange(y, "(b h w) c () () -> b (h w) c", b=B, h=Ht, w=Wt)
 
         pos = self.pos_norm(self.pos_enc((Ht, Wt)))
-        pos = self.dropout(pos)
         if additional_features is not None:
             y = y + additional_features
         y = self.norm(y)
