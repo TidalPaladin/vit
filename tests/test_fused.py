@@ -5,7 +5,7 @@ from torch.testing import assert_close
 from vit.fused import NormLinear, NormMLP
 
 
-class TestLayerNormLinear:
+class TestNormLinear:
 
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
     def test_forward(self, device, dtype):
@@ -27,10 +27,10 @@ class TestLayerNormLinear:
             assert not param.grad.isnan().any()
 
 
-class TestLayerNormMLP:
+class TestNormMLP:
 
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    @pytest.mark.parametrize("activation", ["relu", "silu", "gelu", "srelu"])
+    @pytest.mark.parametrize("activation", ["relu", "silu", "gelu", "srelu", "reglu", "swiglu", "geglu"])
     def test_forward(self, device, dtype, activation):
         layer_norm_mlp = NormMLP(10, 20, activation=activation).to(device)
         x = torch.randn(10, device=device, dtype=dtype)

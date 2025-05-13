@@ -226,7 +226,6 @@ class AttentivePool(nn.Module):
         hidden_size: int,
         num_attention_heads: int,
         bias: bool = True,
-        eps: float = 1e-5,
     ):
         super().__init__()
         self._head_dim = hidden_size // num_attention_heads

@@ -19,11 +19,11 @@ class SRelu(nn.Module):
 
 def get_activation(activation: str) -> Callable[[Tensor], Tensor]:
     match activation:
-        case "relu":
+        case "relu" | "reglu":
             return F.relu
-        case "silu":
+        case "silu" | "swiglu":
             return F.silu
-        case "gelu":
+        case "gelu" | "geglu":
             return F.gelu
         case "srelu":
             return srelu
