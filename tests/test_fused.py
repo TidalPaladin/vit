@@ -1,17 +1,6 @@
-from typing import TYPE_CHECKING
-
 import pytest
 import torch
 from torch.testing import assert_close
-
-from vit.fused import LayerNormLinear, LayerNormMLP, Linear
-from vit.helpers import try_import_te
-
-
-if TYPE_CHECKING:
-    import transformer_engine.pytorch as te  # type: ignore[reportMissingImports]
-else:
-    te = try_import_te()
 
 
 class TestLayerNormLinear:

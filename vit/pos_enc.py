@@ -1,20 +1,12 @@
-from typing import TYPE_CHECKING, Sequence, cast
+from typing import Sequence
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch import Tensor
 
-from .fused import LayerNormMLP
-from .helpers import DEFAULT_BACKEND, Backend, check_te_installed, compile_is_disabled, try_import_te
 
-
-if TYPE_CHECKING:
-    import transformer_engine.pytorch as te  # type: ignore[reportMissingImports]
-else:
-    te = try_import_te()
-
-
-@torch.compile(fullgraph=True, disable=compile_is_disabled())
+@torch.compile(fullgraph=True)
 def create_grid(
     dims: Sequence[int],
     dtype: torch.dtype = torch.float32,
@@ -42,53 +34,52 @@ def create_grid(
     return grid.view(1, -1, len(dims))
 
 
+@torch.compile(fullgraph=True)
+def relative_factorized_position(
+    dims: Sequence[int],
+    w_fc1: Tensor,
+    b_fc1: Tensor | None,
+    w_fc2: Tensor,
+    b_fc2: Tensor | None,
+) -> Tensor:
+    grid = create_grid(dims, device=w_fc1.device)
+    y = F.linear(grid, w_fc1, b_fc1)
+    y = F.linear(y, w_fc2, b_fc2)
+    return y
+
+
 class RelativeFactorizedPosition(nn.Module):
     """
     Computes relative factorized position encodings.
 
-    A grid of positions in the interval :math:`[-1, 1]` is first created.
-    This grid is then projected into a higher-dimensional space using a single linear projection.
-
     Args:
         d_in:
             Input dimension size
-        d_out:
-            Output dimension size
+        hidden_size:
+            Hidden dimension size
 
     Shapes:
         * Input - :math:`(C,)` where :math:`C` is the number of input dimensions
         * Output - :math:`(1, L, D)` where :math:`L` is the product of input dimensions and :math:`D` is the output dimension
     """
 
-    def __init__(
-        self,
-        d_in: int,
-        hidden_size: int,
-        ffn_hidden_size: int,
-        activation: str = "gelu",
-        normalization: str = "LayerNorm",
-        bias: bool = True,
-        backend: Backend = DEFAULT_BACKEND,
-    ):
+    def __init__(self, d_in: int, hidden_size: int):
         super().__init__()
-        match backend:
-            case "pytorch":
-                self.linear = nn.Linear(d_in, hidden_size, bias=bias)
-                self.mlp = LayerNormMLP(
-                    hidden_size, ffn_hidden_size, activation=activation, normalization=normalization, bias=bias
-                )
-            case "te":
-                check_te_installed(te)
-                self.linear = te.Linear(d_in, hidden_size, bias=bias)
-                self.mlp = te.LayerNormMLP(
-                    hidden_size, ffn_hidden_size, activation=activation, normalization=normalization, bias=bias
-                )
-            case _:
-                raise ValueError(f"Backend {backend} not supported")
+        self.fc1 = nn.Linear(d_in, hidden_size)
+        self.fc2 = nn.Linear(hidden_size, hidden_size)
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        self.fc1.reset_parameters()
+        self.fc2.reset_parameters()
+        nn.init.trunc_normal_(self.fc1.weight, std=0.02)
+        nn.init.trunc_normal_(self.fc2.weight, std=0.02)
 
     def forward(self, dims: Sequence[int]) -> Tensor:
-        with torch.no_grad():
-            grid = create_grid(dims, device=cast(Tensor, self.linear.weight).device)
-        y = self.linear(grid)
-        y = self.mlp(y)
-        return y
+        return relative_factorized_position(
+            # fmt: off
+            dims,
+            self.fc1.weight, self.fc1.bias,
+            self.fc2.weight, self.fc2.bias,
+            # fmt: on
+        )
