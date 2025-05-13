@@ -174,7 +174,12 @@ class ViT(nn.Module):
         if mask is not None:
             x = apply_mask(mask, x)
 
-        x = torch.cat([self.register_tokens.unsqueeze(0), x], dim=1) if self.register_tokens is not None else x
+        B = x.shape[0]
+        x = (
+            torch.cat([self.register_tokens.unsqueeze(0).expand(B, -1, -1), x], dim=1)
+            if self.register_tokens is not None
+            else x
+        )
         for block in self.blocks:
             assert isinstance(block, TransformerEncoderLayer)
             x = block(x)

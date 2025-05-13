@@ -52,11 +52,11 @@ class TestViT:
             config,
             num_register_tokens=num_register_tokens,
         )
-        x = torch.randn(1, 3, 224, 224, device=device)
+        x = torch.randn(2, 3, 224, 224, device=device)
         model = ViT(config).to(device)
         with torch.autocast(device_type=device.type, dtype=dtype, enabled=True):
             out = model(x)
-        assert out.shape == (1, 196, 128)
+        assert out.shape == (2, 196, 128)
 
     @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
@@ -65,7 +65,7 @@ class TestViT:
             config,
             num_register_tokens=num_register_tokens,
         )
-        x = torch.randn(1, 3, 224, 224, device=device, requires_grad=True)
+        x = torch.randn(2, 3, 224, 224, device=device, requires_grad=True)
         model = ViT(config).to(device)
         with torch.autocast(device_type=device.type, dtype=dtype, enabled=True):
             out = model(x)

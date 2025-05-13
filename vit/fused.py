@@ -36,7 +36,7 @@ class NormLinear(nn.Module):
         nn.init.trunc_normal_(self.linear.weight, std=0.02)
 
     def forward(self, x: Tensor) -> Tensor:
-        return norm_linear(x, self.linear.weight, self.linear.bias, self.norm.weight, self.norm.eps)
+        return norm_linear(x, self.linear.weight, self.linear.bias, self.norm.weight, self.norm.eps or 1e-5)
 
 
 @torch.compile(fullgraph=True)
@@ -55,7 +55,7 @@ def norm_mlp(
     x = F.rms_norm(x, x.shape[-1:], weight=norm_weight, eps=eps)
     x = F.linear(x, fc1_weight, fc1_bias)
     x = activation(x)
-    x = F.dropout(x, p=dropout, training=training, inplace=True)
+    x = F.dropout(x, p=dropout, training=training)
     x = F.linear(x, fc2_weight, fc2_bias)
     x = F.dropout(x, p=dropout, training=training, inplace=True)
     return x
@@ -95,7 +95,7 @@ class NormMLP(nn.Module):
             self.fc2.weight, self.fc2.bias,
             self.norm.weight,
             self.activation,
-            self.norm.eps,
+            self.norm.eps or 1e-5,
             self.dropout.p,
             self.training,
             # fmt: on

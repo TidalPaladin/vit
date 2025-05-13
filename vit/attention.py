@@ -3,8 +3,18 @@ from typing import Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange
 from torch import Tensor
+
+
+# torch.compile has difficulty with einops.rearrange, so we use our own implementation
+def _unfold_head_and_permute(x: Tensor, head_dim: int) -> Tensor:
+    B, S, _ = x.shape
+    return x.view(B, S, -1, head_dim).transpose(1, 2)
+
+
+def _permute_and_fold_head(x: Tensor) -> Tensor:
+    B, H, S, D = x.shape
+    return x.transpose(1, 2).reshape(B, S, H * D)
 
 
 @torch.compile(fullgraph=True)
@@ -19,9 +29,9 @@ def project_qkv_packed(
 ) -> Tuple[Tensor, Tensor, Tensor]:
     x = F.rms_norm(x, x.shape[-1:], w_norm, eps=eps)
     q, k, v = F.linear(x, w_in, b_in).chunk(3, dim=-1)
-    q = rearrange(q, "b s (h d) -> b h s d", d=head_dim)
-    k = rearrange(k, "b s (h d) -> b h s d", d=head_dim)
-    v = rearrange(v, "b s (h d) -> b h s d", d=head_dim)
+    q = _unfold_head_and_permute(q, head_dim)
+    k = _unfold_head_and_permute(k, head_dim)
+    v = _unfold_head_and_permute(v, head_dim)
     return q, k, v
 
 
@@ -39,9 +49,9 @@ def project_q_kv_packed(
     q = F.rms_norm(q, q.shape[-1:], w_norm, eps=eps)
     q = F.linear(q, w_q, b_q)
     k, v = F.linear(kv, w_kv, b_kv).chunk(2, dim=-1)
-    q = rearrange(q, "b s (h d) -> b h s d", d=head_dim)
-    k = rearrange(k, "b s (h d) -> b h s d", d=head_dim)
-    v = rearrange(v, "b s (h d) -> b h s d", d=head_dim)
+    q = _unfold_head_and_permute(q, head_dim)
+    k = _unfold_head_and_permute(k, head_dim)
+    v = _unfold_head_and_permute(v, head_dim)
     return q, k, v
 
 
@@ -65,7 +75,7 @@ def attention_qkv_packed(
     o = F.scaled_dot_product_attention(
         q, k, v, attn_mask=attn_mask, dropout_p=attention_dropout, is_causal=False, enable_gqa=True
     )
-    o = rearrange(o, "b h s d -> b s (h d)")
+    o = _permute_and_fold_head(o)
     o = F.linear(o, w_out, b_out)
     o = F.dropout(o, p=dropout, training=training, inplace=True)
     return o
@@ -92,7 +102,7 @@ def attention_q_kv_packed(
     o = F.scaled_dot_product_attention(
         q, k, v, attn_mask=attn_mask, dropout_p=attention_dropout, is_causal=False, enable_gqa=True
     )
-    o = rearrange(o, "b h s d -> b s (h d)")
+    o = _permute_and_fold_head(o)
     o = F.linear(o, w_out, b_out)
     o = F.dropout(o, p=dropout, training=training, inplace=True)
     return o
@@ -134,7 +144,7 @@ class SelfAttention(nn.Module):
             self._head_dim,
             self.out_proj.weight, self.out_proj.bias,
             attn_mask,
-            self.norm.eps,
+            self.norm.eps or 1e-5,
             self.attention_dropout.p,
             self.dropout.p,
             self.training,
@@ -182,7 +192,7 @@ class CrossAttention(nn.Module):
             self._head_dim,
             self.out_proj.weight, self.out_proj.bias,
             attn_mask,
-            self.norm.eps,
+            self.norm.eps or 1e-5,
             self.attention_dropout.p,
             self.dropout.p,
             self.training,

@@ -21,6 +21,7 @@ def patch_embed(
     patch_size = w_patch.shape[2:]
     y = F.conv2d(x, w_patch, b_patch, stride=patch_size)
     y = rearrange(y, "b c h w -> b (h w) c")
+    y = y.flatten(2).transpose(1, 2)
     y = F.rms_norm(y, y.shape[-1:], w_norm, eps)
     return y
 
@@ -40,7 +41,7 @@ def patch_embed_with_positional_encoding(
     patch_size = w_patch.shape[2:]
     dims = tuple(s // p for s, p in zip(dims, patch_size))
     y = F.conv2d(x, w_patch, b_patch, stride=patch_size)
-    y = rearrange(y, "b c h w -> b (h w) c")
+    y = y.flatten(2).transpose(1, 2)
     y = y + relative_factorized_position(dims, w_fc1, b_fc1, w_fc2, b_fc2)
     y = F.rms_norm(y, y.shape[-1:], w_norm, eps)
     return y
@@ -57,7 +58,7 @@ class PatchEmbed2d(nn.Module):
         pos_emb: bool = True,
     ):
         super().__init__()
-        self.patch = nn.Conv2d(in_channels, hidden_size, patch_size, stride=patch_size)
+        self.patch = nn.Conv2d(in_channels, hidden_size, tuple(patch_size), stride=tuple(patch_size))
         self.pos_enc = RelativeFactorizedPosition(2, hidden_size) if pos_emb else None
         self.norm = nn.RMSNorm(hidden_size, eps=eps)
         self.reset_parameters()
@@ -91,7 +92,7 @@ class PatchEmbed2d(nn.Module):
                 self.pos_enc.fc2.weight,
                 self.pos_enc.fc2.bias,
                 self.norm.weight,
-                self.norm.eps,
+                self.norm.eps or 1e-5,
             )
         else:
             return patch_embed(
@@ -99,5 +100,5 @@ class PatchEmbed2d(nn.Module):
                 self.patch.weight,
                 self.patch.bias,
                 self.norm.weight,
-                self.norm.eps,
+                self.norm.eps or 1e-5,
             )
