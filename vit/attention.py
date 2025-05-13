@@ -108,6 +108,24 @@ def attention_q_kv_packed(
     return o
 
 
+@torch.compile(fullgraph=True)
+def attentive_pool(
+    # fmt: off
+    x: Tensor,
+    w: Tensor, b: Tensor | None,
+    w_v: Tensor, b_v: Tensor | None,
+    head_dim: int,
+    # fmt: on
+) -> Tensor:
+    B, S, D = x.shape
+    weights = F.linear(x, w, b)  # B, S, H
+    weights = F.softmax(weights, dim=-2)
+    weights = weights.unsqueeze(-1)  # B, S, H, 1
+    v = F.linear(x, w_v, b_v).view(B, S, -1, head_dim)  # B, S, D
+    v = (v * weights).sum(dim=1)
+    return v.view(B, D)
+
+
 class SelfAttention(nn.Module):
     attention_weights: Tensor | None = None
 
@@ -196,5 +214,38 @@ class CrossAttention(nn.Module):
             self.attention_dropout.p,
             self.dropout.p,
             self.training,
+            # fmt: on
+        )
+
+
+class AttentivePool(nn.Module):
+    attention_weights: Tensor | None = None
+
+    def __init__(
+        self,
+        hidden_size: int,
+        num_attention_heads: int,
+        bias: bool = True,
+        eps: float = 1e-5,
+    ):
+        super().__init__()
+        self._head_dim = hidden_size // num_attention_heads
+        self.weight = nn.Linear(hidden_size, num_attention_heads, bias=bias)
+        self.value = nn.Linear(hidden_size, hidden_size, bias=bias)
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        self.weight.reset_parameters()
+        self.value.reset_parameters()
+        nn.init.trunc_normal_(self.weight.weight, std=0.02)
+        nn.init.trunc_normal_(self.value.weight, std=0.02)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return attentive_pool(
+            # fmt: off
+            x,
+            self.weight.weight, self.weight.bias,
+            self.value.weight, self.value.bias,
+            self._head_dim,
             # fmt: on
         )

@@ -2,7 +2,7 @@ import pytest
 import torch
 from torch.testing import assert_close
 
-from vit.attention import CrossAttention, SelfAttention
+from vit.attention import AttentivePool, CrossAttention, SelfAttention
 
 
 class TestSelfAttention:
@@ -84,3 +84,27 @@ class TestCrossAttention:
         y3 = layer(x, kv)
         y4 = layer(x, kv)
         assert not torch.allclose(y3, y4)
+
+
+class TestAttentivePool:
+
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+    def test_forward(self, dtype, device):
+        B, L, D = 16, 128, 128
+        layer = AttentivePool(D, D // 16).to(device)
+        x = torch.randn(B, L, D, dtype=dtype, device=device)
+        with torch.autocast(device_type=device.type, dtype=dtype):
+            y = layer(x)
+        assert y.shape == (B, D)
+
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+    def test_backward(self, dtype, device):
+        B, L, D = 16, 128, 128
+        layer = AttentivePool(D, D // 16).to(device)
+        x = torch.randn(B, L, D, dtype=dtype, device=device)
+        with torch.autocast(device_type=device.type, dtype=dtype):
+            y = layer(x)
+        y.sum().backward()
+        for param in layer.parameters():
+            assert param.grad is not None
+            assert not param.grad.isnan().any()
