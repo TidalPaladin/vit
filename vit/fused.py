@@ -39,7 +39,16 @@ class NormLinear(nn.Module):
         return norm_linear(x, self.linear.weight, self.linear.bias, self.norm.weight, self.norm.eps or 1e-5)
 
 
-@torch.compile(fullgraph=True)
+@torch.compile(
+    fullgraph=True,
+    dynamic=False,
+    options={
+        "layout_optimization": True,
+        "prologue_fusion": True,
+        "epilogue_fusion": True,
+        "aggressive_fusion": True,
+    },
+)
 def norm_mlp(
     # fmt: off
     x: Tensor,
@@ -61,7 +70,16 @@ def norm_mlp(
     return x
 
 
-@torch.compile(fullgraph=True)
+@torch.compile(
+    fullgraph=True,
+    dynamic=False,
+    options={
+        "layout_optimization": True,
+        "prologue_fusion": True,
+        "epilogue_fusion": True,
+        "aggressive_fusion": True,
+    },
+)
 def norm_mlp_glu(
     # fmt: off
     x: Tensor,
