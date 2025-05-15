@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Self, Sequence, Type, cast
+from typing import Any, Literal, Self, Sequence, Type, cast
 
 import torch
 import torch.nn as nn
@@ -45,6 +45,7 @@ class ViTConfig:
     activation: str = "srelu"
     drop_path_rate: float = 0.0
     num_register_tokens: int = 0
+    pos_emb: Literal["factorized", "fourier", "none"] = "factorized"
 
     # Trainable blocks
     mlp_requires_grad: bool = True
@@ -87,7 +88,7 @@ class ViT(nn.Module):
             self.register_tokens = None
 
         # Stem tokenizer
-        self.stem = PatchEmbed2d(config.in_channels, config.hidden_size, config.patch_size, pos_emb=True)
+        self.stem = PatchEmbed2d(config.in_channels, config.hidden_size, config.patch_size, pos_emb=config.pos_emb)
 
         self.blocks = nn.ModuleList([self.create_encoder_layer() for _ in range(config.depth)])
 

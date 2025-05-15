@@ -8,7 +8,7 @@ from vit.patch_embed import PatchEmbed2d
 
 class TestPatchEmbed2d:
 
-    @pytest.mark.parametrize("pos_emb", [True, False])
+    @pytest.mark.parametrize("pos_emb", ["factorized", "fourier", "none"])
     def test_forward(self, device, pos_emb):
         B, C, H, W = 2, 3, 64, 64
         D_model = 64
@@ -18,7 +18,7 @@ class TestPatchEmbed2d:
             y = layer(x)
         assert y.shape == (B, math.prod((H // 4, W // 4)), D_model)
 
-    @pytest.mark.parametrize("pos_emb", [True, False])
+    @pytest.mark.parametrize("pos_emb", ["factorized", "fourier", "none"])
     def test_backward(self, device, pos_emb):
         B, C, H, W = 2, 3, 64, 64
         D_model = 64

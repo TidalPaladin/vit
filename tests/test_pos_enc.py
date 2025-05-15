@@ -1,7 +1,8 @@
 import pytest
 import torch
+from torch.testing import assert_close
 
-from vit.pos_enc import RelativeFactorizedPosition, create_grid
+from vit.pos_enc import LearnableFourierFeatures, RelativeFactorizedPosition, create_grid
 
 
 @pytest.mark.parametrize("normalize", [True, False])
@@ -36,3 +37,39 @@ class TestRelativeFactorizedPosition:
         for param in layer.parameters():
             assert param.grad is not None
             assert not param.grad.isnan().any()
+
+
+class TestLearnableFourierFeatures:
+
+    def test_forward(self, device):
+        C, D = 2, 16
+        torch.random.manual_seed(0)
+        layer = LearnableFourierFeatures(C, D).to(device)
+        out = layer((8, 8))
+        assert out.shape == (1, 64, D)
+        assert out.device == device
+
+    def test_backward(self, device):
+        C, D = 2, 16
+        torch.random.manual_seed(0)
+        layer = LearnableFourierFeatures(C, D).to(device)
+        out = layer((8, 8))
+        out.sum().backward()
+        for param in layer.parameters():
+            assert param.grad is not None
+            assert not param.grad.isnan().any()
+
+    def test_deterministic(self, device):
+        C, D = 2, 16
+        torch.random.manual_seed(0)
+        layer = LearnableFourierFeatures(C, D).to(device)
+
+        layer.eval()
+        out1 = layer((8, 8))
+        out2 = layer((8, 8))
+        assert_close(out1, out2)
+
+        layer.train()
+        out1 = layer((8, 8))
+        out2 = layer((8, 8))
+        assert not torch.allclose(out1, out2)
