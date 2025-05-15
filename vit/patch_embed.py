@@ -3,7 +3,6 @@ from typing import Sequence, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange
 from torch import Tensor
 
 from .pos_enc import RelativeFactorizedPosition, relative_factorized_position
@@ -20,7 +19,6 @@ def patch_embed(
 ) -> Tensor:
     patch_size = w_patch.shape[2:]
     y = F.conv2d(x, w_patch, b_patch, stride=patch_size)
-    y = rearrange(y, "b c h w -> b (h w) c")
     y = y.flatten(2).transpose(1, 2)
     y = F.rms_norm(y, y.shape[-1:], w_norm, eps)
     return y

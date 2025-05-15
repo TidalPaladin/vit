@@ -7,12 +7,11 @@ name = "vit"
 description = ""
 requires-python = ">=3.10"
 authors = [
-    {name = "Scott Chase Waggener", email = "tidalpaladin@protonmail.com"},
+    {name = "Scott Chase Waggener", email = "chase.waggener@icloud.com"},
 ]
 dependencies = [
   "torch",
   "numpy",
-  "einops",
   "pyyaml",
 ]
 
