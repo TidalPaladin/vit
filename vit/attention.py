@@ -157,21 +157,33 @@ def separable_polar_approx(
     K = b.shape[-2] - 1
     N = b.shape[-1] - 1
     H = b.shape[0]
+    B, L = r.shape
 
-    # Convert inputs to (B, H, L)
-    r = r.unsqueeze(1).expand(-1, H, -1)
-    theta = theta.unsqueeze(1).expand(-1, H, -1)
+    # Convert inputs to (B, H, L, 1)
+    r = r.view(B, 1, L, 1).expand(-1, H, -1, -1)
+    theta = theta.view(B, 1, L, 1).expand(-1, H, -1, -1)
+
+    # Broadcast b and c to (1, H, K+1, N+1)
+    b = b.view(1, H, K + 1, N + 1).expand(B, -1, -1, -1)
+    c = c.view(1, H, K + 1, N + 1).expand(B, -1, -1, -1)
 
     # Compute polynomial terms: r^0, r^1, ..., r^K
-    r_powers = torch.pow(r.unsqueeze(-1), torch.arange(K + 1, device=r.device, dtype=r.dtype))
+    r_powers = torch.pow(r, torch.arange(K + 1, device=r.device, dtype=r.dtype))
 
     # Compute Fourier terms: cos(0*theta), cos(theta), ..., cos(N*theta)
-    cos_terms = torch.cos(theta.unsqueeze(-1) * torch.arange(N + 1, device=theta.device, dtype=theta.dtype))
-    sin_terms = torch.sin(theta.unsqueeze(-1) * torch.arange(N + 1, device=theta.device, dtype=theta.dtype))
+    cos_terms = torch.cos(theta * torch.arange(N + 1, device=theta.device, dtype=theta.dtype))
+    sin_terms = torch.sin(theta * torch.arange(N + 1, device=theta.device, dtype=theta.dtype))
 
     # Compute approximation using real Fourier basis
-    cos_part = torch.einsum("hkn,bhlk,bhln->bhl", b, r_powers, cos_terms)
-    sin_part = torch.einsum("hkn,bhlk,bhln->bhl", c, r_powers, sin_terms)
+    b = b.mT  # Shape: (b, h, n, k)
+    c = c.mT  # Shape: (b, h, n, k)
+    r_powers = r_powers.mT  # Shape: (b, h, k, l)
+    cos_terms = cos_terms.mT  # Shape: (b, h, n, l)
+    sin_terms = sin_terms.mT  # Shape: (b, h, n, l)
+    b_r = torch.matmul(b, r_powers)  # Shape: (b, h, n, l)
+    c_r = torch.matmul(c, r_powers)  # Shape: (b, h, n, l)
+    cos_part = (b_r * cos_terms).sum(dim=2)  # Shape: (b, h, l)
+    sin_part = (c_r * sin_terms).sum(dim=2)  # Shape: (b, h, l)
 
     return cos_part + sin_part
 
@@ -220,9 +232,11 @@ class PolarApprox(nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
+        # Initialize with small values near zero
         nn.init.trunc_normal_(self.b, std=0.01, a=-0.5, b=0.5)
         nn.init.trunc_normal_(self.c, std=0.01, a=-0.5, b=0.5)
-        self.b[..., 1, 0].data.fill_(1.0)
+        # Set the initial state to resemble 2D-AliBi, linear falloff by radius with angular symmetry
+        self.b[..., 1, 0].data.fill_(-1.0)
 
     def forward(self, r: Tensor, theta: Tensor) -> Tensor:
         return separable_polar_approx(r, theta, self.b, self.c)
@@ -232,10 +246,11 @@ class PolarApprox(nn.Module):
         self,
         r_min: float = 0,
         r_max: float = 10,
-        title=None,
-        filename="",
-        vmax=None,
-        vmin=None,
+        head: int = 0,
+        title: str | None = None,
+        filename: str = "",
+        vmax: float | None = None,
+        vmin: float | None = None,
     ):
         try:
             import matplotlib.pyplot as plt
@@ -248,7 +263,7 @@ class PolarApprox(nn.Module):
         r, theta = torch.meshgrid(r, theta, indexing="ij")
 
         # Compute the function values
-        z = self.forward(r.reshape(1, -1), theta.reshape(1, -1)).view_as(r).contiguous().cpu().numpy()
+        z = self.forward(r.reshape(1, -1), theta.reshape(1, -1))[:, head, :].view_as(r).contiguous().cpu().numpy()
         r = r.cpu().numpy()
         theta = theta.cpu().numpy()
 
@@ -261,6 +276,7 @@ class PolarApprox(nn.Module):
         fig.colorbar(cax, ax=ax, label="f(r, θ)")
         plt.tight_layout()
         plt.savefig(filename)
+        plt.close(fig)
 
 
 class SelfAttention(nn.Module):
