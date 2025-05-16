@@ -279,7 +279,7 @@ def deformable_alibi(
 ) -> Tensor:
     term1 = (r - o).relu() ** c.abs()
     term2 = 1 - delta.tanh().abs() * torch.cos((theta - p) * w / 2).pow(2).pow(m.abs())
-    return term1 * term2
+    return -1 * term1 * term2
 
 
 @torch.compile(fullgraph=True, dynamic=False)
