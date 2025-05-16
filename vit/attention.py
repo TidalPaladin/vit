@@ -1,9 +1,28 @@
-from typing import Tuple
+from typing import Callable, Final, Tuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
+from torch.nn.attention.flex_attention import flex_attention
+
+
+DEFORMABLE_ALIBI_PARAMS: Final = 6
+O_IDX: Final = 0
+C_IDX: Final = 1
+W_IDX: Final = 2
+P_IDX: Final = 3
+DELTA_IDX: Final = 4
+M_IDX: Final = 5
+
+O_INIT: Final = 0.0
+C_INIT: Final = 0.0
+W_INIT: Final = 1.0
+P_INIT: Final = 0.0
+DELTA_INIT: Final = 0.0
+M_INIT: Final = 1.0
+
+# flex_attention = torch.compile(flex_attention)
 
 
 # torch.compile has difficulty with einops.rearrange, so we use our own implementation
@@ -246,5 +265,196 @@ class AttentivePool(nn.Module):
             self.weight.weight, self.weight.bias,
             self.value.weight, self.value.bias,
             self._head_dim,
+            # fmt: on
+        )
+
+
+@torch.compile(fullgraph=True)
+def deformable_alibi(
+    # fmt: off
+    r: Tensor, theta: Tensor,
+    o: Tensor, c: Tensor, 
+    w: Tensor, p: Tensor,
+    delta: Tensor, m: Tensor
+    # fmt: on
+) -> Tensor:
+    term1 = (r - o).relu() ** c.abs()
+    term2 = 1 - delta.tanh().abs() * torch.cos((theta - p) * w / 2).pow(2).pow(m.abs())
+    return term1 * term2
+
+
+def get_score_mod_masked(posq, poskv, o, c, w, p, delta, m):
+    def _score_mod(score, b, h, q, kv):
+        # Load positions from buffers
+        _posq = posq[b, q]
+        _poskv = poskv[b, kv]
+        dist = _poskv - _posq
+
+        # Convert delta to polar coordinates
+        theta = torch.atan2(dist[1], dist[0])
+        r = torch.norm(dist, dim=-1)
+
+        # Extract parameters
+        _o = o[h]
+        _c = c[h]
+        _w = w[h]
+        _p = p[h]
+        _delta = delta[h]
+        _m = m[h]
+
+        bias = deformable_alibi(r, theta, _o, _c, _w, _p, _delta, _m)
+
+        return score - bias
+
+    return _score_mod
+
+
+# @torch.compile(fullgraph=True)
+def attention_qkv_packed_biases(
+    # fmt: off
+    x: Tensor,
+    w_in: Tensor, b_in: Tensor | None,
+    w_norm: Tensor,
+    head_dim: int,
+    w_out: Tensor, b_out: Tensor | None,
+    eps: float,
+    dropout: float,
+    training: bool,
+    attn_func: Callable,
+    score_mod: Callable,
+    # fmt: on
+) -> Tensor:
+    q, k, v = project_qkv_packed(x, w_in, b_in, w_norm, head_dim, eps)
+    o = attn_func(q, k, v, score_mod=score_mod, enable_gqa=True)
+    o = _permute_and_fold_head(o)
+    o = F.linear(o, w_out, b_out)
+    o = F.dropout(o, p=dropout, training=training, inplace=True)
+    return o
+
+
+# @torch.compile(fullgraph=True)
+def attention_q_kv_packed_biases(
+    # fmt: off
+    q: Tensor, kv: Tensor,
+    w_q: Tensor, b_q: Tensor | None,
+    w_kv: Tensor, b_kv: Tensor | None,
+    w_norm: Tensor,
+    head_dim: int,
+    w_out: Tensor, b_out: Tensor | None,
+    eps: float,
+    dropout: float,
+    training: bool,
+    attn_func: Callable,
+    score_mod: Callable,
+    # fmt: on
+) -> Tensor:
+    q, k, v = project_q_kv_packed(q, kv, w_q, b_q, w_kv, b_kv, w_norm, head_dim, eps)
+    o = attn_func(q, k, v, score_mod=score_mod, enable_gqa=True)
+    o = _permute_and_fold_head(o)
+    o = F.linear(o, w_out, b_out)
+    o = F.dropout(o, p=dropout, training=training, inplace=True)
+    return o
+
+
+class SelfAttentionWithBiases(SelfAttention):
+    attention_weights: Tensor | None = None
+
+    def __init__(
+        self,
+        hidden_size: int,
+        num_attention_heads: int,
+        hidden_dropout: float = 0.1,
+        attention_dropout: float = 0.1,
+        bias: bool = True,
+        eps: float = 1e-5,
+    ):
+        self.bias_params = None
+        super().__init__(hidden_size, num_attention_heads, hidden_dropout, attention_dropout, bias, eps)
+        self.bias_params = nn.Parameter(torch.zeros(num_attention_heads, DEFORMABLE_ALIBI_PARAMS))
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        super().reset_parameters()
+        if self.bias_params is not None:
+            self.bias_params[:, 0].data.fill_(O_INIT)
+            self.bias_params[:, 1].data.fill_(C_INIT)
+            self.bias_params[:, 2].data.fill_(W_INIT)
+            self.bias_params[:, 3].data.fill_(P_INIT)
+            self.bias_params[:, 4].data.fill_(DELTA_INIT)
+            self.bias_params[:, 5].data.fill_(M_INIT)
+
+    def forward(self, x: Tensor, pos: Tensor) -> Tensor:
+        posq = posk = pos
+        o = self.bias_params[:, O_IDX]
+        c = self.bias_params[:, C_IDX]
+        w = self.bias_params[:, W_IDX]
+        p = self.bias_params[:, P_IDX]
+        delta = self.bias_params[:, DELTA_IDX]
+        m = self.bias_params[:, M_IDX]
+        score_mod = get_score_mod_masked(posq, posk, o, c, w, p, delta, m)
+        return attention_qkv_packed_biases(
+            # fmt: off
+            x,
+            self.qkv_proj.weight, self.qkv_proj.bias,
+            self.norm.weight,
+            self._head_dim,
+            self.out_proj.weight, self.out_proj.bias,
+            self.norm.eps or 1e-5,
+            self.dropout.p,
+            self.training,
+            flex_attention,
+            score_mod,
+            # fmt: on
+        )
+
+
+class CrossAttentionWithBiases(CrossAttention):
+    attention_weights: Tensor | None = None
+
+    def __init__(
+        self,
+        hidden_size: int,
+        num_attention_heads: int,
+        hidden_dropout: float = 0.1,
+        attention_dropout: float = 0.1,
+        bias: bool = True,
+        eps: float = 1e-5,
+    ):
+        self.bias_params = None
+        super().__init__(hidden_size, num_attention_heads, hidden_dropout, attention_dropout, bias, eps)
+        self.bias_params = nn.Parameter(torch.zeros(num_attention_heads, DEFORMABLE_ALIBI_PARAMS))
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        super().reset_parameters()
+        if self.bias_params is not None:
+            self.bias_params[:, 0].data.fill_(O_INIT)
+            self.bias_params[:, 1].data.fill_(C_INIT)
+            self.bias_params[:, 2].data.fill_(W_INIT)
+            self.bias_params[:, 3].data.fill_(P_INIT)
+            self.bias_params[:, 4].data.fill_(DELTA_INIT)
+            self.bias_params[:, 5].data.fill_(M_INIT)
+
+    def forward(self, q: Tensor, kv: Tensor, posq: Tensor, posk: Tensor) -> Tensor:
+        o = self.bias_params[:, O_IDX]
+        c = self.bias_params[:, C_IDX]
+        w = self.bias_params[:, W_IDX]
+        p = self.bias_params[:, P_IDX]
+        delta = self.bias_params[:, DELTA_IDX]
+        m = self.bias_params[:, M_IDX]
+        score_mod = get_score_mod_masked(posq, posk, o, c, w, p, delta, m)
+        return attention_q_kv_packed_biases(
+            # fmt: off
+            q, kv,
+            self.q_proj.weight, self.q_proj.bias,
+            self.kv_proj.weight, self.kv_proj.bias,
+            self.norm.weight,
+            self._head_dim,
+            self.out_proj.weight, self.out_proj.bias,
+            self.norm.eps or 1e-5,
+            self.dropout.p,
+            self.training,
+            flex_attention,
+            score_mod,
             # fmt: on
         )

@@ -8,6 +8,7 @@ import yaml
 from torch import Tensor
 
 from .patch_embed import PatchEmbed2d
+from .pos_enc import create_grid
 from .tokens import apply_mask, create_mask
 from .transformer import CrossAttentionTransformer, TransformerDecoderLayer, TransformerEncoderLayer
 
@@ -45,7 +46,7 @@ class ViTConfig:
     activation: str = "srelu"
     drop_path_rate: float = 0.0
     num_register_tokens: int = 0
-    pos_emb: Literal["factorized", "fourier", "none"] = "factorized"
+    pos_emb: Literal["alibi", "factorized", "fourier", "none"] = "factorized"
 
     # Trainable blocks
     mlp_requires_grad: bool = True
@@ -88,7 +89,12 @@ class ViT(nn.Module):
             self.register_tokens = None
 
         # Stem tokenizer
-        self.stem = PatchEmbed2d(config.in_channels, config.hidden_size, config.patch_size, pos_emb=config.pos_emb)
+        self.stem = PatchEmbed2d(
+            config.in_channels,
+            config.hidden_size,
+            config.patch_size,
+            pos_emb=config.pos_emb if config.pos_emb != "alibi" else "none",
+        )
 
         self.blocks = nn.ModuleList([self.create_encoder_layer() for _ in range(config.depth)])
 
@@ -171,9 +177,19 @@ class ViT(nn.Module):
         return mask
 
     def forward(self, x: Tensor, mask: Tensor | None = None) -> Tensor:
+        B, _, H, W = x.shape
+        tokenized_size = self.stem.tokenized_size(cast(Any, (H, W)))
+
         x = self.stem(x)
+        if self.config.pos_emb == "alibi":
+            pos = create_grid(tokenized_size, device=x.device, normalize=False)
+        else:
+            pos = None
+
         if mask is not None:
             x = apply_mask(mask, x)
+            if pos is not None:
+                pos = apply_mask(mask, pos)
 
         B = x.shape[0]
         x = (
@@ -183,7 +199,7 @@ class ViT(nn.Module):
         )
         for block in self.blocks:
             assert isinstance(block, TransformerEncoderLayer)
-            x = block(x)
+            x = block(x, pos)
         x = x[:, self.config.num_register_tokens :].contiguous()
         return x
 
