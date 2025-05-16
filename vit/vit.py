@@ -115,6 +115,7 @@ class ViT(nn.Module):
             self.config.bias,
             self.config.activation,
             self.config.drop_path_rate,
+            alibi=self.config.pos_emb == "alibi",
         )
 
     def create_decoder_layer(self) -> TransformerDecoderLayer:
@@ -127,6 +128,7 @@ class ViT(nn.Module):
             self.config.bias,
             self.config.activation,
             self.config.drop_path_rate,
+            alibi=self.config.pos_emb == "alibi",
         )
 
     def create_cross_attention_layer(self) -> CrossAttentionTransformer:
@@ -139,6 +141,7 @@ class ViT(nn.Module):
             self.config.bias,
             self.config.activation,
             self.config.drop_path_rate,
+            alibi=self.config.pos_emb == "alibi",
         )
 
     def create_mask(
@@ -182,7 +185,7 @@ class ViT(nn.Module):
 
         x = self.stem(x)
         if self.config.pos_emb == "alibi":
-            pos = create_grid(tokenized_size, device=x.device, normalize=False)
+            pos = create_grid(tokenized_size, device=x.device, normalize=False).expand(B, -1, -1)
         else:
             pos = None
 
