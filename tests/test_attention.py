@@ -140,6 +140,7 @@ class TestSelfAttentionWithBiases:
         for param in multihead_attention.parameters():
             assert param.grad is not None
             assert not param.grad.isnan().any()
+        assert (multihead_attention.bias_params.grad != 0).any()
 
     def test_forward_determinstic(self, device):
         B, L, D = 16, 128, 128

@@ -1,4 +1,5 @@
 from typing import Callable, Final, Tuple
+import math
 
 import torch
 import torch.nn as nn
@@ -16,13 +17,11 @@ DELTA_IDX: Final = 4
 M_IDX: Final = 5
 
 O_INIT: Final = 0.0
-C_INIT: Final = 0.0
+C_INIT: Final = 1.0
 W_INIT: Final = 1.0
 P_INIT: Final = 0.0
 DELTA_INIT: Final = 0.0
 M_INIT: Final = 1.0
-
-# flex_attention = torch.compile(flex_attention)
 
 
 # torch.compile has difficulty with einops.rearrange, so we use our own implementation
@@ -283,78 +282,43 @@ def deformable_alibi(
     return term1 * term2
 
 
-def get_score_mod_masked(posq, poskv, o, c, w, p, delta, m):
-    def _score_mod(score, b, h, q, kv):
-        # Load positions from buffers
-        _posq = posq[b, q]
-        _poskv = poskv[b, kv]
-        dist = _poskv - _posq
-
-        # Convert delta to polar coordinates
-        theta = torch.atan2(dist[1], dist[0])
-        r = torch.norm(dist, dim=-1)
-
-        # Extract parameters
-        _o = o[h]
-        _c = c[h]
-        _w = w[h]
-        _p = p[h]
-        _delta = delta[h]
-        _m = m[h]
-
-        bias = deformable_alibi(r, theta, _o, _c, _w, _p, _delta, _m)
-
-        return score - bias
-
-    return _score_mod
-
-
-# @torch.compile(fullgraph=True)
-def attention_qkv_packed_biases(
+@torch.compile(fullgraph=True, dynamic=False)
+def compute_bias_grid(
     # fmt: off
-    x: Tensor,
-    w_in: Tensor, b_in: Tensor | None,
-    w_norm: Tensor,
-    head_dim: int,
-    w_out: Tensor, b_out: Tensor | None,
-    eps: float,
-    dropout: float,
-    training: bool,
-    attn_func: Callable,
-    score_mod: Callable,
+    q: Tensor, k: Tensor,
+    o: Tensor, c: Tensor, 
+    w: Tensor, p: Tensor,
+    delta: Tensor, m: Tensor
     # fmt: on
 ) -> Tensor:
-    q, k, v = project_qkv_packed(x, w_in, b_in, w_norm, head_dim, eps)
-    o = attn_func(q, k, v, score_mod=score_mod, enable_gqa=True)
-    o = _permute_and_fold_head(o)
-    o = F.linear(o, w_out, b_out)
-    o = F.dropout(o, p=dropout, training=training, inplace=True)
-    return o
+    B, Lq, C = q.shape
+    _, Lk, _ = k.shape
+    q = q.view(B, Lq, 1, C)
+    k = k.view(B, 1, Lk, C)
+    dist = q - k
+    theta = torch.atan2(dist[..., 1], dist[..., 0])
+    r = torch.norm(dist, dim=-1)
+
+    H = o.shape[0]
+    theta = theta.view(B, 1, Lq, Lk)
+    r = r.view(B, 1, Lq, Lk)
+    o = o.view(1, H, 1, 1)
+    c = c.view(1, H, 1, 1)
+    w = w.view(1, H, 1, 1)
+    p = p.view(1, H, 1, 1)
+    delta = delta.view(1, H, 1, 1)
+    m = m.view(1, H, 1, 1)
+    return deformable_alibi(r, theta, o, c, w, p, delta, m)
 
 
-# @torch.compile(fullgraph=True)
-def attention_q_kv_packed_biases(
-    # fmt: off
-    q: Tensor, kv: Tensor,
-    w_q: Tensor, b_q: Tensor | None,
-    w_kv: Tensor, b_kv: Tensor | None,
-    w_norm: Tensor,
-    head_dim: int,
-    w_out: Tensor, b_out: Tensor | None,
-    eps: float,
-    dropout: float,
-    training: bool,
-    attn_func: Callable,
-    score_mod: Callable,
-    # fmt: on
-) -> Tensor:
-    q, k, v = project_q_kv_packed(q, kv, w_q, b_q, w_kv, b_kv, w_norm, head_dim, eps)
-    o = attn_func(q, k, v, score_mod=score_mod, enable_gqa=True)
-    o = _permute_and_fold_head(o)
-    o = F.linear(o, w_out, b_out)
-    o = F.dropout(o, p=dropout, training=training, inplace=True)
-    return o
-
+def init_bias_params(params: Tensor) -> Tensor:
+    nn.init.zeros_(params[:, O_IDX])
+    nn.init.trunc_normal_(params[:, C_IDX], mean=1, std=0.1, a=0.5, b=1.5)
+    nn.init.constant_(params[:, W_IDX], 1.0)
+    nn.init.constant_(params[:, P_IDX], 0.0)
+    nn.init.trunc_normal_(params[:, DELTA_IDX], std=1.0)
+    nn.init.constant_(params[:, M_IDX], 1.0)
+    
 
 class SelfAttentionWithBiases(SelfAttention):
     attention_weights: Tensor | None = None
@@ -376,12 +340,7 @@ class SelfAttentionWithBiases(SelfAttention):
     def reset_parameters(self) -> None:
         super().reset_parameters()
         if self.bias_params is not None:
-            self.bias_params[:, 0].data.fill_(O_INIT)
-            self.bias_params[:, 1].data.fill_(C_INIT)
-            self.bias_params[:, 2].data.fill_(W_INIT)
-            self.bias_params[:, 3].data.fill_(P_INIT)
-            self.bias_params[:, 4].data.fill_(DELTA_INIT)
-            self.bias_params[:, 5].data.fill_(M_INIT)
+            init_bias_params(self.bias_params)
 
     def forward(self, x: Tensor, pos: Tensor) -> Tensor:
         posq = posk = pos
@@ -391,19 +350,19 @@ class SelfAttentionWithBiases(SelfAttention):
         p = self.bias_params[:, P_IDX]
         delta = self.bias_params[:, DELTA_IDX]
         m = self.bias_params[:, M_IDX]
-        score_mod = get_score_mod_masked(posq, posk, o, c, w, p, delta, m)
-        return attention_qkv_packed_biases(
+        bias = compute_bias_grid(posq, posk, o, c, w, p, delta, m)
+        return attention_qkv_packed(
             # fmt: off
             x,
             self.qkv_proj.weight, self.qkv_proj.bias,
             self.norm.weight,
             self._head_dim,
             self.out_proj.weight, self.out_proj.bias,
+            bias.float(),
             self.norm.eps or 1e-5,
+            self.attention_dropout.p,
             self.dropout.p,
             self.training,
-            flex_attention,
-            score_mod,
             # fmt: on
         )
 
@@ -428,12 +387,7 @@ class CrossAttentionWithBiases(CrossAttention):
     def reset_parameters(self) -> None:
         super().reset_parameters()
         if self.bias_params is not None:
-            self.bias_params[:, 0].data.fill_(O_INIT)
-            self.bias_params[:, 1].data.fill_(C_INIT)
-            self.bias_params[:, 2].data.fill_(W_INIT)
-            self.bias_params[:, 3].data.fill_(P_INIT)
-            self.bias_params[:, 4].data.fill_(DELTA_INIT)
-            self.bias_params[:, 5].data.fill_(M_INIT)
+            init_bias_params(self.bias_params)
 
     def forward(self, q: Tensor, kv: Tensor, posq: Tensor, posk: Tensor) -> Tensor:
         o = self.bias_params[:, O_IDX]
@@ -442,8 +396,8 @@ class CrossAttentionWithBiases(CrossAttention):
         p = self.bias_params[:, P_IDX]
         delta = self.bias_params[:, DELTA_IDX]
         m = self.bias_params[:, M_IDX]
-        score_mod = get_score_mod_masked(posq, posk, o, c, w, p, delta, m)
-        return attention_q_kv_packed_biases(
+        bias = compute_bias_grid(posq, posk, o, c, w, p, delta, m)
+        return attention_q_kv_packed(
             # fmt: off
             q, kv,
             self.q_proj.weight, self.q_proj.bias,
@@ -451,10 +405,10 @@ class CrossAttentionWithBiases(CrossAttention):
             self.norm.weight,
             self._head_dim,
             self.out_proj.weight, self.out_proj.bias,
+            bias.float(),
             self.norm.eps or 1e-5,
+            self.attention_dropout.p,
             self.dropout.p,
             self.training,
-            flex_attention,
-            score_mod,
             # fmt: on
         )
