@@ -72,7 +72,7 @@ def project_q_kv_packed(
     return q, k, v
 
 
-# @torch.compile(fullgraph=True)
+@torch.compile(fullgraph=True)
 def attention_qkv_packed(
     # fmt: off
     x: Tensor,
@@ -98,7 +98,7 @@ def attention_qkv_packed(
     return o
 
 
-# @torch.compile(fullgraph=True)
+@torch.compile(fullgraph=True)
 def attention_q_kv_packed(
     # fmt: off
     q: Tensor, kv: Tensor,
@@ -143,7 +143,7 @@ def attentive_pool(
     return v.view(B, D)
 
 
-# @torch.compile(fullgraph=True, dynamic=False)
+@torch.compile(fullgraph=True, dynamic=False)
 def separable_polar_approx(
     # fmt: off
     r: Tensor, theta: Tensor,
@@ -176,7 +176,7 @@ def separable_polar_approx(
     return cos_part + sin_part
 
 
-# @torch.compile(fullgraph=True, dynamic=False)
+@torch.compile(fullgraph=True, dynamic=False)
 def compute_bias_grid(
     # fmt: off
     q: Tensor, k: Tensor,
@@ -203,7 +203,7 @@ def num_extra_tokens(q: Tensor, posq: Tensor) -> int:
     return q.shape[1] - posq.shape[1]
 
 
-# @torch.compile(fullgraph=True)
+@torch.compile(fullgraph=True)
 def expand_bias_grid_for_extra_tokens(bias: Tensor, extra_tokens: int) -> Tensor:
     B, H, Lq, Lk = bias.shape
     result = bias.new_zeros(B, H, Lq + extra_tokens, Lk + extra_tokens)
