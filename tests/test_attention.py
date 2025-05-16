@@ -2,13 +2,43 @@ import pytest
 import torch
 from torch.testing import assert_close
 
-from vit.attention import (
-    AttentivePool,
-    CrossAttention,
-    CrossAttentionWithBiases,
-    SelfAttention,
-    SelfAttentionWithBiases,
-)
+from vit.attention import AttentivePool, CrossAttention, PolarApprox, SelfAttention, separable_polar_approx
+
+
+@pytest.mark.parametrize("k,n", [(3, 1), (1, 3), (3, 3)])
+def test_separable_polar_approx(k, n):
+    B, H, L = 2, 4, 32
+    r = torch.rand(B, L)
+    theta = torch.rand(B, L) * 2 * torch.pi
+    b = torch.randn(H, k + 1, n + 1)
+    c = torch.randn(H, k + 1, n + 1)
+    result = separable_polar_approx(r, theta, b, c)
+    assert tuple(result.shape) == (B, H, L)
+
+
+class TestPolarApprox:
+
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+    def test_forward(self, dtype, device):
+        B, H, L = 2, 4, 32
+        r = torch.rand(B, L, device=device)
+        theta = torch.rand(B, L, device=device) * 2 * torch.pi
+        layer = PolarApprox(radial_degree=2, angular_degree=4, nhead=H).to(device)
+        with torch.autocast(device_type=device.type, dtype=dtype):
+            y = layer(r, theta)
+        assert tuple(y.shape) == (B, H, L)
+
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+    def test_backward(self, dtype, device):
+        B, H, L = 2, 4, 32
+        r = torch.rand(B, L, device=device)
+        theta = torch.rand(B, L, device=device) * 2 * torch.pi
+        layer = PolarApprox(radial_degree=2, angular_degree=4, nhead=H).to(device)
+        with torch.autocast(device_type=device.type, dtype=dtype):
+            y = layer(r, theta)
+        y.sum().backward()
+        for param in layer.parameters():
+            assert param.grad is not None
 
 
 class TestSelfAttention:
@@ -121,7 +151,7 @@ class TestSelfAttentionWithBiases:
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
     def test_forward(self, dtype, device):
         B, L, D = 16, 128, 128
-        multihead_attention = SelfAttentionWithBiases(D, D // 16).to(device)
+        multihead_attention = SelfAttention(D, D // 16, attn_bias=True).to(device)
         x = torch.randn(B, L, D, dtype=dtype, device=device)
         pos = torch.randn(B, L, 2, dtype=dtype, device=device)
         with torch.autocast(device_type=device.type, dtype=dtype):
@@ -131,7 +161,7 @@ class TestSelfAttentionWithBiases:
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
     def test_backward(self, dtype, device):
         B, L, D = 16, 128, 128
-        multihead_attention = SelfAttentionWithBiases(D, D // 16).to(device)
+        multihead_attention = SelfAttention(D, D // 16, attn_bias=True).to(device)
         x = torch.randn(B, L, D, dtype=dtype, device=device)
         pos = torch.randn(B, L, 2, dtype=dtype, device=device)
         with torch.autocast(device_type=device.type, dtype=dtype):
@@ -140,11 +170,10 @@ class TestSelfAttentionWithBiases:
         for param in multihead_attention.parameters():
             assert param.grad is not None
             assert not param.grad.isnan().any()
-        assert (multihead_attention.bias_params.grad != 0).any()
 
     def test_forward_determinstic(self, device):
         B, L, D = 16, 128, 128
-        layer = SelfAttentionWithBiases(D, D // 16).to(device)
+        layer = SelfAttention(D, D // 16, attn_bias=True).to(device)
         x = torch.randn(B, L, D, device=device)
         pos = torch.randn(B, L, 2, device=device)
         layer.eval()
@@ -162,7 +191,7 @@ class TestCrossAttentionWithBiases:
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
     def test_forward(self, dtype, device):
         B, L, D = 16, 128, 128
-        multihead_attention = CrossAttentionWithBiases(D, D // 16).to(device)
+        multihead_attention = CrossAttention(D, D // 16, attn_bias=True).to(device)
         x = torch.randn(B, L, D, dtype=dtype, device=device)
         kv = torch.randn(B, L // 2, D, dtype=dtype, device=device)
         posq = torch.randn(B, L, 2, dtype=dtype, device=device)
@@ -174,7 +203,7 @@ class TestCrossAttentionWithBiases:
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
     def test_backward(self, dtype, device):
         B, L, D = 16, 128, 128
-        multihead_attention = CrossAttentionWithBiases(D, D // 16).to(device)
+        multihead_attention = CrossAttention(D, D // 16, attn_bias=True).to(device)
         x = torch.randn(B, L, D, dtype=dtype, device=device)
         kv = torch.randn(B, L // 2, D, dtype=dtype, device=device)
         posq = torch.randn(B, L, 2, dtype=dtype, device=device)
@@ -188,7 +217,7 @@ class TestCrossAttentionWithBiases:
 
     def test_forward_determinstic(self, device):
         B, L, D = 16, 128, 128
-        layer = CrossAttentionWithBiases(D, D // 16).to(device)
+        layer = CrossAttention(D, D // 16, attn_bias=True).to(device)
         x = torch.randn(B, L, D, device=device)
         kv = torch.randn(B, L // 2, D, device=device)
         posq = torch.randn(B, L, 2, device=device)

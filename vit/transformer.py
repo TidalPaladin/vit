@@ -1,7 +1,7 @@
 import torch.nn as nn
 from torch import Tensor
 
-from .attention import CrossAttention, CrossAttentionWithBiases, SelfAttention, SelfAttentionWithBiases
+from .attention import CrossAttention, SelfAttention
 from .drop_path import drop_path
 from .fused import NormMLP
 
@@ -19,28 +19,23 @@ class TransformerEncoderLayer(nn.Module):
         activation: str = "gelu",
         drop_path_rate: float = 0.0,
         eps: float = 1e-5,
-        alibi: bool = False,
+        attn_bias: bool = False,
+        radial_degree: int = 2,
+        angular_degree: int = 4,
     ):
         super().__init__()
         self.drop_path_rate = drop_path_rate
-        if alibi:
-            self.self_attention = SelfAttentionWithBiases(
-                hidden_size,
-                num_attention_heads,
-                hidden_dropout,
-                attention_dropout,
-                bias,
-                eps,
-            )
-        else:
-            self.self_attention = SelfAttention(
-                hidden_size,
-                num_attention_heads,
-                hidden_dropout,
-                attention_dropout,
-                bias,
-                eps,
-            )
+        self.self_attention = SelfAttention(
+            hidden_size,
+            num_attention_heads,
+            hidden_dropout,
+            attention_dropout,
+            bias,
+            eps,
+            attn_bias,
+            radial_degree,
+            angular_degree,
+        )
         self.mlp = NormMLP(hidden_size, ffn_hidden_size, bias, activation, eps, hidden_dropout)
         self.reset_parameters()
 
@@ -49,11 +44,7 @@ class TransformerEncoderLayer(nn.Module):
         self.mlp.reset_parameters()
 
     def forward(self, x: Tensor, pos: Tensor | None = None) -> Tensor:
-        o = (
-            self.self_attention(x, pos)
-            if isinstance(self.self_attention, SelfAttentionWithBiases)
-            else self.self_attention(x)
-        )
+        o = self.self_attention(x, pos)
         x = x + drop_path(o, self.drop_path_rate, self.training)
 
         o = self.mlp(x)
@@ -74,44 +65,34 @@ class TransformerDecoderLayer(nn.Module):
         activation: str = "gelu",
         drop_path_rate: float = 0.0,
         eps: float = 1e-5,
-        alibi: bool = False,
+        attn_bias: bool = False,
+        radial_degree: int = 2,
+        angular_degree: int = 4,
     ):
         super().__init__()
         self.drop_path_rate = drop_path_rate
-        if alibi:
-            self.self_attention = SelfAttentionWithBiases(
-                hidden_size,
-                num_attention_heads,
-                hidden_dropout,
-                attention_dropout,
-                bias,
-                eps,
-            )
-            self.cross_attention = CrossAttentionWithBiases(
-                hidden_size,
-                num_attention_heads,
-                hidden_dropout,
-                attention_dropout,
-                bias,
-                eps,
-            )
-        else:
-            self.self_attention = SelfAttention(
-                hidden_size,
-                num_attention_heads,
-                hidden_dropout,
-                attention_dropout,
-                bias,
-                eps,
-            )
-            self.cross_attention = CrossAttention(
-                hidden_size,
-                num_attention_heads,
-                hidden_dropout,
-                attention_dropout,
-                bias,
-                eps,
-            )
+        self.self_attention = SelfAttention(
+            hidden_size,
+            num_attention_heads,
+            hidden_dropout,
+            attention_dropout,
+            bias,
+            eps,
+            attn_bias,
+            radial_degree,
+            angular_degree,
+        )
+        self.cross_attention = CrossAttention(
+            hidden_size,
+            num_attention_heads,
+            hidden_dropout,
+            attention_dropout,
+            bias,
+            eps,
+            attn_bias,
+            radial_degree,
+            angular_degree,
+        )
         self.mlp = NormMLP(hidden_size, ffn_hidden_size, bias, activation, eps, hidden_dropout)
         self.reset_parameters()
 
@@ -121,18 +102,10 @@ class TransformerDecoderLayer(nn.Module):
         self.mlp.reset_parameters()
 
     def forward(self, x: Tensor, kv: Tensor, posq: Tensor | None = None, posk: Tensor | None = None) -> Tensor:
-        o = (
-            self.self_attention(x, posq)
-            if isinstance(self.self_attention, SelfAttentionWithBiases)
-            else self.self_attention(x)
-        )
+        o = self.self_attention(x, posq)
         x = x + drop_path(o, self.drop_path_rate, self.training)
 
-        o = (
-            self.cross_attention(x, kv, posq, posk)
-            if isinstance(self.cross_attention, CrossAttentionWithBiases)
-            else self.cross_attention(x, kv)
-        )
+        o = self.cross_attention(x, kv, posq, posk)
         x = x + drop_path(o, self.drop_path_rate, self.training)
 
         o = self.mlp(x)
@@ -153,28 +126,23 @@ class CrossAttentionTransformer(nn.Module):
         activation: str = "gelu",
         drop_path_rate: float = 0.0,
         eps: float = 1e-5,
-        alibi: bool = False,
+        attn_bias: bool = False,
+        radial_degree: int = 2,
+        angular_degree: int = 4,
     ):
         super().__init__()
         self.drop_path_rate = drop_path_rate
-        if alibi:
-            self.cross_attention = CrossAttentionWithBiases(
-                hidden_size,
-                num_attention_heads,
-                hidden_dropout,
-                attention_dropout,
-                bias,
-                eps,
-            )
-        else:
-            self.cross_attention = CrossAttention(
-                hidden_size,
-                num_attention_heads,
-                hidden_dropout,
-                attention_dropout,
-                bias,
-                eps,
-            )
+        self.cross_attention = CrossAttention(
+            hidden_size,
+            num_attention_heads,
+            hidden_dropout,
+            attention_dropout,
+            bias,
+            eps,
+            attn_bias,
+            radial_degree,
+            angular_degree,
+        )
         self.mlp = NormMLP(hidden_size, ffn_hidden_size, bias, activation, eps, hidden_dropout)
         self.reset_parameters()
 
@@ -183,11 +151,7 @@ class CrossAttentionTransformer(nn.Module):
         self.mlp.reset_parameters()
 
     def forward(self, x: Tensor, kv: Tensor, posq: Tensor | None = None, posk: Tensor | None = None) -> Tensor:
-        o = (
-            self.cross_attention(x, kv, posq, posk)
-            if isinstance(self.cross_attention, CrossAttentionWithBiases)
-            else self.cross_attention(x, kv)
-        )
+        o = self.cross_attention(x, kv, posq, posk)
         x = x + drop_path(o, self.drop_path_rate, self.training)
 
         o = self.mlp(x)

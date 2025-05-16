@@ -1,11 +1,10 @@
-from typing import Callable, Final, Tuple
 import math
+from typing import Final, Tuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
-from torch.nn.attention.flex_attention import flex_attention
 
 
 DEFORMABLE_ALIBI_PARAMS: Final = 6
@@ -73,7 +72,7 @@ def project_q_kv_packed(
     return q, k, v
 
 
-@torch.compile(fullgraph=True)
+# @torch.compile(fullgraph=True)
 def attention_qkv_packed(
     # fmt: off
     x: Tensor,
@@ -99,7 +98,7 @@ def attention_qkv_packed(
     return o
 
 
-@torch.compile(fullgraph=True)
+# @torch.compile(fullgraph=True)
 def attention_q_kv_packed(
     # fmt: off
     q: Tensor, kv: Tensor,
@@ -144,6 +143,126 @@ def attentive_pool(
     return v.view(B, D)
 
 
+# @torch.compile(fullgraph=True, dynamic=False)
+def separable_polar_approx(
+    # fmt: off
+    r: Tensor, theta: Tensor,
+    b: Tensor, c: Tensor,
+    # fmt: on
+) -> Tensor:
+    assert r.ndim == 2, f"r.ndim: {r.ndim}"
+    assert theta.shape == r.shape, f"theta.shape: {theta.shape}, r.shape: {r.shape}"
+    assert b.ndim == 3, f"b.ndim: {b.ndim}"
+    assert c.ndim == 3, f"c.ndim: {c.ndim}"
+    K = b.shape[-2] - 1
+    N = b.shape[-1] - 1
+    H = b.shape[0]
+
+    # Convert inputs to (B, H, L)
+    r = r.unsqueeze(1).expand(-1, H, -1)
+    theta = theta.unsqueeze(1).expand(-1, H, -1)
+
+    # Compute polynomial terms: r^0, r^1, ..., r^K
+    r_powers = torch.pow(r.unsqueeze(-1), torch.arange(K + 1, device=r.device, dtype=r.dtype))
+
+    # Compute Fourier terms: cos(0*theta), cos(theta), ..., cos(N*theta)
+    cos_terms = torch.cos(theta.unsqueeze(-1) * torch.arange(N + 1, device=theta.device, dtype=theta.dtype))
+    sin_terms = torch.sin(theta.unsqueeze(-1) * torch.arange(N + 1, device=theta.device, dtype=theta.dtype))
+
+    # Compute approximation using real Fourier basis
+    cos_part = torch.einsum("hkn,bhlk,bhln->bhl", b, r_powers, cos_terms)
+    sin_part = torch.einsum("hkn,bhlk,bhln->bhl", c, r_powers, sin_terms)
+
+    return cos_part + sin_part
+
+
+# @torch.compile(fullgraph=True, dynamic=False)
+def compute_bias_grid(
+    # fmt: off
+    q: Tensor, k: Tensor,
+    b: Tensor, c: Tensor,
+    # fmt: on
+) -> Tensor:
+    B, Lq, C = q.shape
+    _, Lk, _ = k.shape
+    H = b.shape[0]
+    q = q.view(B, Lq, 1, C)
+    k = k.view(B, 1, Lk, C)
+    dist = q - k
+    theta = torch.atan2(dist[..., 1], dist[..., 0])
+    r = torch.norm(dist, dim=-1)
+    assert r.shape == (B, Lq, Lk), f"r.shape: {r.shape}, (B, Lq, Lk): {(B, Lq, Lk)}"
+    assert theta.shape == (B, Lq, Lk), f"theta.shape: {theta.shape}, (B, Lq, Lk): {(B, Lq, Lk)}"
+    bias = separable_polar_approx(r.view(B, -1), theta.view(B, -1), b, c).view(B, H, Lq, Lk)
+    return bias
+
+
+def num_extra_tokens(q: Tensor, posq: Tensor) -> int:
+    if q.shape[1] < posq.shape[1]:
+        raise ValueError(f"q tokens must be >= posq tokens, q.shape: {q.shape}, posq.shape: {posq.shape}")
+    return q.shape[1] - posq.shape[1]
+
+
+# @torch.compile(fullgraph=True)
+def expand_bias_grid_for_extra_tokens(bias: Tensor, extra_tokens: int) -> Tensor:
+    B, H, Lq, Lk = bias.shape
+    result = bias.new_zeros(B, H, Lq + extra_tokens, Lk + extra_tokens)
+    result[:, :, :Lq, :Lk] = bias
+    return result
+
+
+class PolarApprox(nn.Module):
+
+    def __init__(self, radial_degree: int = 2, angular_degree: int = 4, nhead: int = 1):
+        super(PolarApprox, self).__init__()
+        self.b = nn.Parameter(torch.empty(nhead, radial_degree + 1, angular_degree + 1))
+        self.c = nn.Parameter(torch.empty(nhead, radial_degree + 1, angular_degree + 1))
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        nn.init.trunc_normal_(self.b, std=0.01, a=-0.5, b=0.5)
+        nn.init.trunc_normal_(self.c, std=0.01, a=-0.5, b=0.5)
+        self.b[..., 1, 0].data.fill_(1.0)
+
+    def forward(self, r: Tensor, theta: Tensor) -> Tensor:
+        return separable_polar_approx(r, theta, self.b, self.c)
+
+    @torch.no_grad()
+    def plot(
+        self,
+        r_min: float = 0,
+        r_max: float = 10,
+        title=None,
+        filename="",
+        vmax=None,
+        vmin=None,
+    ):
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError:
+            raise ImportError("matplotlib is required to plot the function")
+
+        # Create grid
+        r = torch.linspace(r_min, r_max, 100, device=self.b.device, dtype=self.b.dtype)
+        theta = torch.linspace(0, 2 * math.pi, 360, device=self.b.device, dtype=self.b.dtype)
+        r, theta = torch.meshgrid(r, theta, indexing="ij")
+
+        # Compute the function values
+        z = self.forward(r.reshape(1, -1), theta.reshape(1, -1)).view_as(r).contiguous().cpu().numpy()
+        r = r.cpu().numpy()
+        theta = theta.cpu().numpy()
+
+        # 2D Polar Heatmap
+        fig = plt.figure(figsize=(6, 6))
+        ax = fig.add_subplot(111, projection="polar")
+        cax = ax.pcolormesh(theta, r, z, cmap="viridis", vmax=vmax, vmin=vmin)
+        if title is not None:
+            ax.set_title(f"{title}")
+        fig.colorbar(cax, ax=ax, label="f(r, θ)")
+        plt.tight_layout()
+        plt.savefig(filename)
+
+
 class SelfAttention(nn.Module):
     attention_weights: Tensor | None = None
 
@@ -155,6 +274,9 @@ class SelfAttention(nn.Module):
         attention_dropout: float = 0.1,
         bias: bool = True,
         eps: float = 1e-5,
+        attn_bias: bool = False,
+        radial_degree: int = 2,
+        angular_degree: int = 4,
     ):
         super().__init__()
         self.norm = nn.RMSNorm(hidden_size, eps=eps)
@@ -162,6 +284,7 @@ class SelfAttention(nn.Module):
         self.out_proj = nn.Linear(hidden_size, hidden_size, bias=bias)
         self.dropout = nn.Dropout(hidden_dropout)
         self.attention_dropout = nn.Dropout(attention_dropout)
+        self.attn_bias = PolarApprox(radial_degree, angular_degree, num_attention_heads) if attn_bias else None
         self._head_dim = hidden_size // num_attention_heads
         self.reset_parameters()
 
@@ -170,8 +293,20 @@ class SelfAttention(nn.Module):
         self.out_proj.reset_parameters()
         self.norm.reset_parameters()
         nn.init.trunc_normal_(self.qkv_proj.weight, std=0.02)
+        if self.attn_bias is not None:
+            self.attn_bias.reset_parameters()
 
-    def forward(self, x: Tensor, attn_mask: Tensor | None = None) -> Tensor:
+    def forward(self, x: Tensor, pos: Tensor | None = None, attn_mask: Tensor | None = None) -> Tensor:
+        if self.attn_bias is not None:
+            if attn_mask is not None:
+                raise ValueError("attn_mask is not supported when using attention biases")
+            if pos is None:
+                raise ValueError("pos is required when using attention biases")
+            posq = posk = pos
+            attn_mask = compute_bias_grid(posq, posk, self.attn_bias.b, self.attn_bias.c)
+            if num_extra_tokens(x, pos) > 0:
+                attn_mask = expand_bias_grid_for_extra_tokens(attn_mask, num_extra_tokens(x, pos))
+
         return attention_qkv_packed(
             # fmt: off
             x,
@@ -199,6 +334,9 @@ class CrossAttention(nn.Module):
         attention_dropout: float = 0.1,
         bias: bool = True,
         eps: float = 1e-5,
+        attn_bias: bool = False,
+        radial_degree: int = 2,
+        angular_degree: int = 4,
     ):
         super().__init__()
         self.norm = nn.RMSNorm(hidden_size, eps=eps)
@@ -207,6 +345,7 @@ class CrossAttention(nn.Module):
         self.out_proj = nn.Linear(hidden_size, hidden_size, bias=bias)
         self.dropout = nn.Dropout(hidden_dropout)
         self.attention_dropout = nn.Dropout(attention_dropout)
+        self.attn_bias = PolarApprox(radial_degree, angular_degree, num_attention_heads) if attn_bias else None
         self._head_dim = hidden_size // num_attention_heads
         self.reset_parameters()
 
@@ -217,8 +356,26 @@ class CrossAttention(nn.Module):
         self.norm.reset_parameters()
         nn.init.trunc_normal_(self.q_proj.weight, std=0.02)
         nn.init.trunc_normal_(self.kv_proj.weight, std=0.02)
+        if self.attn_bias is not None:
+            self.attn_bias.reset_parameters()
 
-    def forward(self, q: Tensor, kv: Tensor, attn_mask: Tensor | None = None) -> Tensor:
+    def forward(
+        self,
+        q: Tensor,
+        kv: Tensor,
+        posq: Tensor | None = None,
+        posk: Tensor | None = None,
+        attn_mask: Tensor | None = None,
+    ) -> Tensor:
+        if self.attn_bias is not None:
+            if attn_mask is not None:
+                raise ValueError("attn_mask is not supported when using attention biases")
+            if posq is None:
+                raise ValueError("posq is required when using attention biases")
+            if posk is None:
+                raise ValueError("posk is required when using attention biases")
+            attn_mask = compute_bias_grid(posq, posk, self.attn_bias.b, self.attn_bias.c)
+
         return attention_q_kv_packed(
             # fmt: off
             q, kv,
@@ -264,151 +421,5 @@ class AttentivePool(nn.Module):
             self.weight.weight, self.weight.bias,
             self.value.weight, self.value.bias,
             self._head_dim,
-            # fmt: on
-        )
-
-
-@torch.compile(fullgraph=True)
-def deformable_alibi(
-    # fmt: off
-    r: Tensor, theta: Tensor,
-    o: Tensor, c: Tensor, 
-    w: Tensor, p: Tensor,
-    delta: Tensor, m: Tensor
-    # fmt: on
-) -> Tensor:
-    term1 = (r - o).relu() ** c.abs()
-    term2 = 1 - delta.tanh().abs() * torch.cos((theta - p) * w / 2).pow(2).pow(m.abs())
-    return -1 * term1 * term2
-
-
-@torch.compile(fullgraph=True, dynamic=False)
-def compute_bias_grid(
-    # fmt: off
-    q: Tensor, k: Tensor,
-    o: Tensor, c: Tensor, 
-    w: Tensor, p: Tensor,
-    delta: Tensor, m: Tensor
-    # fmt: on
-) -> Tensor:
-    B, Lq, C = q.shape
-    _, Lk, _ = k.shape
-    q = q.view(B, Lq, 1, C)
-    k = k.view(B, 1, Lk, C)
-    dist = q - k
-    theta = torch.atan2(dist[..., 1], dist[..., 0])
-    r = torch.norm(dist, dim=-1)
-
-    H = o.shape[0]
-    theta = theta.view(B, 1, Lq, Lk)
-    r = r.view(B, 1, Lq, Lk)
-    o = o.view(1, H, 1, 1)
-    c = c.view(1, H, 1, 1)
-    w = w.view(1, H, 1, 1)
-    p = p.view(1, H, 1, 1)
-    delta = delta.view(1, H, 1, 1)
-    m = m.view(1, H, 1, 1)
-    return deformable_alibi(r, theta, o, c, w, p, delta, m)
-
-
-def init_bias_params(params: Tensor) -> Tensor:
-    nn.init.zeros_(params[:, O_IDX])
-    nn.init.trunc_normal_(params[:, C_IDX], mean=1, std=0.1, a=0.5, b=1.5)
-    nn.init.constant_(params[:, W_IDX], 1.0)
-    nn.init.constant_(params[:, P_IDX], 0.0)
-    nn.init.trunc_normal_(params[:, DELTA_IDX], std=1.0)
-    nn.init.constant_(params[:, M_IDX], 1.0)
-    
-
-class SelfAttentionWithBiases(SelfAttention):
-    attention_weights: Tensor | None = None
-
-    def __init__(
-        self,
-        hidden_size: int,
-        num_attention_heads: int,
-        hidden_dropout: float = 0.1,
-        attention_dropout: float = 0.1,
-        bias: bool = True,
-        eps: float = 1e-5,
-    ):
-        self.bias_params = None
-        super().__init__(hidden_size, num_attention_heads, hidden_dropout, attention_dropout, bias, eps)
-        self.bias_params = nn.Parameter(torch.zeros(num_attention_heads, DEFORMABLE_ALIBI_PARAMS))
-        self.reset_parameters()
-
-    def reset_parameters(self) -> None:
-        super().reset_parameters()
-        if self.bias_params is not None:
-            init_bias_params(self.bias_params)
-
-    def forward(self, x: Tensor, pos: Tensor) -> Tensor:
-        posq = posk = pos
-        o = self.bias_params[:, O_IDX]
-        c = self.bias_params[:, C_IDX]
-        w = self.bias_params[:, W_IDX]
-        p = self.bias_params[:, P_IDX]
-        delta = self.bias_params[:, DELTA_IDX]
-        m = self.bias_params[:, M_IDX]
-        bias = compute_bias_grid(posq, posk, o, c, w, p, delta, m)
-        return attention_qkv_packed(
-            # fmt: off
-            x,
-            self.qkv_proj.weight, self.qkv_proj.bias,
-            self.norm.weight,
-            self._head_dim,
-            self.out_proj.weight, self.out_proj.bias,
-            bias.float(),
-            self.norm.eps or 1e-5,
-            self.attention_dropout.p,
-            self.dropout.p,
-            self.training,
-            # fmt: on
-        )
-
-
-class CrossAttentionWithBiases(CrossAttention):
-    attention_weights: Tensor | None = None
-
-    def __init__(
-        self,
-        hidden_size: int,
-        num_attention_heads: int,
-        hidden_dropout: float = 0.1,
-        attention_dropout: float = 0.1,
-        bias: bool = True,
-        eps: float = 1e-5,
-    ):
-        self.bias_params = None
-        super().__init__(hidden_size, num_attention_heads, hidden_dropout, attention_dropout, bias, eps)
-        self.bias_params = nn.Parameter(torch.zeros(num_attention_heads, DEFORMABLE_ALIBI_PARAMS))
-        self.reset_parameters()
-
-    def reset_parameters(self) -> None:
-        super().reset_parameters()
-        if self.bias_params is not None:
-            init_bias_params(self.bias_params)
-
-    def forward(self, q: Tensor, kv: Tensor, posq: Tensor, posk: Tensor) -> Tensor:
-        o = self.bias_params[:, O_IDX]
-        c = self.bias_params[:, C_IDX]
-        w = self.bias_params[:, W_IDX]
-        p = self.bias_params[:, P_IDX]
-        delta = self.bias_params[:, DELTA_IDX]
-        m = self.bias_params[:, M_IDX]
-        bias = compute_bias_grid(posq, posk, o, c, w, p, delta, m)
-        return attention_q_kv_packed(
-            # fmt: off
-            q, kv,
-            self.q_proj.weight, self.q_proj.bias,
-            self.kv_proj.weight, self.kv_proj.bias,
-            self.norm.weight,
-            self._head_dim,
-            self.out_proj.weight, self.out_proj.bias,
-            bias.float(),
-            self.norm.eps or 1e-5,
-            self.attention_dropout.p,
-            self.dropout.p,
-            self.training,
             # fmt: on
         )

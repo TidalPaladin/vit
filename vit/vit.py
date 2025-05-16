@@ -46,7 +46,10 @@ class ViTConfig:
     activation: str = "srelu"
     drop_path_rate: float = 0.0
     num_register_tokens: int = 0
-    pos_emb: Literal["alibi", "factorized", "fourier", "none"] = "factorized"
+    pos_emb: Literal["factorized", "fourier", "none"] = "factorized"
+    attn_bias: bool = False
+    radial_degree: int = 2
+    angular_degree: int = 4
 
     # Trainable blocks
     mlp_requires_grad: bool = True
@@ -93,7 +96,7 @@ class ViT(nn.Module):
             config.in_channels,
             config.hidden_size,
             config.patch_size,
-            pos_emb=config.pos_emb if config.pos_emb != "alibi" else "none",
+            pos_emb=config.pos_emb,
         )
 
         self.blocks = nn.ModuleList([self.create_encoder_layer() for _ in range(config.depth)])
@@ -115,7 +118,9 @@ class ViT(nn.Module):
             self.config.bias,
             self.config.activation,
             self.config.drop_path_rate,
-            alibi=self.config.pos_emb == "alibi",
+            attn_bias=self.config.attn_bias,
+            radial_degree=self.config.radial_degree,
+            angular_degree=self.config.angular_degree,
         )
 
     def create_decoder_layer(self) -> TransformerDecoderLayer:
@@ -128,7 +133,9 @@ class ViT(nn.Module):
             self.config.bias,
             self.config.activation,
             self.config.drop_path_rate,
-            alibi=self.config.pos_emb == "alibi",
+            attn_bias=self.config.attn_bias,
+            radial_degree=self.config.radial_degree,
+            angular_degree=self.config.angular_degree,
         )
 
     def create_cross_attention_layer(self) -> CrossAttentionTransformer:
@@ -141,7 +148,9 @@ class ViT(nn.Module):
             self.config.bias,
             self.config.activation,
             self.config.drop_path_rate,
-            alibi=self.config.pos_emb == "alibi",
+            attn_bias=self.config.attn_bias,
+            radial_degree=self.config.radial_degree,
+            angular_degree=self.config.angular_degree,
         )
 
     def create_mask(
@@ -184,7 +193,7 @@ class ViT(nn.Module):
         tokenized_size = self.stem.tokenized_size(cast(Any, (H, W)))
 
         x = self.stem(x)
-        if self.config.pos_emb == "alibi":
+        if self.config.attn_bias:
             pos = create_grid(tokenized_size, device=x.device, normalize=False).expand(B, -1, -1)
         else:
             pos = None

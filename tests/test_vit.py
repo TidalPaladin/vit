@@ -47,12 +47,14 @@ class TestViT:
 
     @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    @pytest.mark.parametrize("pos_emb", ["alibi", "factorized", "fourier", "none"])
-    def test_forward(self, device, config, num_register_tokens, dtype, pos_emb):
+    @pytest.mark.parametrize("pos_emb", ["factorized", "fourier", "none"])
+    @pytest.mark.parametrize("attn_bias", [False, True])
+    def test_forward(self, device, config, num_register_tokens, dtype, pos_emb, attn_bias):
         config = replace(
             config,
             num_register_tokens=num_register_tokens,
             pos_emb=pos_emb,
+            attn_bias=attn_bias,
         )
         x = torch.randn(2, 3, 224, 224, device=device)
         model = ViT(config).to(device)
@@ -62,12 +64,14 @@ class TestViT:
 
     @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    @pytest.mark.parametrize("pos_emb", ["alibi", "factorized", "fourier", "none"])
-    def test_backward(self, device, config, num_register_tokens, dtype, pos_emb):
+    @pytest.mark.parametrize("pos_emb", ["factorized", "fourier", "none"])
+    @pytest.mark.parametrize("attn_bias", [False, True])
+    def test_backward(self, device, config, num_register_tokens, dtype, pos_emb, attn_bias):
         config = replace(
             config,
             num_register_tokens=num_register_tokens,
             pos_emb=pos_emb,
+            attn_bias=attn_bias,
         )
         x = torch.randn(2, 3, 224, 224, device=device, requires_grad=True)
         model = ViT(config).to(device)
