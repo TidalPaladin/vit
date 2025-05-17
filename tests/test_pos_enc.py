@@ -2,7 +2,44 @@ import pytest
 import torch
 from torch.testing import assert_close
 
-from vit.pos_enc import LearnableFourierFeatures, RelativeFactorizedPosition, create_grid
+from vit.pos_enc import LearnableFourierFeatures, LearnablePosition, RelativeFactorizedPosition, create_grid
+
+
+class TestLearnablePosition:
+
+    def test_forward(self, device):
+        D = 16
+        torch.random.manual_seed(0)
+        layer = LearnablePosition(D, (8, 8)).to(device)
+        out = layer((8, 8))
+        assert out.shape == (1, 64, D)
+        assert out.device == device
+
+    def test_backward(self, device):
+        D = 16
+        torch.random.manual_seed(0)
+        layer = LearnablePosition(D, (8, 8)).to(device)
+        out = layer((8, 8))
+        out.sum().backward()
+        for param in layer.parameters():
+            assert param.grad is not None
+            assert not param.grad.isnan().any()
+
+    def test_forward_interpolate(self):
+        D = 16
+        torch.random.manual_seed(0)
+        layer = LearnablePosition(D, (8, 8))
+        out = layer((12, 12))
+        assert out.shape == (1, 144, D)
+
+    def test_expand_positions(self, device):
+        D = 16
+        torch.random.manual_seed(0)
+        layer = LearnablePosition(D, (8, 8)).to(device)
+        layer.expand_positions((12, 12))
+        assert layer.positions.shape == (144, D)
+        assert layer.positions.requires_grad is True
+        assert layer.positions.device == device
 
 
 @pytest.mark.parametrize("normalize", [True, False])

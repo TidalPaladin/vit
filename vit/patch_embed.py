@@ -7,8 +7,10 @@ from torch import Tensor
 
 from .pos_enc import (
     LearnableFourierFeatures,
+    LearnablePosition,
     RelativeFactorizedPosition,
     learnable_fourier_features,
+    learnable_position,
     relative_factorized_position,
 )
 
@@ -89,6 +91,27 @@ def patch_embed_learnable_fourier_pos(
     return y
 
 
+# @torch.compile(fullgraph=True, dynamic=False)
+def patch_embed_learnable_pos(
+    # fmt: off
+    x: Tensor,
+    w_patch: Tensor, b_patch: Tensor | None,
+    positions: Tensor,
+    positions_size: Sequence[int],
+    w_norm: Tensor,
+    eps: float,
+    # fmt: on
+) -> Tensor:
+    dims = x.shape[2:]
+    patch_size = w_patch.shape[2:]
+    dims = tuple(s // p for s, p in zip(dims, patch_size))
+    y = F.conv2d(x, w_patch, b_patch, stride=patch_size)
+    y = y.flatten(2).transpose(1, 2)
+    y = y + learnable_position(dims, positions_size, positions)
+    y = F.rms_norm(y, y.shape[-1:], w_norm, eps)
+    return y
+
+
 class PatchEmbed2d(nn.Module):
 
     def __init__(
@@ -96,8 +119,9 @@ class PatchEmbed2d(nn.Module):
         in_channels: int,
         hidden_size: int,
         patch_size: Sequence[int],
+        img_size: Sequence[int],
         eps: float = 1e-5,
-        pos_emb: Literal["factorized", "fourier", "none"] = "factorized",
+        pos_emb: Literal["factorized", "fourier", "none", "learnable"] = "learnable",
         **kwargs,
     ):
         super().__init__()
@@ -105,7 +129,11 @@ class PatchEmbed2d(nn.Module):
         self.pos_enc = (
             RelativeFactorizedPosition(2, hidden_size, **kwargs)
             if pos_emb == "factorized"
-            else LearnableFourierFeatures(2, hidden_size, **kwargs) if pos_emb == "fourier" else None
+            else (
+                LearnableFourierFeatures(2, hidden_size, **kwargs)
+                if pos_emb == "fourier"
+                else LearnablePosition(hidden_size, img_size) if pos_emb == "learnable" else None
+            )
         )
         self.norm = nn.RMSNorm(hidden_size, eps=eps)
         self.reset_parameters()
@@ -157,6 +185,16 @@ class PatchEmbed2d(nn.Module):
                 self.pos_enc.activation,
                 self.pos_enc.dropout.p,
                 self.training,
+                self.norm.eps or 1e-5,
+            )
+        elif isinstance(self.pos_enc, LearnablePosition):
+            return patch_embed_learnable_pos(
+                x,
+                self.patch.weight,
+                self.patch.bias,
+                self.pos_enc.positions,
+                self.pos_enc.spatial_size,
+                self.norm.weight,
                 self.norm.eps or 1e-5,
             )
         else:

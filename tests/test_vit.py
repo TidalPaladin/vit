@@ -13,6 +13,7 @@ def config():
     config = ViTConfig(
         in_channels=3,
         patch_size=(16, 16),
+        img_size=(224, 224),
         depth=3,
         hidden_size=128,
         ffn_hidden_size=256,
@@ -57,6 +58,18 @@ class TestViT:
         with torch.autocast(device_type=device.type, dtype=dtype, enabled=True):
             out = model(x)
         assert out.shape == (2, 196, 128)
+
+    @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
+    def test_forward_masked(self, device, config, num_register_tokens):
+        config = replace(
+            config,
+            num_register_tokens=num_register_tokens,
+        )
+        x = torch.randn(2, 3, 224, 224, device=device)
+        model = ViT(config).to(device)
+        mask = model.create_mask(x, 0.5, 1)
+        out = model(x, mask)
+        assert out.shape == (2, 196 // 2, 128)
 
     @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
