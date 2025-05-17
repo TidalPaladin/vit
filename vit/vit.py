@@ -194,7 +194,8 @@ class ViT(nn.Module):
         if self.config.use_fourier_features:
             pos = create_grid(tokenized_size, device=x.device, dtype=x.dtype, normalize=True)
             if mask is not None:
-                pos = apply_mask(mask, pos)
+                B = x.shape[0]
+                pos = apply_mask(mask, pos.expand(B, -1, -1))
             if self.config.num_register_tokens > 0:
                 _pos = pos.new_zeros(x.shape[0], pos.shape[1] + self.config.num_register_tokens, pos.shape[2])
                 _pos[:, self.config.num_register_tokens :] = pos

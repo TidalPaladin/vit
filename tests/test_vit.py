@@ -64,6 +64,23 @@ class TestViT:
     @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
     @pytest.mark.parametrize("use_fourier_features", [True, False])
+    def test_forward_masked(self, device, config, num_register_tokens, dtype, use_fourier_features):
+        config = replace(
+            config,
+            num_register_tokens=num_register_tokens,
+            use_fourier_features=use_fourier_features,
+        )
+        x = torch.randn(2, 3, 224, 224, device=device)
+        pos = torch.randn(2, 196, 2, device=device)
+        model = ViT(config).to(device)
+        mask = model.create_mask(x, 0.5, 1)
+        with torch.autocast(device_type=device.type, dtype=dtype, enabled=True):
+            out = model(x, mask)
+        assert out.shape == (2, 196 // 2, 128)
+
+    @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+    @pytest.mark.parametrize("use_fourier_features", [True, False])
     def test_backward(self, device, config, num_register_tokens, dtype, use_fourier_features):
         config = replace(
             config,
