@@ -19,6 +19,10 @@ class TransformerEncoderLayer(nn.Module):
         activation: str = "gelu",
         drop_path_rate: float = 0.0,
         eps: float = 1e-5,
+        use_fourier_features: bool = False,
+        spatial_dims: int = 2,
+        fourier_size: int = 384,
+        gamma: float = 1.0,
     ):
         super().__init__()
         self.drop_path_rate = drop_path_rate
@@ -29,6 +33,10 @@ class TransformerEncoderLayer(nn.Module):
             attention_dropout,
             bias,
             eps,
+            use_fourier_features,
+            spatial_dims,
+            fourier_size,
+            gamma,
         )
         self.mlp = NormMLP(hidden_size, ffn_hidden_size, bias, activation, eps, hidden_dropout)
         self.reset_parameters()
@@ -37,8 +45,8 @@ class TransformerEncoderLayer(nn.Module):
         self.self_attention.reset_parameters()
         self.mlp.reset_parameters()
 
-    def forward(self, x: Tensor) -> Tensor:
-        o = self.self_attention(x)
+    def forward(self, x: Tensor, pos: Tensor | None = None) -> Tensor:
+        o = self.self_attention(x, pos)
         x = x + drop_path(o, self.drop_path_rate, self.training)
 
         o = self.mlp(x)
@@ -59,6 +67,10 @@ class TransformerDecoderLayer(nn.Module):
         activation: str = "gelu",
         drop_path_rate: float = 0.0,
         eps: float = 1e-5,
+        use_fourier_features: bool = False,
+        spatial_dims: int = 2,
+        fourier_size: int = 384,
+        gamma: float = 1.0,
     ):
         super().__init__()
         self.drop_path_rate = drop_path_rate
@@ -69,6 +81,10 @@ class TransformerDecoderLayer(nn.Module):
             attention_dropout,
             bias,
             eps,
+            use_fourier_features,
+            spatial_dims,
+            fourier_size,
+            gamma,
         )
         self.cross_attention = CrossAttention(
             hidden_size,
@@ -77,6 +93,10 @@ class TransformerDecoderLayer(nn.Module):
             attention_dropout,
             bias,
             eps,
+            use_fourier_features,
+            spatial_dims,
+            fourier_size,
+            gamma,
         )
         self.mlp = NormMLP(hidden_size, ffn_hidden_size, bias, activation, eps, hidden_dropout)
         self.reset_parameters()
@@ -86,11 +106,11 @@ class TransformerDecoderLayer(nn.Module):
         self.cross_attention.reset_parameters()
         self.mlp.reset_parameters()
 
-    def forward(self, x: Tensor, kv: Tensor) -> Tensor:
-        o = self.self_attention(x)
+    def forward(self, x: Tensor, kv: Tensor, pos_q: Tensor | None = None, pos_k: Tensor | None = None) -> Tensor:
+        o = self.self_attention(x, pos_q)
         x = x + drop_path(o, self.drop_path_rate, self.training)
 
-        o = self.cross_attention(x, kv)
+        o = self.cross_attention(x, kv, pos_q, pos_k)
         x = x + drop_path(o, self.drop_path_rate, self.training)
 
         o = self.mlp(x)
@@ -111,6 +131,10 @@ class CrossAttentionTransformer(nn.Module):
         activation: str = "gelu",
         drop_path_rate: float = 0.0,
         eps: float = 1e-5,
+        use_fourier_features: bool = False,
+        spatial_dims: int = 2,
+        fourier_size: int = 384,
+        gamma: float = 1.0,
     ):
         super().__init__()
         self.drop_path_rate = drop_path_rate
@@ -121,6 +145,10 @@ class CrossAttentionTransformer(nn.Module):
             attention_dropout,
             bias,
             eps,
+            use_fourier_features,
+            spatial_dims,
+            fourier_size,
+            gamma,
         )
         self.mlp = NormMLP(hidden_size, ffn_hidden_size, bias, activation, eps, hidden_dropout)
         self.reset_parameters()
@@ -129,8 +157,8 @@ class CrossAttentionTransformer(nn.Module):
         self.cross_attention.reset_parameters()
         self.mlp.reset_parameters()
 
-    def forward(self, x: Tensor, kv: Tensor) -> Tensor:
-        o = self.cross_attention(x, kv)
+    def forward(self, x: Tensor, kv: Tensor, pos_q: Tensor | None = None, pos_k: Tensor | None = None) -> Tensor:
+        o = self.cross_attention(x, kv, pos_q, pos_k)
         x = x + drop_path(o, self.drop_path_rate, self.training)
 
         o = self.mlp(x)

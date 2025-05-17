@@ -8,6 +8,7 @@ import yaml
 from torch import Tensor
 
 from .patch_embed import PatchEmbed2d
+from .pos_enc import create_grid
 from .tokens import apply_mask, create_mask
 from .transformer import CrossAttentionTransformer, TransformerDecoderLayer, TransformerEncoderLayer
 
@@ -46,6 +47,9 @@ class ViTConfig:
     drop_path_rate: float = 0.0
     num_register_tokens: int = 0
     pos_emb: Literal["factorized", "fourier", "none"] = "factorized"
+    use_fourier_features: bool = False
+    fourier_size: int = 384
+    gamma: float = 1.0
 
     # Trainable blocks
     mlp_requires_grad: bool = True
@@ -109,6 +113,10 @@ class ViT(nn.Module):
             self.config.bias,
             self.config.activation,
             self.config.drop_path_rate,
+            use_fourier_features=self.config.use_fourier_features,
+            spatial_dims=len(self.config.patch_size),
+            fourier_size=self.config.fourier_size,
+            gamma=self.config.gamma,
         )
 
     def create_decoder_layer(self) -> TransformerDecoderLayer:
@@ -121,6 +129,10 @@ class ViT(nn.Module):
             self.config.bias,
             self.config.activation,
             self.config.drop_path_rate,
+            use_fourier_features=self.config.use_fourier_features,
+            spatial_dims=len(self.config.patch_size),
+            fourier_size=self.config.fourier_size,
+            gamma=self.config.gamma,
         )
 
     def create_cross_attention_layer(self) -> CrossAttentionTransformer:
@@ -133,6 +145,10 @@ class ViT(nn.Module):
             self.config.bias,
             self.config.activation,
             self.config.drop_path_rate,
+            use_fourier_features=self.config.use_fourier_features,
+            spatial_dims=len(self.config.patch_size),
+            fourier_size=self.config.fourier_size,
+            gamma=self.config.gamma,
         )
 
     def create_mask(
@@ -171,7 +187,21 @@ class ViT(nn.Module):
         return mask
 
     def forward(self, x: Tensor, mask: Tensor | None = None) -> Tensor:
+        tokenized_size = self.stem.tokenized_size(x.shape[2:])
         x = self.stem(x)
+
+        # Create position grid and account for register tokens
+        if self.config.use_fourier_features:
+            pos = create_grid(tokenized_size, device=x.device, dtype=x.dtype, normalize=True)
+            if mask is not None:
+                pos = apply_mask(mask, pos)
+            if self.config.num_register_tokens > 0:
+                _pos = pos.new_zeros(x.shape[0], pos.shape[1] + self.config.num_register_tokens, pos.shape[2])
+                _pos[:, self.config.num_register_tokens :] = pos
+                pos = _pos
+        else:
+            pos = None
+
         if mask is not None:
             x = apply_mask(mask, x)
 
@@ -183,7 +213,7 @@ class ViT(nn.Module):
         )
         for block in self.blocks:
             assert isinstance(block, TransformerEncoderLayer)
-            x = block(x)
+            x = block(x, pos)
         x = x[:, self.config.num_register_tokens :].contiguous()
         return x
 

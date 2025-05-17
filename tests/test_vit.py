@@ -47,12 +47,15 @@ class TestViT:
 
     @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_forward(self, device, config, num_register_tokens, dtype):
+    @pytest.mark.parametrize("use_fourier_features", [True, False])
+    def test_forward(self, device, config, num_register_tokens, dtype, use_fourier_features):
         config = replace(
             config,
             num_register_tokens=num_register_tokens,
+            use_fourier_features=use_fourier_features,
         )
         x = torch.randn(2, 3, 224, 224, device=device)
+        pos = torch.randn(2, 196, 2, device=device)
         model = ViT(config).to(device)
         with torch.autocast(device_type=device.type, dtype=dtype, enabled=True):
             out = model(x)
@@ -60,10 +63,12 @@ class TestViT:
 
     @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_backward(self, device, config, num_register_tokens, dtype):
+    @pytest.mark.parametrize("use_fourier_features", [True, False])
+    def test_backward(self, device, config, num_register_tokens, dtype, use_fourier_features):
         config = replace(
             config,
             num_register_tokens=num_register_tokens,
+            use_fourier_features=use_fourier_features,
         )
         x = torch.randn(2, 3, 224, 224, device=device, requires_grad=True)
         model = ViT(config).to(device)
