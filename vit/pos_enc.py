@@ -15,6 +15,8 @@ def create_grid(
     dtype: torch.dtype = torch.float32,
     device: torch.device = torch.device("cpu"),
     normalize: bool = True,
+    shared_range: bool = False,
+    zero_one_normalize: bool = False,
 ) -> Tensor:
     r"""Create a grid of coordinate values given the size of each dimension.
 
@@ -24,15 +26,27 @@ def create_grid(
         proto:
             If provided, a source tensor with which to match device / requires_grad
         normalize:
-            If true, normalize coordinate values on the range :math:`\[-1, 1\]`
+            If true, normalize coordinate values on the range :math:`\[-1, 1\]` (or :math:`\[0, 1\]` if ``zero_one_normalize`` is true)
+        shared_range:
+            If true, normalize coordinate values using the maximum value of all dimensions.
+        zero_one_normalize:
+            If true, normalize coordinate values on the range :math:`\[0, 1\]` instead of :math:`\[-1, 1\]`.
 
     Shapes:
         * Output - :math:`(1, L, C)` where :math:`C` is ``len(dims)`` and :math:`L` is ``product(dims)``
     """
-    if normalize:
-        lens = [torch.linspace(-1, 1, d, device=device, dtype=dtype) for d in dims]
-    else:
-        lens = [torch.arange(d, device=device, dtype=dtype) for d in dims]
+    max_dim = max(dims)
+    match (normalize, shared_range, zero_one_normalize):
+        case (True, True, True):
+            lens = [torch.linspace(0, 1 * d / max_dim, d, device=device, dtype=dtype) for d in dims]
+        case (True, True, False):  # default
+            lens = [torch.linspace(-1 * d / max_dim, 1 * d / max_dim, d, device=device, dtype=dtype) for d in dims]
+        case (True, False, True):
+            lens = [torch.linspace(0, 1, d, device=device, dtype=dtype) for d in dims]
+        case (True, False, False):
+            lens = [torch.linspace(-1, 1, d, device=device, dtype=dtype) for d in dims]
+        case (False, _, _):
+            lens = [torch.arange(d, device=device, dtype=dtype) for d in dims]
     grid = torch.stack(torch.meshgrid(lens, indexing="ij"), dim=-1)
     return grid.view(1, -1, len(dims))
 

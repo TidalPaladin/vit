@@ -18,6 +18,27 @@ def test_create_grid(normalize, device):
         assert torch.all(grid[0, -1] == torch.tensor([3, 3], device=device))
 
 
+def test_create_grid_zero_one_normalize():
+    dims = (4, 4)
+    grid = create_grid(dims, normalize=True, zero_one_normalize=True)
+    assert grid.shape == (1, 16, 2)
+    assert torch.all(grid[0, 0] == torch.tensor([0, 0]))
+    assert torch.all(grid[0, -1] == torch.tensor([1.0, 1.0]))
+
+
+def test_create_grid_zero_one_normalize_shared_range():
+    dims = (4, 3)
+    grid = create_grid(dims, normalize=True, zero_one_normalize=True)
+    assert grid.shape == (1, 12, 2)
+    assert torch.all(grid[0, 0] == torch.tensor([0, 0]))
+    assert torch.all(grid[0, -1] == torch.tensor([1.0, 1.0]))
+
+    grid = create_grid(dims, normalize=True, zero_one_normalize=True, shared_range=True)
+    assert grid.shape == (1, 12, 2)
+    assert torch.all(grid[0, 0] == torch.tensor([0, 0]))
+    assert torch.all(grid[0, -1] == torch.tensor([1.0, 0.75]))
+
+
 class TestRelativeFactorizedPosition:
 
     def test_forward(self, device):

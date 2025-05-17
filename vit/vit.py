@@ -194,7 +194,13 @@ class ViT(nn.Module):
 
         x = self.stem(x)
         if self.config.attn_bias:
-            pos = create_grid(tokenized_size, device=x.device, normalize=False).expand(B, -1, -1)
+            pos = create_grid(
+                tokenized_size,
+                device=x.device,
+                normalize=True,
+                zero_one_normalize=True,
+                shared_range=True,
+            ).expand(B, -1, -1)
         else:
             pos = None
 

@@ -184,7 +184,6 @@ def separable_polar_approx(
     c_r = torch.matmul(c, r_powers)  # Shape: (b, h, n, l)
     cos_part = (b_r * cos_terms).sum(dim=2)  # Shape: (b, h, l)
     sin_part = (c_r * sin_terms).sum(dim=2)  # Shape: (b, h, l)
-
     return cos_part + sin_part
 
 

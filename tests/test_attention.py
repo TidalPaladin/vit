@@ -1,3 +1,5 @@
+from timeit import timeit
+
 import pytest
 import torch
 from torch.testing import assert_close
@@ -14,6 +16,26 @@ def test_separable_polar_approx(k, n):
     c = torch.randn(H, k + 1, n + 1)
     result = separable_polar_approx(r, theta, b, c)
     assert tuple(result.shape) == (B, H, L)
+
+
+@pytest.mark.cuda
+def test_separable_polar_approx_time():
+    k = 2
+    n = 4
+    B, H, L = 32, 8, 16384
+    r = torch.rand(B, L, device="cuda")
+    theta = torch.rand(B, L, device="cuda") * 2 * torch.pi
+    b = torch.randn(H, k + 1, n + 1, device="cuda")
+    c = torch.randn(H, k + 1, n + 1, device="cuda")
+    separable_polar_approx(r, theta, b, c)  # warmup compile
+
+    def fn():
+        separable_polar_approx(r, theta, b, c)
+        torch.cuda.synchronize()
+
+    t1 = timeit(fn, number=100) / 100
+    assert t1 < 0.1
+    assert False
 
 
 class TestPolarApprox:
