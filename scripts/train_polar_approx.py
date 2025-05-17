@@ -41,6 +41,10 @@ def plus(r: Tensor, theta: Tensor) -> Tensor:
     return r * theta.add(torch.pi / 4).mul(2).cos().pow(2)
 
 
+def well(r: Tensor, theta: Tensor, threshold: float = 0.5) -> Tensor:
+    return torch.where(r < threshold, 0.0, 1.0)
+
+
 FUNCTIONS = {
     "symmetric": symmetric_linear_falloff,
     "symmetric_quadratic": symmetric_quadratic_falloff,
@@ -49,6 +53,7 @@ FUNCTIONS = {
     "top_bottom": top_bottom_linear_falloff,
     "cross": cross,
     "plus": plus,
+    "well": well,
 }
 
 
