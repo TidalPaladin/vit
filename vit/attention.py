@@ -188,6 +188,40 @@ def separable_polar_approx(
 
 
 @torch.compile(fullgraph=True, dynamic=False)
+def radial_basis_approx(
+    # fmt: off
+    r: Tensor, theta: Tensor,
+    center_r: Tensor, center_theta: Tensor,
+    w: Tensor, s: Tensor,
+    # fmt: on
+) -> Tensor:
+    assert r.ndim == 2, f"r.ndim: {r.ndim}"
+    assert theta.shape == r.shape, f"theta.shape: {theta.shape}, r.shape: {r.shape}"
+    assert w.ndim == 2, f"w.ndim: {w.ndim}"
+    assert s.ndim == 2, f"s.ndim: {s.ndim}"
+    assert center_r.ndim == 2, f"center_r.ndim: {center_r.ndim}"
+    assert center_theta.ndim == 2, f"center_theta.ndim: {center_theta.ndim}"
+    H, N = w.shape
+    B, L = r.shape
+
+    # Convert inputs to (B, H, L, 1)
+    r = r.view(B, 1, L, 1).expand(-1, H, -1, -1)
+    theta = theta.view(B, 1, L, 1).expand(-1, H, -1, -1)
+
+    # Broadcast w, s, center_r, center_theta to (1, H, 1, N)
+    w = w.view(1, H, 1, N).expand(B, -1, -1, -1)
+    s = s.view(1, H, 1, N).expand(B, -1, -1, -1)
+    center_r = center_r.view(1, H, 1, N).expand(B, -1, -1, -1)
+    center_theta = center_theta.view(1, H, 1, N).expand(B, -1, -1, -1)
+
+    d = ((r - center_r).pow(2) + (theta - center_theta).pow(2)).sqrt()
+    result = (d / s).pow(2).neg().exp()
+    result = (result * w).sum(dim=-1)
+    assert result.shape == (B, H, L), f"result.shape: {result.shape}, (B, H, L): {(B, H, L)}"
+    return result
+
+
+@torch.compile(fullgraph=True, dynamic=False)
 def compute_bias_grid(
     # fmt: off
     q: Tensor, k: Tensor,
@@ -259,6 +293,63 @@ class PolarApprox(nn.Module):
         # Create grid
         r = torch.linspace(r_min, r_max, 100, device=self.b.device, dtype=self.b.dtype)
         theta = torch.linspace(0, 2 * math.pi, 360, device=self.b.device, dtype=self.b.dtype)
+        r, theta = torch.meshgrid(r, theta, indexing="ij")
+
+        # Compute the function values
+        z = self.forward(r.reshape(1, -1), theta.reshape(1, -1))[:, head, :].view_as(r).contiguous().cpu().numpy()
+        r = r.cpu().numpy()
+        theta = theta.cpu().numpy()
+
+        # 2D Polar Heatmap
+        fig = plt.figure(figsize=(6, 6))
+        ax = fig.add_subplot(111, projection="polar")
+        cax = ax.pcolormesh(theta, r, z, cmap="viridis", vmax=vmax, vmin=vmin)
+        if title is not None:
+            ax.set_title(f"{title}")
+        fig.colorbar(cax, ax=ax, label="f(r, θ)")
+        plt.tight_layout()
+        plt.savefig(filename)
+        plt.close(fig)
+
+
+class RadialBasisApprox(nn.Module):
+
+    def __init__(self, n: int, nhead: int = 1):
+        super().__init__()
+        self.w = nn.Parameter(torch.empty(nhead, n))
+        self.s = nn.Parameter(torch.empty(nhead, n))
+        self.center_r = nn.Parameter(torch.empty(nhead, n))
+        self.center_theta = nn.Parameter(torch.empty(nhead, n))
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        nn.init.trunc_normal_(self.w, std=0.01)
+        nn.init.trunc_normal_(self.s, std=0.01)
+        nn.init.uniform_(self.center_r, 0.0, 8.0)
+        nn.init.uniform_(self.center_theta, -math.pi, math.pi)
+
+    def forward(self, r: Tensor, theta: Tensor) -> Tensor:
+        return radial_basis_approx(r, theta, self.center_r, self.center_theta, self.w, self.s)
+
+    @torch.no_grad()
+    def plot(
+        self,
+        r_min: float = 0,
+        r_max: float = 10,
+        head: int = 0,
+        title: str | None = None,
+        filename: str = "",
+        vmax: float | None = None,
+        vmin: float | None = None,
+    ):
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError:
+            raise ImportError("matplotlib is required to plot the function")
+
+        # Create grid
+        r = torch.linspace(r_min, r_max, 100, device=self.w.device, dtype=self.w.dtype)
+        theta = torch.linspace(0, 2 * math.pi, 360, device=self.w.device, dtype=self.w.dtype)
         r, theta = torch.meshgrid(r, theta, indexing="ij")
 
         # Compute the function values

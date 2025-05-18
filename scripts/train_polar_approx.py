@@ -8,7 +8,7 @@ from torch import Tensor
 from torch.optim import AdamW
 from tqdm import tqdm
 
-from vit.attention import PolarApprox
+from vit.attention import PolarApprox, RadialBasisApprox
 
 
 def symmetric_linear_falloff(r: Tensor, theta: Tensor) -> Tensor:
@@ -68,6 +68,7 @@ def parse_args():
     parser.add_argument("-o", "--output", type=Path, default=os.getcwd())
     parser.add_argument("-s", "--scale", type=float, default=10)
     parser.add_argument("-i", "--initial", default=False, action="store_true")
+    parser.add_argument("-m", "--method", choices=["polar", "radial"], default="polar")
     parser.add_argument(
         "-f",
         "--function",
@@ -78,7 +79,12 @@ def parse_args():
 
 
 def main(args: Namespace):
-    layer = PolarApprox(args.radial_degree, args.angular_degree).to(args.device)
+    if args.method == "polar":
+        layer = PolarApprox(args.radial_degree, args.angular_degree).to(args.device)
+    elif args.method == "radial":
+        layer = RadialBasisApprox(args.radial_degree).to(args.device)
+    else:
+        raise ValueError(f"Invalid method: {args.method}")
     optim = AdamW(layer.parameters(), lr=args.learning_rate, weight_decay=0.01)
     func = FUNCTIONS[args.function]
     if not args.initial:

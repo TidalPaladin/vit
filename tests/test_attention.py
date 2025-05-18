@@ -4,7 +4,7 @@ import pytest
 import torch
 from torch.testing import assert_close
 
-from vit.attention import AttentivePool, CrossAttention, PolarApprox, SelfAttention, separable_polar_approx
+from vit.attention import AttentivePool, CrossAttention, PolarApprox, RadialBasisApprox, SelfAttention, separable_polar_approx, radial_basis_approx
 
 
 @pytest.mark.parametrize("k,n", [(3, 1), (1, 3), (3, 3)])
@@ -15,6 +15,19 @@ def test_separable_polar_approx(k, n):
     b = torch.randn(H, k + 1, n + 1)
     c = torch.randn(H, k + 1, n + 1)
     result = separable_polar_approx(r, theta, b, c)
+    assert tuple(result.shape) == (B, H, L)
+
+
+@pytest.mark.parametrize("n", [1, 3])
+def test_radial_basis_approx(n):
+    B, H, L = 2, 4, 32
+    r = torch.rand(B, L)
+    theta = torch.rand(B, L) * 2 * torch.pi
+    w = torch.randn(H, n)
+    s = torch.randn(H, n)
+    center_r = torch.randn(H, n)
+    center_theta = torch.randn(H, n)
+    result = radial_basis_approx(r, theta, center_r, center_theta, w, s)
     assert tuple(result.shape) == (B, H, L)
 
 
@@ -62,6 +75,29 @@ class TestPolarApprox:
         for param in layer.parameters():
             assert param.grad is not None
 
+class TestRadialBasisApprox:
+
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+    def test_forward(self, dtype, device):
+        B, H, L = 2, 4, 32
+        r = torch.rand(B, L, device=device)
+        theta = torch.rand(B, L, device=device) * 2 * torch.pi
+        layer = RadialBasisApprox(n=2, nhead=H).to(device)
+        with torch.autocast(device_type=device.type, dtype=dtype):
+            y = layer(r, theta)
+        assert tuple(y.shape) == (B, H, L)
+
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+    def test_backward(self, dtype, device):
+        B, H, L = 2, 4, 32
+        r = torch.rand(B, L, device=device)
+        theta = torch.rand(B, L, device=device) * 2 * torch.pi
+        layer = RadialBasisApprox(n=2, nhead=H).to(device)
+        with torch.autocast(device_type=device.type, dtype=dtype):
+            y = layer(r, theta)
+        y.sum().backward()
+        for param in layer.parameters():
+            assert param.grad is not None
 
 class TestSelfAttention:
 
