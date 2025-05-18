@@ -195,8 +195,7 @@ class ViT(nn.Module):
             pos = create_grid(
                 tokenized_size,
                 device=x.device,
-                normalize=True,
-                zero_one_normalize=True,
+                normalize=False,
                 shared_range=True,
             ).expand(B, -1, -1)
         else:
