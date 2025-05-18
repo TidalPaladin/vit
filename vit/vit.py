@@ -34,6 +34,7 @@ class ViTConfig:
     # Inputs
     in_channels: int
     patch_size: Sequence[int]
+    img_size: Sequence[int]
 
     # Transformer
     depth: int
@@ -93,10 +94,7 @@ class ViT(nn.Module):
 
         # Stem tokenizer
         self.stem = PatchEmbed2d(
-            config.in_channels,
-            config.hidden_size,
-            config.patch_size,
-            pos_emb=config.pos_emb,
+            config.in_channels, config.hidden_size, config.patch_size, config.img_size, pos_emb=config.pos_emb
         )
 
         self.blocks = nn.ModuleList([self.create_encoder_layer() for _ in range(config.depth)])

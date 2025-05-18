@@ -9,6 +9,39 @@ from torch import Tensor
 from .helpers import get_activation
 
 
+@torch.compile(fullgraph=True, dynamic=False)
+def learnable_position(dims: Sequence[int], positions_size: Sequence[int], positions: Tensor) -> Tensor:
+    L = math.prod(dims)
+    if dims != positions_size:
+        positions = positions.view(1, *positions_size, -1).movedim(-1, 1)
+        positions = F.interpolate(positions, size=dims, mode="bicubic", antialias=False)
+        positions = positions.movedim(1, -1)
+        positions = positions.view(1, L, -1)
+    return positions.view(1, L, -1)
+
+
+class LearnablePosition(nn.Module):
+
+    def __init__(self, hidden_size: int, spatial_size: Sequence[int]):
+        super().__init__()
+        total_size = math.prod(spatial_size)
+        self.positions = nn.Parameter(torch.empty(total_size, hidden_size))
+        self.spatial_size = spatial_size
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        nn.init.trunc_normal_(self.positions, std=0.02)
+
+    @torch.no_grad()
+    def expand_positions(self, size: Sequence[int]) -> None:
+        positions = learnable_position(size, self.spatial_size, self.positions)
+        self.positions = nn.Parameter(positions.reshape(-1, self.positions.shape[-1]))
+
+    def forward(self, dims: Sequence[int] | None) -> Tensor:
+        dims = dims or self.spatial_size
+        return learnable_position(dims, self.spatial_size, self.positions)
+
+
 @torch.compile(fullgraph=True)
 def create_grid(
     dims: Sequence[int],
@@ -159,13 +192,15 @@ class LearnableFourierFeatures(nn.Module):
         self,
         d_in: int,
         hidden_size: int,
-        fourier_size: int = 384,
-        inner_size: int = 32,
+        fourier_size: int | None = None,
+        inner_size: int | None = None,
         gamma: float = 1.0,
         dropout: float = 0.2,
         activation: str = "gelu",
     ):
         super().__init__()
+        fourier_size = fourier_size or hidden_size
+        inner_size = inner_size or hidden_size
         assert fourier_size % 2 == 0
         self.gamma = gamma
         self.fourier = nn.Linear(d_in, fourier_size // 2, bias=False)
