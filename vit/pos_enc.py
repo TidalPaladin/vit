@@ -185,9 +185,9 @@ class LearnableFourierFeatures(nn.Module):
         activation: str = "gelu",
     ):
         super().__init__()
-        assert fourier_size % 2 == 0
         fourier_size = fourier_size or hidden_size
         inner_size = inner_size or hidden_size
+        assert fourier_size % 2 == 0
         self.gamma = gamma
         self.fourier = nn.Linear(d_in, fourier_size // 2, bias=False)
         self.fc1 = nn.Linear(fourier_size, inner_size)
