@@ -47,7 +47,7 @@ class ViTConfig:
     activation: str = "srelu"
     drop_path_rate: float = 0.0
     num_register_tokens: int = 0
-    pos_emb: Literal["factorized", "fourier", "none"] = "factorized"
+    pos_emb: Literal["factorized", "fourier", "none", "learnable"] = "factorized"
     attn_bias: bool = False
     radial_degree: int = 2
     angular_degree: int = 4
