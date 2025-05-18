@@ -9,7 +9,7 @@ from torch import Tensor
 from .helpers import get_activation
 
 
-# @torch.compile(fullgraph=True, dynamic=False)
+@torch.compile(fullgraph=True, dynamic=False)
 def learnable_position(dims: Sequence[int], positions_size: Sequence[int], positions: Tensor) -> Tensor:
     L = math.prod(dims)
     if dims != positions_size:
@@ -178,14 +178,16 @@ class LearnableFourierFeatures(nn.Module):
         self,
         d_in: int,
         hidden_size: int,
-        fourier_size: int = 384,
-        inner_size: int = 32,
+        fourier_size: int | None = None,
+        inner_size: int | None = None,
         gamma: float = 1.0,
         dropout: float = 0.2,
         activation: str = "gelu",
     ):
         super().__init__()
         assert fourier_size % 2 == 0
+        fourier_size = fourier_size or hidden_size
+        inner_size = inner_size or hidden_size
         self.gamma = gamma
         self.fourier = nn.Linear(d_in, fourier_size // 2, bias=False)
         self.fc1 = nn.Linear(fourier_size, inner_size)
