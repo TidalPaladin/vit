@@ -132,7 +132,7 @@ class PatchEmbed2d(nn.Module):
             else (
                 LearnableFourierFeatures(2, hidden_size, **kwargs)
                 if pos_emb == "fourier"
-                else LearnablePosition(hidden_size, img_size) if pos_emb == "learnable" else None
+                else LearnablePosition(hidden_size, self.tokenized_size(img_size)) if pos_emb == "learnable" else None
             )
         )
         self.norm = nn.RMSNorm(hidden_size, eps=eps)
