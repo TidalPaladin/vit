@@ -109,6 +109,28 @@ class TestCreateMask:
         mask = create_mask(size, ratio, batch_size, scale=scale)
         assert mask.device.type == "cpu"
 
+    @pytest.mark.parametrize("size", [(16, 16), (16, 24), (24, 16)])
+    def test_scale_diversity(self, size):
+        ratio = 0.25
+        torch.random.manual_seed(0)
+        mask = torch.zeros(*size, dtype=torch.bool)
+        for i in range(100):
+            mask.logical_or_(create_mask(size, ratio, scale=4).view_as(mask))
+        assert mask.all()
+
+    @pytest.mark.parametrize("batch_size", [1, 2])
+    def test_roll(self, batch_size):
+        size = (16, 16)
+        for i in range(100):
+            torch.random.manual_seed(i)
+            mask1 = create_mask(size, 0.5, scale=2, batch_size=batch_size, roll=True)
+            torch.random.manual_seed(i)
+            mask2 = create_mask(size, 0.5, scale=2, batch_size=batch_size, roll=False)
+            if (mask1 != mask2).any():
+                break
+        else:
+            pytest.fail("No difference found between rolled and unrolled masks")
+
 
 def test_generate_non_overlapping_mask_no_overlap():
     B, L = 5, 10

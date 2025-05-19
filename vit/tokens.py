@@ -107,6 +107,7 @@ def create_mask(
     mask_ratio: float,
     batch_size: int = 1,
     scale: int = 1,
+    roll: bool = False,
     device: torch.device = torch.device("cpu"),
 ) -> Tensor:
     r"""Create a token mask for an input.
@@ -117,6 +118,7 @@ def create_mask(
         batch_size: Size of the batch
         scale: Dilates the mask by this factor. For example, if ``scale == 2`` and ``len(size) == 2``,
             masking will be done in (2x2) contiguous blocks.
+        roll: Whether to roll the mask.
         device: Device to create the mask on
 
     Shapes:
@@ -145,6 +147,13 @@ def create_mask(
         mask = mask.view(batch_size, 1, *scaled_size).float()
         mask = F.interpolate(mask, scale_factor=scale, mode="nearest")
         mask = mask.view(batch_size, -1).bool()
+
+        # roll the mask (rolling is only defined for scale > 1)
+        if roll:
+            should_roll = torch.rand(batch_size, device=device) < 0.5
+            roll_amount = scale // 2
+            mask = torch.where(should_roll.view(-1, 1), mask.roll(roll_amount, dims=1), mask)
+
         return mask
 
     # Compute the total number of tokens and number of masked tokens
@@ -164,6 +173,7 @@ def create_mask(
 
     # update mask based on chosen locations
     mask[batch_idx.flatten(), token_idx.flatten()] = False
+
     return mask
 
 
