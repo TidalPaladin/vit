@@ -1,68 +1,37 @@
-from typing import TYPE_CHECKING
-
 import pytest
 import torch
 from torch.testing import assert_close
 
-from vit.helpers import try_import_te
-from vit.transformer import CrossAttentionMLP, TransformerLayer
+from vit.transformer import CrossAttentionTransformer, TransformerDecoderLayer, TransformerEncoderLayer
 
 
-if TYPE_CHECKING:
-    import transformer_engine.pytorch as te  # type: ignore[reportMissingImports]
-else:
-    te = try_import_te()
-
-
-class TestTransformerLayer:
+class TestTransformerEncoderLayer:
 
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    @pytest.mark.parametrize("num_gqa_groups", [8, 4])
-    def test_forward(self, dtype, num_gqa_groups):
+    def test_forward(self, dtype, device):
         B, L, D = 16, 128, 128
-        transformer_layer = TransformerLayer(D, D, D // 16, num_gqa_groups=num_gqa_groups, attn_input_format="bshd")
-        x = torch.randn(B, L, D, dtype=dtype)
-        with torch.autocast(device_type="cpu", dtype=dtype):
+        transformer_layer = TransformerEncoderLayer(D, D, D // 16).to(device)
+        x = torch.randn(B, L, D, dtype=dtype, device=device)
+        with torch.autocast(device_type=device.type, dtype=dtype):
             y = transformer_layer(x)
         assert y.shape == (B, L, D)
 
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    @pytest.mark.parametrize("num_gqa_groups", [8, 4])
-    def test_forward_with_encoder_output(self, dtype, num_gqa_groups):
+    def test_backward(self, dtype, device):
         B, L, D = 16, 128, 128
-        transformer_layer = TransformerLayer(D, D, D // 16, num_gqa_groups=num_gqa_groups, attn_input_format="bshd")
-        x = torch.randn(B, L, D, dtype=dtype)
-        encoder_output = torch.randn(B, L // 2, D, dtype=dtype)
-        with torch.autocast(device_type="cpu", dtype=dtype):
-            y = transformer_layer(x, encoder_output)
-        assert y.shape == (B, L, D)
-
-    def test_permute(self):
-        B, L, D = 16, 128, 128
-        transformer_layer = TransformerLayer(D, D, D // 16, attn_input_format="bshd")
-        x = torch.randn(B, L, D)
-        x[0] = float("nan")
-        y = transformer_layer(x)
-        assert y[0].isnan().any()
-        assert not y[1:].isnan().any()
-
-    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    @pytest.mark.parametrize("checkpoint", [False, True])
-    def test_backward(self, dtype, checkpoint):
-        B, L, D = 16, 128, 128
-        transformer_layer = TransformerLayer(D, D, D // 16, attn_input_format="bshd")
-        x = torch.randn(B, L, D, dtype=dtype)
-        with torch.autocast(device_type="cpu", dtype=dtype):
-            y = transformer_layer(x, checkpoint_core_attention=checkpoint)
+        transformer_layer = TransformerEncoderLayer(D, D, D // 16).to(device)
+        x = torch.randn(B, L, D, dtype=dtype, device=device)
+        with torch.autocast(device_type=device.type, dtype=dtype):
+            y = transformer_layer(x)
         y.sum().backward()
         for param in transformer_layer.parameters():
             assert param.grad is not None
             assert not param.grad.isnan().any()
 
-    def test_forward_determinstic(self):
+    def test_forward_determinstic(self, device):
         B, L, D = 16, 128, 128
-        layer = TransformerLayer(D, D, D // 16, attn_input_format="bshd")
-        x = torch.randn(B, L, D)
+        layer = TransformerEncoderLayer(D, D, D // 16).to(device)
+        x = torch.randn(B, L, D, device=device)
 
         layer.eval()
         y1 = layer(x)
@@ -74,200 +43,86 @@ class TestTransformerLayer:
         y4 = layer(x)
         assert not torch.allclose(y3, y4)
 
-    @pytest.mark.cuda
-    @pytest.mark.parametrize("num_gqa_groups", [8, 4])
-    @pytest.mark.parametrize("normalization", ["LayerNorm", "RMSNorm"])
-    @pytest.mark.parametrize("activation", ["gelu", "relu"])
-    @pytest.mark.parametrize("bias", [False, True])
-    def test_baseline_self_attention(self, num_gqa_groups, normalization, activation, bias):
-        if te is None:
-            pytest.skip("Transformer Engine is not available")
 
-        B, L, D = 16, 128, 128
-        layer = TransformerLayer(
-            D,
-            D,
-            D // 16,
-            num_gqa_groups=num_gqa_groups,
-            attn_input_format="bshd",
-            normalization=normalization,
-            activation=activation,
-            bias=bias,
-        ).cuda()
-        baseline = te.TransformerLayer(
-            D,
-            D,
-            D // 16,
-            num_gqa_groups=num_gqa_groups,
-            attn_input_format="bshd",
-            normalization=normalization,
-            self_attn_mask_type="no_mask",
-            activation=activation,
-            bias=bias,
-        ).cuda()
-
-        layer.eval()
-        baseline.eval()
-
-        # Sync weights
-        for name, param in baseline.named_parameters():
-            layer.get_parameter(name).data.copy_(param.data)
-
-        x = torch.randn(B, L, D, dtype=torch.float32, device="cuda")
-        with torch.autocast(device_type="cuda", dtype=torch.float32):
-            y = layer(x)
-            y_baseline = baseline(x)
-
-        assert_close(y, y_baseline, atol=1e-3, rtol=0)
-
-    @pytest.mark.cuda
-    @pytest.mark.parametrize("num_gqa_groups", [8, 4])
-    @pytest.mark.parametrize("normalization", ["LayerNorm", "RMSNorm"])
-    @pytest.mark.parametrize("activation", ["gelu", "relu"])
-    @pytest.mark.parametrize("bias", [False, True])
-    def test_baseline_cross_attention(self, num_gqa_groups, normalization, activation, bias):
-        torch.random.manual_seed(0)
-        if te is None:
-            pytest.skip("Transformer Engine is not available")
-
-        B, L, D = 16, 128, 128
-        layer = TransformerLayer(
-            D,
-            D,
-            D // 16,
-            num_gqa_groups=num_gqa_groups,
-            attn_input_format="bshd",
-            normalization=normalization,
-            activation=activation,
-            layer_type="decoder",
-            bias=bias,
-        ).cuda()
-        baseline = te.TransformerLayer(
-            D,
-            D,
-            D // 16,
-            num_gqa_groups=num_gqa_groups,
-            attn_input_format="bshd",
-            normalization=normalization,
-            self_attn_mask_type="no_mask",
-            activation=activation,
-            layer_type="decoder",
-            bias=bias,
-        ).cuda()
-
-        layer.eval()
-        baseline.eval()
-
-        # Sync weights
-        for name, param in baseline.named_parameters():
-            layer.get_parameter(name).data.copy_(param.data)
-
-        x = torch.randn(B, L, D, dtype=torch.float32, device="cuda")
-        encoder_output = torch.randn(B, L // 2, D, dtype=torch.float32, device="cuda")
-        with torch.autocast(device_type="cuda", dtype=torch.float32):
-            y = layer(x, encoder_output=encoder_output)
-            y_baseline = baseline(x, encoder_output=encoder_output)
-
-        assert_close(y, y_baseline, atol=1e-3, rtol=0)
-
-
-class TestCrossAttentionMLP:
+class TestTransformerDecoderLayer:
 
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    @pytest.mark.parametrize("num_gqa_groups", [8, 4])
-    def test_forward(self, dtype, num_gqa_groups):
+    def test_forward(self, dtype, device):
         B, L, D = 16, 128, 128
-        cross_attention_mlp = CrossAttentionMLP(D, D, D // 16, num_gqa_groups=num_gqa_groups, attn_input_format="bshd")
-        x = torch.randn(B, L, D, dtype=dtype)
-        encoder_output = torch.randn(B, L // 2, D, dtype=dtype)
-        with torch.autocast(device_type="cpu", dtype=dtype):
-            y = cross_attention_mlp(x, encoder_output)
+        transformer_layer = TransformerDecoderLayer(D, D, D // 16).to(device)
+        x = torch.randn(B, L, D, dtype=dtype, device=device)
+        kv = torch.randn(B, L // 2, D, dtype=dtype, device=device)
+        with torch.autocast(device_type=device.type, dtype=dtype):
+            y = transformer_layer(x, kv)
         assert y.shape == (B, L, D)
 
-    def test_permute(self):
-        B, L, D = 16, 128, 128
-        cross_attention_mlp = CrossAttentionMLP(D, D, D // 16, attn_input_format="bshd")
-        x = torch.randn(B, L, D)
-        encoder_output = torch.randn(B, L // 2, D)
-        x[0] = float("nan")
-        y = cross_attention_mlp(x, encoder_output)
-        assert y[0].isnan().any()
-        assert not y[1:].isnan().any()
-
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    @pytest.mark.parametrize("checkpoint", [False, True])
-    def test_backward(self, dtype, checkpoint):
+    def test_backward(self, dtype, device):
         B, L, D = 16, 128, 128
-        cross_attention_mlp = CrossAttentionMLP(D, D, D // 16, attn_input_format="bshd")
-        x = torch.randn(B, L, D, dtype=dtype)
-        encoder_output = torch.randn(B, L // 2, D, dtype=dtype)
-        with torch.autocast(device_type="cpu", dtype=dtype):
-            y = cross_attention_mlp(x, encoder_output, checkpoint_core_attention=checkpoint)
+        transformer_layer = TransformerDecoderLayer(D, D, D // 16).to(device)
+        x = torch.randn(B, L, D, dtype=dtype, device=device)
+        kv = torch.randn(B, L // 2, D, dtype=dtype, device=device)
+        with torch.autocast(device_type=device.type, dtype=dtype):
+            y = transformer_layer(x, kv)
         y.sum().backward()
-        for param in cross_attention_mlp.parameters():
+        for param in transformer_layer.parameters():
             assert param.grad is not None
             assert not param.grad.isnan().any()
 
-    def test_forward_determinstic(self):
+    def test_forward_determinstic(self, device):
         B, L, D = 16, 128, 128
-        cross_attention_mlp = CrossAttentionMLP(D, D, D // 16, attn_input_format="bshd")
-        x = torch.randn(B, L, D)
-        encoder_output = torch.randn(B, L // 2, D)
+        layer = TransformerDecoderLayer(D, D, D // 16).to(device)
+        x = torch.randn(B, L, D, device=device)
+        kv = torch.randn(B, L // 2, D, device=device)
 
-        cross_attention_mlp.eval()
-        y1 = cross_attention_mlp(x, encoder_output)
-        y2 = cross_attention_mlp(x, encoder_output)
+        layer.eval()
+        y1 = layer(x, kv)
+        y2 = layer(x, kv)
         assert_close(y1, y2)
 
-        cross_attention_mlp.train()
-        y3 = cross_attention_mlp(x, encoder_output)
-        y4 = cross_attention_mlp(x, encoder_output)
+        layer.train()
+        y3 = layer(x, kv)
+        y4 = layer(x, kv)
         assert not torch.allclose(y3, y4)
 
-    @pytest.mark.cuda
-    @pytest.mark.parametrize("num_gqa_groups", [8, 4])
-    @pytest.mark.parametrize("normalization", ["LayerNorm", "RMSNorm"])
-    @pytest.mark.parametrize("activation", ["gelu", "relu"])
-    @pytest.mark.parametrize("bias", [False, True])
-    def test_baseline_cross_attention(self, num_gqa_groups, normalization, activation, bias):
-        if te is None:
-            pytest.skip("Transformer Engine is not available")
 
+class TestCrossAttentionTransformer:
+
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+    def test_forward(self, dtype, device):
         B, L, D = 16, 128, 128
-        cross_attention_mlp = CrossAttentionMLP(
-            D,
-            D,
-            D // 16,
-            num_gqa_groups=num_gqa_groups,
-            attn_input_format="bshd",
-            normalization=normalization,
-            activation=activation,
-            bias=bias,
-            backend="pytorch",
-        ).cuda()
-        baseline = CrossAttentionMLP(
-            D,
-            D,
-            D // 16,
-            num_gqa_groups=num_gqa_groups,
-            attn_input_format="bshd",
-            normalization=normalization,
-            activation=activation,
-            bias=bias,
-            backend="te",
-        ).cuda()
+        transformer_layer = CrossAttentionTransformer(D, D, D // 16).to(device)
+        x = torch.randn(B, L, D, dtype=dtype, device=device)
+        kv = torch.randn(B, L // 2, D, dtype=dtype, device=device)
+        with torch.autocast(device_type=device.type, dtype=dtype):
+            y = transformer_layer(x, kv)
+        assert y.shape == (B, L, D)
 
-        cross_attention_mlp.eval()
-        baseline.eval()
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+    def test_backward(self, dtype, device):
+        B, L, D = 16, 128, 128
+        transformer_layer = CrossAttentionTransformer(D, D, D // 16).to(device)
+        x = torch.randn(B, L, D, dtype=dtype, device=device)
+        kv = torch.randn(B, L // 2, D, dtype=dtype, device=device)
+        with torch.autocast(device_type=device.type, dtype=dtype):
+            y = transformer_layer(x, kv)
+        y.sum().backward()
+        for param in transformer_layer.parameters():
+            assert param.grad is not None
+            assert not param.grad.isnan().any()
 
-        # Sync weights
-        for name, param in baseline.named_parameters():
-            cross_attention_mlp.get_parameter(name).data.copy_(param.data)
+    def test_forward_determinstic(self, device):
+        B, L, D = 16, 128, 128
+        layer = CrossAttentionTransformer(D, D, D // 16).to(device)
+        x = torch.randn(B, L, D, device=device)
+        kv = torch.randn(B, L // 2, D, device=device)
 
-        x = torch.randn(B, L, D, dtype=torch.float32, device="cuda")
-        encoder_output = torch.randn(B, L // 2, D, dtype=torch.float32, device="cuda")
-        with torch.autocast(device_type="cuda", dtype=torch.float32):
-            y = cross_attention_mlp(x, encoder_output=encoder_output)
-            y_baseline = baseline(x, encoder_output=encoder_output)
+        layer.eval()
+        y1 = layer(x, kv)
+        y2 = layer(x, kv)
+        assert_close(y1, y2)
 
-        assert_close(y, y_baseline, atol=1e-3, rtol=0)
+        layer.train()
+        y3 = layer(x, kv)
+        y4 = layer(x, kv)
+        assert not torch.allclose(y3, y4)

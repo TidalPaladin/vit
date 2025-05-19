@@ -1,20 +1,48 @@
-from typing import TYPE_CHECKING, Sequence, cast
+import math
+from typing import Callable, Sequence
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch import Tensor
 
-from .fused import LayerNormMLP
-from .helpers import DEFAULT_BACKEND, Backend, check_te_installed, compile_is_disabled, try_import_te
+from .helpers import get_activation
 
 
-if TYPE_CHECKING:
-    import transformer_engine.pytorch as te  # type: ignore[reportMissingImports]
-else:
-    te = try_import_te()
+@torch.compile(fullgraph=True, dynamic=False)
+def learnable_position(dims: Sequence[int], positions_size: Sequence[int], positions: Tensor) -> Tensor:
+    L = math.prod(dims)
+    if dims != positions_size:
+        positions = positions.view(1, *positions_size, -1).movedim(-1, 1)
+        positions = F.interpolate(positions, size=dims, mode="bicubic", antialias=False)
+        positions = positions.movedim(1, -1)
+        positions = positions.view(1, L, -1)
+    return positions.view(1, L, -1)
 
 
-@torch.compile(fullgraph=True, disable=compile_is_disabled())
+class LearnablePosition(nn.Module):
+
+    def __init__(self, hidden_size: int, spatial_size: Sequence[int]):
+        super().__init__()
+        total_size = math.prod(spatial_size)
+        self.positions = nn.Parameter(torch.empty(total_size, hidden_size))
+        self.spatial_size = spatial_size
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        nn.init.trunc_normal_(self.positions, std=0.02)
+
+    @torch.no_grad()
+    def expand_positions(self, size: Sequence[int]) -> None:
+        positions = learnable_position(size, self.spatial_size, self.positions)
+        self.positions = nn.Parameter(positions.reshape(-1, self.positions.shape[-1]))
+
+    def forward(self, dims: Sequence[int] | None) -> Tensor:
+        dims = dims or self.spatial_size
+        return learnable_position(dims, self.spatial_size, self.positions)
+
+
+@torch.compile(fullgraph=True)
 def create_grid(
     dims: Sequence[int],
     dtype: torch.dtype = torch.float32,
@@ -42,18 +70,104 @@ def create_grid(
     return grid.view(1, -1, len(dims))
 
 
+@torch.compile(fullgraph=True)
+def relative_factorized_position(
+    # fmt: off
+    dims: Sequence[int],
+    w_fc1: Tensor, b_fc1: Tensor | None,
+    w_fc2: Tensor, b_fc2: Tensor | None,
+    # fmt: on
+) -> Tensor:
+    grid = create_grid(dims, device=w_fc1.device)
+    y = F.linear(grid, w_fc1, b_fc1)
+    y = F.linear(y, w_fc2, b_fc2)
+    return y
+
+
 class RelativeFactorizedPosition(nn.Module):
     """
     Computes relative factorized position encodings.
 
-    A grid of positions in the interval :math:`[-1, 1]` is first created.
-    This grid is then projected into a higher-dimensional space using a single linear projection.
+    Args:
+        d_in:
+            Input dimension size
+        hidden_size:
+            Hidden dimension size
+
+    Shapes:
+        * Input - :math:`(C,)` where :math:`C` is the number of input dimensions
+        * Output - :math:`(1, L, D)` where :math:`L` is the product of input dimensions and :math:`D` is the output dimension
+    """
+
+    def __init__(self, d_in: int, hidden_size: int):
+        super().__init__()
+        self.fc1 = nn.Linear(d_in, hidden_size)
+        self.fc2 = nn.Linear(hidden_size, hidden_size)
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        self.fc1.reset_parameters()
+        self.fc2.reset_parameters()
+        nn.init.trunc_normal_(self.fc1.weight, std=0.02)
+        nn.init.trunc_normal_(self.fc2.weight, std=0.02)
+
+    def forward(self, dims: Sequence[int]) -> Tensor:
+        return relative_factorized_position(
+            # fmt: off
+            dims,
+            self.fc1.weight, self.fc1.bias,
+            self.fc2.weight, self.fc2.bias,
+            # fmt: on
+        )
+
+
+@torch.compile(fullgraph=True, dynamic=False)
+def learnable_fourier_features(
+    # fmt: off
+    dims: Sequence[int],
+    w_fourier: Tensor, b_fourier: Tensor | None,
+    w_fc1: Tensor, b_fc1: Tensor | None,
+    w_fc2: Tensor, b_fc2: Tensor | None,
+    normalize_grid: bool,
+    activation: Callable[[Tensor], Tensor],
+    dropout: float,
+    training: bool,
+    # fmt: on
+) -> Tensor:
+    # Input Fourier features
+    grid = create_grid(dims, device=w_fourier.device, normalize=normalize_grid)
+    y = F.linear(grid, w_fourier, b_fourier)
+    y = torch.cat([y.sin(), y.cos()], dim=-1)
+    f = y.shape[-1]
+    y = y / math.sqrt(f)
+
+    # MLP
+    y = F.linear(y, w_fc1, b_fc1)
+    y = activation(y)
+    y = F.dropout(y, p=dropout, training=training)
+    y = F.linear(y, w_fc2, b_fc2)
+    return y
+
+
+class LearnableFourierFeatures(nn.Module):
+    """
+    Computes learnable Fourier feature positional embeddings.
 
     Args:
         d_in:
             Input dimension size
-        d_out:
-            Output dimension size
+        hidden_size:
+            Hidden dimension size
+        fourier_size:
+            Number of Fourier features
+        inner_size:
+            Hidden dimension size of the inner MLP
+        gamma:
+            Scale parameter for the Fourier features at initialization
+        dropout:
+            Dropout rate
+        activation:
+            Activation function
 
     Shapes:
         * Input - :math:`(C,)` where :math:`C` is the number of input dimensions
@@ -64,31 +178,43 @@ class RelativeFactorizedPosition(nn.Module):
         self,
         d_in: int,
         hidden_size: int,
-        ffn_hidden_size: int,
+        fourier_size: int | None = None,
+        inner_size: int | None = None,
+        gamma: float = 1.0,
+        dropout: float = 0.2,
         activation: str = "gelu",
-        normalization: str = "LayerNorm",
-        bias: bool = True,
-        backend: Backend = DEFAULT_BACKEND,
     ):
         super().__init__()
-        match backend:
-            case "pytorch":
-                self.linear = nn.Linear(d_in, hidden_size, bias=bias)
-                self.mlp = LayerNormMLP(
-                    hidden_size, ffn_hidden_size, activation=activation, normalization=normalization, bias=bias
-                )
-            case "te":
-                check_te_installed(te)
-                self.linear = te.Linear(d_in, hidden_size, bias=bias)
-                self.mlp = te.LayerNormMLP(
-                    hidden_size, ffn_hidden_size, activation=activation, normalization=normalization, bias=bias
-                )
-            case _:
-                raise ValueError(f"Backend {backend} not supported")
+        fourier_size = fourier_size or hidden_size
+        inner_size = inner_size or hidden_size
+        assert fourier_size % 2 == 0
+        self.gamma = gamma
+        self.fourier = nn.Linear(d_in, fourier_size // 2, bias=False)
+        self.fc1 = nn.Linear(fourier_size, inner_size)
+        self.fc2 = nn.Linear(inner_size, hidden_size)
+        self.dropout = nn.Dropout(dropout)
+        self.activation = get_activation(activation)
+        self.reset_parameters()
+
+    def reset_parameters(self, gamma: float | None = None) -> None:
+        gamma = gamma or self.gamma
+        self.fourier.reset_parameters()
+        self.fc1.reset_parameters()
+        self.fc2.reset_parameters()
+        nn.init.normal_(self.fourier.weight, std=gamma**-2.0)
+        nn.init.trunc_normal_(self.fc1.weight, std=0.02)
+        nn.init.trunc_normal_(self.fc2.weight, std=0.02)
 
     def forward(self, dims: Sequence[int]) -> Tensor:
-        with torch.no_grad():
-            grid = create_grid(dims, device=cast(Tensor, self.linear.weight).device)
-        y = self.linear(grid)
-        y = self.mlp(y)
-        return y
+        return learnable_fourier_features(
+            # fmt: off
+            dims,
+            self.fourier.weight, self.fourier.bias,
+            self.fc1.weight, self.fc1.bias,
+            self.fc2.weight, self.fc2.bias,
+            normalize_grid=True,
+            activation=self.activation,
+            dropout=self.dropout.p,
+            training=self.training,
+            # fmt: on
+        )

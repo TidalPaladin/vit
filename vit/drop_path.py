@@ -2,10 +2,8 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from .helpers import compile_is_disabled
 
-
-@torch.compile(fullgraph=True, disable=compile_is_disabled())
+@torch.compile(fullgraph=True)
 def drop_path(x: Tensor, drop_prob: float, training: bool) -> Tensor:
     """Stochastic depth per sample.
 

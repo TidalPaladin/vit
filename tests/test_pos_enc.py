@@ -2,69 +2,111 @@ import pytest
 import torch
 from torch.testing import assert_close
 
-from vit.pos_enc import RelativeFactorizedPosition, create_grid
+from vit.pos_enc import LearnableFourierFeatures, LearnablePosition, RelativeFactorizedPosition, create_grid
 
 
-@pytest.fixture(params=["pytorch", pytest.param("te", marks=pytest.mark.cuda)])
-def backend(request):
-    return request.param
+class TestLearnablePosition:
 
-
-@pytest.mark.parametrize("normalize", [True, False])
-def test_create_grid(normalize):
-    dims = (4, 4)
-    grid = create_grid(dims, normalize=normalize)
-    assert grid.shape == (1, 16, 2)
-    if normalize:
-        assert torch.all(grid[0, 0] == torch.tensor([-1.0, -1.0]))
-        assert torch.all(grid[0, -1] == torch.tensor([1.0, 1.0]))
-    else:
-        assert torch.all(grid[0, 0] == torch.tensor([0, 0]))
-        assert torch.all(grid[0, -1] == torch.tensor([3, 3]))
-
-
-class TestRelativeFactorizedPosition:
-
-    @pytest.mark.parametrize("normalization", ["LayerNorm", "RMSNorm"])
-    @pytest.mark.parametrize("bias", [True, False])
-    @pytest.mark.parametrize("activation", ["gelu", "srelu"])
-    def test_forward(self, backend, normalization, bias, activation):
-        C, D = 2, 16
+    def test_forward(self, device):
+        D = 16
         torch.random.manual_seed(0)
-        device_type = "cuda" if backend == "te" else "cpu"
-        layer = RelativeFactorizedPosition(
-            C, D, 4 * D, normalization=normalization, bias=bias, activation=activation, backend=backend
-        ).to(device_type)
+        layer = LearnablePosition(D, (8, 8)).to(device)
         out = layer((8, 8))
-        L = 64
-        assert out.shape == (1, L, D)
+        assert out.shape == (1, 64, D)
+        assert out.device == device
 
-    def test_backward(self, backend):
-        C, D = 2, 16
+    def test_backward(self, device):
+        D = 16
         torch.random.manual_seed(0)
-        device_type = "cuda" if backend == "te" else "cpu"
-        layer = RelativeFactorizedPosition(C, D, 4 * D, backend=backend).to(device_type)
+        layer = LearnablePosition(D, (8, 8)).to(device)
         out = layer((8, 8))
         out.sum().backward()
         for param in layer.parameters():
             assert param.grad is not None
             assert not param.grad.isnan().any()
 
-    @pytest.mark.cuda
-    def test_baseline(self):
+    def test_forward_interpolate(self):
+        D = 16
+        torch.random.manual_seed(0)
+        layer = LearnablePosition(D, (8, 8))
+        out = layer((12, 12))
+        assert out.shape == (1, 144, D)
+
+    def test_expand_positions(self, device):
+        D = 16
+        torch.random.manual_seed(0)
+        layer = LearnablePosition(D, (8, 8)).to(device)
+        layer.expand_positions((12, 12))
+        assert layer.positions.shape == (144, D)
+        assert layer.positions.requires_grad is True
+        assert layer.positions.device == device
+
+
+@pytest.mark.parametrize("normalize", [True, False])
+def test_create_grid(normalize, device):
+    dims = (4, 4)
+    grid = create_grid(dims, normalize=normalize, device=device)
+    assert grid.shape == (1, 16, 2)
+    if normalize:
+        assert torch.all(grid[0, 0] == torch.tensor([-1.0, -1.0], device=device))
+        assert torch.all(grid[0, -1] == torch.tensor([1.0, 1.0], device=device))
+    else:
+        assert torch.all(grid[0, 0] == torch.tensor([0, 0], device=device))
+        assert torch.all(grid[0, -1] == torch.tensor([3, 3], device=device))
+
+
+class TestRelativeFactorizedPosition:
+
+    def test_forward(self, device):
         C, D = 2, 16
         torch.random.manual_seed(0)
-        baseline = RelativeFactorizedPosition(C, D, 4 * D, backend="pytorch").to("cuda")
-        layer = RelativeFactorizedPosition(C, D, 4 * D, backend="te").to("cuda")
+        layer = RelativeFactorizedPosition(C, D).to(device)
+        out = layer((8, 8))
+        assert out.shape == (1, 64, D)
+        assert out.device == device
+
+    def test_backward(self, device):
+        C, D = 2, 16
+        torch.random.manual_seed(0)
+        layer = RelativeFactorizedPosition(C, D).to(device)
+        out = layer((8, 8))
+        out.sum().backward()
+        for param in layer.parameters():
+            assert param.grad is not None
+            assert not param.grad.isnan().any()
+
+
+class TestLearnableFourierFeatures:
+
+    def test_forward(self, device):
+        C, D = 2, 16
+        torch.random.manual_seed(0)
+        layer = LearnableFourierFeatures(C, D).to(device)
+        out = layer((8, 8))
+        assert out.shape == (1, 64, D)
+        assert out.device == device
+
+    def test_backward(self, device):
+        C, D = 2, 16
+        torch.random.manual_seed(0)
+        layer = LearnableFourierFeatures(C, D).to(device)
+        out = layer((8, 8))
+        out.sum().backward()
+        for param in layer.parameters():
+            assert param.grad is not None
+            assert not param.grad.isnan().any()
+
+    def test_deterministic(self, device):
+        C, D = 2, 16
+        torch.random.manual_seed(0)
+        layer = LearnableFourierFeatures(C, D).to(device)
 
         layer.eval()
-        baseline.eval()
+        out1 = layer((8, 8))
+        out2 = layer((8, 8))
+        assert_close(out1, out2)
 
-        # Sync weights
-        for name, param in baseline.named_parameters():
-            layer.get_parameter(name).data.copy_(param.data)
-
-        with torch.autocast(device_type="cuda", dtype=torch.float32):
-            y = layer((8, 8))
-            y_baseline = baseline((8, 8))
-        assert_close(y, y_baseline, atol=1e-4, rtol=0)
+        layer.train()
+        out1 = layer((8, 8))
+        out2 = layer((8, 8))
+        assert not torch.allclose(out1, out2)

@@ -7,23 +7,17 @@ name = "vit"
 description = ""
 requires-python = ">=3.10"
 authors = [
-    {name = "Scott Chase Waggener", email = "tidalpaladin@protonmail.com"},
+    {name = "Scott Chase Waggener", email = "chase.waggener@icloud.com"},
 ]
 dependencies = [
   "torch",
   "numpy",
-  "einops",
   "pyyaml",
 ]
 
 readme = "README.md"
 license = {text = "Apache"}
 dynamic = ["version"]
-
-[project.optional-dependencies]
-convnext = [
-  "convnext @ git+https://github.com/TidalPaladin/convnext.git",
-]
 
 [tool.autoflake]
 remove-all-unused-imports = true
@@ -69,9 +63,6 @@ markers = [
 ]
 filterwarnings = []
 
-[tool.pytest_env]
-TORCH_COMPILE = "0"
-
 # Sample script config
 #[project.scripts]
 #foo = "project.cli.__main__:main"
@@ -91,5 +82,4 @@ test = [
     "pytest-env",
     "coverage",
     "pdbpp",
-    "convnext @ git+https://github.com/TidalPaladin/convnext.git",
 ]
