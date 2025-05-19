@@ -156,6 +156,7 @@ class ViT(nn.Module):
         input: Tensor,
         unmasked_ratio: float,
         scale: int,
+        roll: bool = False,
     ) -> Tensor:
         r"""Creates a token mask for the input.
 
@@ -164,6 +165,7 @@ class ViT(nn.Module):
                 Should be a raw input prior to tokenization.
             unmasked_ratio: Proportion of tokens to leave unmasked.
             scale: Scale of the mask.
+            roll: Whether to roll the mask.
 
         Shapes:
             - input: :math:`(B, C, H, W)` or :math:`(B, C, D, H, W)`
@@ -181,6 +183,7 @@ class ViT(nn.Module):
             mask_ratio=1 - unmasked_ratio,
             batch_size=batch_size,
             scale=scale,
+            roll=roll,
             device=device,
         )
 

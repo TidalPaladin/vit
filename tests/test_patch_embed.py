@@ -29,3 +29,14 @@ class TestPatchEmbed2d:
         for param in layer.parameters():
             assert param.grad is not None
             assert not param.grad.isnan().any()
+
+    def test_backward_learnable_all_updated(self, device):
+        B, C, H, W = 2, 3, 64, 64
+        D_model = 64
+        layer = PatchEmbed2d(C, D_model, (4, 4), (H, W), pos_emb="learnable").to(device)
+        x = torch.randn(B, C, H, W, requires_grad=True, device=device)
+        y = layer(x)
+        y.sum().backward()
+        for param in layer.parameters():
+            assert param.grad is not None
+            assert (param.grad != 0).all()
