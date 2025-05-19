@@ -126,15 +126,17 @@ class PatchEmbed2d(nn.Module):
     ):
         super().__init__()
         self.patch = nn.Conv2d(in_channels, hidden_size, tuple(patch_size), stride=tuple(patch_size))
-        self.pos_enc = (
-            RelativeFactorizedPosition(2, hidden_size, **kwargs)
-            if pos_emb == "factorized"
-            else (
-                LearnableFourierFeatures(2, hidden_size, **kwargs)
-                if pos_emb == "fourier"
-                else LearnablePosition(hidden_size, self.tokenized_size(img_size)) if pos_emb == "learnable" else None
-            )
-        )
+        match pos_emb:
+            case "factorized":
+                self.pos_enc = RelativeFactorizedPosition(2, hidden_size, **kwargs)
+            case "fourier":
+                self.pos_enc = LearnableFourierFeatures(2, hidden_size, **kwargs)
+            case "learnable":
+                self.pos_enc = LearnablePosition(hidden_size, self.tokenized_size(tuple(img_size)))
+            case "none":
+                self.pos_enc = None
+            case _:
+                raise ValueError(f"Invalid pos_emb: {pos_emb}")
         self.norm = nn.RMSNorm(hidden_size, eps=eps)
         self.reset_parameters()
 
