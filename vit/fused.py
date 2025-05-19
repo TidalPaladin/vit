@@ -44,7 +44,6 @@ class NormLinear(nn.Module):
     dynamic=False,
     options={
         "layout_optimization": True,
-        "prologue_fusion": True,
         "epilogue_fusion": True,
         "aggressive_fusion": True,
     },
@@ -75,7 +74,6 @@ def norm_mlp(
     dynamic=False,
     options={
         "layout_optimization": True,
-        "prologue_fusion": True,
         "epilogue_fusion": True,
         "aggressive_fusion": True,
     },
