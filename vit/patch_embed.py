@@ -91,7 +91,7 @@ def patch_embed_learnable_fourier_pos(
     return y
 
 
-# @torch.compile(fullgraph=True, dynamic=False)
+@torch.compile(fullgraph=True, dynamic=False)
 def patch_embed_learnable_pos(
     # fmt: off
     x: Tensor,
