@@ -2,6 +2,7 @@ import math
 
 import pytest
 import torch
+from torch.testing import assert_close
 
 from vit.patch_embed import PatchEmbed2d
 
@@ -29,3 +30,18 @@ class TestPatchEmbed2d:
         for param in layer.parameters():
             assert param.grad is not None
             assert not param.grad.isnan().any()
+
+    def test_learnable_dropout_deterministic(self):
+        B, C, H, W = 2, 3, 64, 64
+        D_model = 64
+        layer = PatchEmbed2d(C, D_model, (4, 4), (H, W), pos_emb="learnable")
+        x = torch.randn(B, C, H, W)
+        layer.eval()
+        y1 = layer(x)
+        y2 = layer(x)
+        assert_close(y1, y2)
+
+        layer.train()
+        y1 = layer(x)
+        y2 = layer(x)
+        assert not torch.allclose(y1, y2)

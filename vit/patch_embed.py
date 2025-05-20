@@ -100,6 +100,8 @@ def patch_embed_learnable_pos(
     positions_size: Sequence[int],
     w_norm: Tensor,
     eps: float,
+    dropout: float,
+    training: bool,
     # fmt: on
 ) -> Tensor:
     dims = x.shape[2:]
@@ -107,7 +109,7 @@ def patch_embed_learnable_pos(
     dims = tuple(s // p for s, p in zip(dims, patch_size))
     y = F.conv2d(x, w_patch, b_patch, stride=patch_size)
     y = y.flatten(2).transpose(1, 2)
-    y = y + learnable_position(dims, positions_size, positions)
+    y = y + learnable_position(dims, positions_size, positions, dropout, training)
     y = F.rms_norm(y, y.shape[-1:], w_norm, eps)
     return y
 
@@ -132,7 +134,9 @@ class PatchEmbed2d(nn.Module):
             case "fourier":
                 self.pos_enc = LearnableFourierFeatures(2, hidden_size, **kwargs)
             case "learnable":
-                self.pos_enc = LearnablePosition(hidden_size, self.tokenized_size(tuple(img_size)))
+                self.pos_enc = LearnablePosition(
+                    hidden_size, self.tokenized_size(tuple(img_size)), dropout=0.1, **kwargs
+                )
             case "none":
                 self.pos_enc = None
             case _:
@@ -198,6 +202,8 @@ class PatchEmbed2d(nn.Module):
                 self.pos_enc.spatial_size,
                 self.norm.weight,
                 self.norm.eps or 1e-5,
+                self.pos_enc.dropout.p,
+                self.training,
             )
         else:
             return patch_embed(

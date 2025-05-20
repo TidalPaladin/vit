@@ -131,6 +131,19 @@ class TestCreateMask:
         else:
             pytest.fail("No difference found between rolled and unrolled masks")
 
+    @pytest.mark.parametrize("roll", [False, True])
+    @pytest.mark.parametrize("scale", [1, 2, 4])
+    def test_no_sample_bias(self, roll, scale):
+        size = (16, 12)
+        batch_size = 1
+        counts = torch.zeros(*size, dtype=torch.int32)
+        for i in range(1000):
+            torch.random.manual_seed(i)
+            mask = create_mask(size, 0.5, scale=scale, batch_size=batch_size, roll=roll)
+            counts.add_(mask.type_as(counts).view_as(counts))
+        assert counts.min() > 400
+        assert counts.max() < 600
+
 
 def test_generate_non_overlapping_mask_no_overlap():
     B, L = 5, 10
