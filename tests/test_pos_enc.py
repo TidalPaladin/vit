@@ -41,6 +41,20 @@ class TestLearnablePosition:
         assert layer.positions.requires_grad is True
         assert layer.positions.device == device
 
+    def test_deterministic(self):
+        D = 16
+        torch.random.manual_seed(0)
+        layer = LearnablePosition(D, (8, 8), dropout=0.1)
+        layer.eval()
+        out1 = layer((8, 8))
+        out2 = layer((8, 8))
+        assert_close(out1, out2)
+
+        layer.train()
+        out1 = layer((8, 8))
+        out2 = layer((8, 8))
+        assert not torch.allclose(out1, out2)
+
 
 @pytest.mark.parametrize("normalize", [True, False])
 def test_create_grid(normalize, device):
