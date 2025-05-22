@@ -110,10 +110,18 @@ class TestLearnableFourierFeatures:
             assert param.grad is not None
             assert not param.grad.isnan().any()
 
-    def test_deterministic(self, device):
+    @pytest.mark.parametrize(
+        "dropout,jitter",
+        [
+            (0.0, True),
+            (0.1, False),
+            (0.1, True),
+        ],
+    )
+    def test_deterministic(self, device, dropout, jitter):
         C, D = 2, 16
         torch.random.manual_seed(0)
-        layer = LearnableFourierFeatures(C, D).to(device)
+        layer = LearnableFourierFeatures(C, D, dropout=dropout, jitter=jitter).to(device)
 
         layer.eval()
         out1 = layer((8, 8))
