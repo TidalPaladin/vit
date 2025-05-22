@@ -86,7 +86,7 @@ def patch_embed_learnable_fourier_pos(
         dropout,
         training,
     )
-    y = y + pos
+    y = torch.cat([y, pos.expand_as(y)], dim=-1)
     y = F.rms_norm(y, y.shape[-1:], w_norm, eps)
     return y
 
@@ -127,12 +127,19 @@ class PatchEmbed2d(nn.Module):
         **kwargs,
     ):
         super().__init__()
-        self.patch = nn.Conv2d(in_channels, hidden_size, tuple(patch_size), stride=tuple(patch_size))
+        content_dim = hidden_size // 2 if pos_emb == "fourier" else hidden_size
+        self.patch = nn.Conv2d(in_channels, content_dim, tuple(patch_size), stride=tuple(patch_size))
         match pos_emb:
             case "factorized":
                 self.pos_enc = RelativeFactorizedPosition(2, hidden_size, **kwargs)
             case "fourier":
-                self.pos_enc = LearnableFourierFeatures(2, hidden_size, **kwargs)
+                self.pos_enc = LearnableFourierFeatures(
+                    2,
+                    hidden_size=hidden_size // 2,
+                    fourier_size=hidden_size,
+                    inner_size=hidden_size,
+                    **kwargs,
+                )
             case "learnable":
                 self.pos_enc = LearnablePosition(
                     hidden_size, self.tokenized_size(tuple(img_size)), dropout=0.1, **kwargs
