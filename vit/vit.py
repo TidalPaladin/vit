@@ -50,6 +50,7 @@ class ViTConfig:
     pos_emb: Literal["factorized", "fourier", "none", "learnable"] = "factorized"
     use_rope: bool = False
     rope_theta: float = 100.0
+    learnable_register_pos: bool = False
 
     # Trainable blocks
     mlp_requires_grad: bool = True
@@ -98,14 +99,17 @@ class ViT(nn.Module):
 
         self.blocks = nn.ModuleList([self.create_encoder_layer() for _ in range(config.depth)])
 
-        # When using RoPE, register tokens get a learnable position
+        # When using RoPE, register tokens are initialized with a random position that may be learnable
         if self.config.use_rope and self.register_tokens is not None:
             tokenized_size = self.stem.tokenized_size(tuple(self.config.img_size))
             positions: List[Tensor] = []
             for i in range(len(tokenized_size)):
                 values = torch.rand(self.register_tokens.shape[0]) * tokenized_size[i]
                 positions.append(values)
-            self.register_tokens_pos = nn.Parameter(torch.stack(positions, dim=-1))
+            if self.config.learnable_register_pos:
+                self.register_tokens_pos = nn.Parameter(torch.stack(positions, dim=-1))
+            else:
+                self.register_buffer("register_tokens_pos", torch.stack(positions, dim=-1))
         else:
             self.register_tokens_pos = None
 
