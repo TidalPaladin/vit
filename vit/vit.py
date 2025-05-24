@@ -100,7 +100,7 @@ class ViT(nn.Module):
 
         # When using RoPE, register tokens get a learnable position
         if self.config.use_rope and self.register_tokens is not None:
-            tokenized_size = self.stem.tokenized_size(self.config.img_size)
+            tokenized_size = self.stem.tokenized_size(tuple(self.config.img_size))
             positions: List[Tensor] = []
             for i in range(len(tokenized_size)):
                 values = torch.rand(self.register_tokens.shape[0]) * tokenized_size[i]
@@ -127,7 +127,7 @@ class ViT(nn.Module):
             self.config.activation,
             self.config.drop_path_rate,
             use_rope=self.config.use_rope,
-            tokenized_size=self.stem.tokenized_size(self.config.img_size),
+            tokenized_size=self.stem.tokenized_size(tuple(self.config.img_size)),
             rope_theta=self.config.rope_theta,
         )
 
@@ -142,7 +142,7 @@ class ViT(nn.Module):
             self.config.activation,
             self.config.drop_path_rate,
             use_rope=self.config.use_rope,
-            tokenized_size=self.stem.tokenized_size(self.config.img_size),
+            tokenized_size=self.stem.tokenized_size(tuple(self.config.img_size)),
             rope_theta=self.config.rope_theta,
         )
 
@@ -157,7 +157,7 @@ class ViT(nn.Module):
             self.config.activation,
             self.config.drop_path_rate,
             use_rope=self.config.use_rope,
-            tokenized_size=self.stem.tokenized_size(self.config.img_size),
+            tokenized_size=self.stem.tokenized_size(tuple(self.config.img_size)),
             rope_theta=self.config.rope_theta,
         )
 
@@ -203,7 +203,7 @@ class ViT(nn.Module):
         B, _, *img_size = x.shape
         x = self.stem(x)
         if self.config.use_rope:
-            pos = create_grid(self.stem.tokenized_size(img_size), device=x.device).expand(B, -1, -1)
+            pos = create_grid(self.stem.tokenized_size(tuple(img_size)), device=x.device).expand(B, -1, -1)
         else:
             pos = None
 
