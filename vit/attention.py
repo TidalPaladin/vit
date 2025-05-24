@@ -57,7 +57,7 @@ def project_q_kv_packed(
     return q, k, v
 
 
-@torch.compile(fullgraph=True)
+@torch.compile(fullgraph=True, dynamic=False)
 def attention_qkv_packed(
     # fmt: off
     x: Tensor,
@@ -83,7 +83,7 @@ def attention_qkv_packed(
     return o
 
 
-@torch.compile(fullgraph=True)
+@torch.compile(fullgraph=True, dynamic=False)
 def attention_q_kv_packed(
     # fmt: off
     q: Tensor, kv: Tensor,
@@ -110,7 +110,7 @@ def attention_q_kv_packed(
     return o
 
 
-# @torch.compile(fullgraph=True)
+@torch.compile(dynamic=False)
 def attention_qkv_packed_rope(
     # fmt: off
     x: Tensor, pos: Tensor,
@@ -142,7 +142,7 @@ def attention_qkv_packed_rope(
     return o
 
 
-# @torch.compile(fullgraph=True)
+@torch.compile(dynamic=False)
 def attention_q_kv_packed_rope(
     # fmt: off
     q: Tensor, kv: Tensor, posq: Tensor, posk: Tensor,

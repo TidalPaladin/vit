@@ -69,7 +69,8 @@ def generate_random_orthonormal_basis(n_dims: int):
     return Q
 
 
-# @torch.compile(fullgraph=True, dynamic=False)
+# NOTE: Compiler must be disable due to complex number support
+@torch.compiler.disable
 def compute_mixed_cis_nd(freqs: Tensor, positions: Tensor, num_heads: int):
     """
     Compute mixed complex exponentials for N-dimensional RoPE with batch support.
@@ -133,7 +134,7 @@ def compute_mixed_cis_nd(freqs: Tensor, positions: Tensor, num_heads: int):
     return freqs_cis
 
 
-# @torch.compile(fullgraph=True, dynamic=False)
+@torch.compiler.disable
 def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor):
     """
     Apply rotary embeddings to input tensor.

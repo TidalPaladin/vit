@@ -19,7 +19,8 @@ class TestMixedRoPE:
         freqs = init_random_nd_freqs(dim, nhead, spatial_dims, theta)
         assert freqs.shape == (spatial_dims, nhead, dim // 2)
 
-    def test_forward_2d(self, device):
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+    def test_forward_2d(self, device, dtype):
         B, H, W, D = 2, 8, 8, 64
         L = H * W
         nhead = 4
@@ -27,7 +28,8 @@ class TestMixedRoPE:
 
         grid = create_grid((H, W), device=device).expand(B, -1, -1)
         x = torch.randn(B, nhead, L, D // nhead, device=device)
-        out = layer(x, grid)
+        with torch.autocast(device_type=device.type, dtype=dtype):
+            out = layer(x, grid)
         assert out.shape == (B, nhead, L, D // nhead)
         assert not torch.allclose(x, out)
 
@@ -43,7 +45,8 @@ class TestMixedRoPE:
         assert out.shape == (B, nhead, L, D // nhead)
         assert not torch.allclose(x, out)
 
-    def test_backward(self, device):
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+    def test_backward(self, device, dtype):
         B, H, W, D = 2, 8, 8, 64
         L = H * W
         nhead = 4
@@ -51,7 +54,8 @@ class TestMixedRoPE:
 
         grid = create_grid((H, W), device=device).expand(B, -1, -1)
         x = torch.randn(B, nhead, L, D // nhead, device=device)
-        out = layer(x, grid)
+        with torch.autocast(device_type=device.type, dtype=dtype):
+            out = layer(x, grid)
         out.sum().backward()
         for param in layer.parameters():
             assert param.grad is not None
