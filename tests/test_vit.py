@@ -48,10 +48,12 @@ class TestViT:
 
     @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_forward(self, device, config, num_register_tokens, dtype):
+    @pytest.mark.parametrize("use_rope", [False, True])
+    def test_forward(self, device, config, num_register_tokens, dtype, use_rope):
         config = replace(
             config,
             num_register_tokens=num_register_tokens,
+            use_rope=use_rope,
         )
         x = torch.randn(2, 3, 224, 224, device=device)
         model = ViT(config).to(device)
@@ -60,10 +62,12 @@ class TestViT:
         assert out.shape == (2, 196, 128)
 
     @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
-    def test_forward_masked(self, device, config, num_register_tokens):
+    @pytest.mark.parametrize("use_rope", [False, True])
+    def test_forward_masked(self, device, config, num_register_tokens, use_rope):
         config = replace(
             config,
             num_register_tokens=num_register_tokens,
+            use_rope=use_rope,
         )
         x = torch.randn(2, 3, 224, 224, device=device)
         model = ViT(config).to(device)
@@ -73,10 +77,12 @@ class TestViT:
 
     @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_backward(self, device, config, num_register_tokens, dtype):
+    @pytest.mark.parametrize("use_rope", [False, True])
+    def test_backward(self, device, config, num_register_tokens, dtype, use_rope):
         config = replace(
             config,
             num_register_tokens=num_register_tokens,
+            use_rope=use_rope,
         )
         x = torch.randn(2, 3, 224, 224, device=device, requires_grad=True)
         model = ViT(config).to(device)

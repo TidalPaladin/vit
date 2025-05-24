@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Self, Sequence, Type, cast
+from typing import Any, List, Literal, Self, Sequence, Type, cast
 
 import torch
 import torch.nn as nn
@@ -8,6 +8,7 @@ import yaml
 from torch import Tensor
 
 from .patch_embed import PatchEmbed2d
+from .pos_enc import create_grid
 from .tokens import apply_mask, create_mask
 from .transformer import CrossAttentionTransformer, TransformerDecoderLayer, TransformerEncoderLayer
 
@@ -46,7 +47,9 @@ class ViTConfig:
     activation: str = "srelu"
     drop_path_rate: float = 0.0
     num_register_tokens: int = 0
-    pos_emb: Literal["factorized", "fourier", "none"] = "factorized"
+    pos_emb: Literal["factorized", "fourier", "none", "learnable"] = "factorized"
+    use_rope: bool = False
+    rope_theta: float = 100.0
 
     # Trainable blocks
     mlp_requires_grad: bool = True
@@ -95,6 +98,17 @@ class ViT(nn.Module):
 
         self.blocks = nn.ModuleList([self.create_encoder_layer() for _ in range(config.depth)])
 
+        # When using RoPE, register tokens get a learnable position
+        if self.config.use_rope and self.register_tokens is not None:
+            tokenized_size = self.stem.tokenized_size(self.config.img_size)
+            positions: List[Tensor] = []
+            for i in range(len(tokenized_size)):
+                values = torch.rand(self.register_tokens.shape[0]) * tokenized_size[i]
+                positions.append(values)
+            self.register_tokens_pos = nn.Parameter(torch.stack(positions, dim=-1))
+        else:
+            self.register_tokens_pos = None
+
         self.mlp_requires_grad_(self.config.mlp_requires_grad)
         self.self_attention_requires_grad_(self.config.self_attention_requires_grad)
 
@@ -112,6 +126,9 @@ class ViT(nn.Module):
             self.config.bias,
             self.config.activation,
             self.config.drop_path_rate,
+            use_rope=self.config.use_rope,
+            tokenized_size=self.stem.tokenized_size(self.config.img_size),
+            rope_theta=self.config.rope_theta,
         )
 
     def create_decoder_layer(self) -> TransformerDecoderLayer:
@@ -124,6 +141,9 @@ class ViT(nn.Module):
             self.config.bias,
             self.config.activation,
             self.config.drop_path_rate,
+            use_rope=self.config.use_rope,
+            tokenized_size=self.stem.tokenized_size(self.config.img_size),
+            rope_theta=self.config.rope_theta,
         )
 
     def create_cross_attention_layer(self) -> CrossAttentionTransformer:
@@ -136,6 +156,9 @@ class ViT(nn.Module):
             self.config.bias,
             self.config.activation,
             self.config.drop_path_rate,
+            use_rope=self.config.use_rope,
+            tokenized_size=self.stem.tokenized_size(self.config.img_size),
+            rope_theta=self.config.rope_theta,
         )
 
     def create_mask(
@@ -177,19 +200,27 @@ class ViT(nn.Module):
         return mask
 
     def forward(self, x: Tensor, mask: Tensor | None = None) -> Tensor:
+        B, _, *img_size = x.shape
         x = self.stem(x)
+        if self.config.use_rope:
+            pos = create_grid(self.stem.tokenized_size(img_size), device=x.device).expand(B, -1, -1)
+        else:
+            pos = None
+
         if mask is not None:
             x = apply_mask(mask, x)
+            if pos is not None:
+                pos = apply_mask(mask, pos)
 
-        B = x.shape[0]
-        x = (
-            torch.cat([self.register_tokens.unsqueeze(0).expand(B, -1, -1), x], dim=1)
-            if self.register_tokens is not None
-            else x
-        )
+        if self.register_tokens is not None:
+            x = torch.cat([self.register_tokens.unsqueeze(0).expand(B, -1, -1), x], dim=1)
+            if pos is not None:
+                assert self.register_tokens_pos is not None
+                pos = torch.cat([self.register_tokens_pos.unsqueeze(0).expand(B, -1, -1), pos], dim=1)
+
         for block in self.blocks:
             assert isinstance(block, TransformerEncoderLayer)
-            x = block(x)
+            x = block(x, pos)
         x = x[:, self.config.num_register_tokens :].contiguous()
         return x
 
