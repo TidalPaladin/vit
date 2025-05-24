@@ -54,21 +54,6 @@ def init_random_nd_freqs(dim: int, num_heads: int, spatial_dims: int = 2, theta:
     return freqs
 
 
-def generate_random_orthonormal_basis(n_dims: int):
-    """Generate a random orthonormal basis using QR decomposition."""
-    # Generate random matrix
-    random_matrix = torch.randn(n_dims, n_dims)
-
-    # QR decomposition gives us an orthonormal basis
-    Q, R = torch.linalg.qr(random_matrix)
-
-    # Ensure positive diagonal elements for consistency
-    signs = torch.sign(torch.diag(R))
-    Q = Q * signs.unsqueeze(0)
-
-    return Q
-
-
 # NOTE: Compiler must be disable due to complex number support
 @torch.compiler.disable
 def compute_mixed_cis_nd(freqs: Tensor, positions: Tensor, num_heads: int):

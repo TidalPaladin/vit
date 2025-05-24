@@ -207,7 +207,8 @@ class ViT(nn.Module):
         B, _, *img_size = x.shape
         x = self.stem(x)
         if self.config.use_rope:
-            pos = create_grid(self.stem.tokenized_size(tuple(img_size)), device=x.device).expand(B, -1, -1)
+            pos = create_grid(self.stem.tokenized_size(tuple(img_size)), device=x.device, normalize=False)
+            pos = pos.expand(B, -1, -1)
         else:
             pos = None
 
