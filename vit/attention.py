@@ -1,9 +1,11 @@
-from typing import Tuple
+from typing import Sequence, Tuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
+
+from .rope import MixedRoPE, apply_rotary_emb, compute_mixed_cis_nd
 
 
 # torch.compile has difficulty with einops.rearrange, so we use our own implementation
@@ -108,6 +110,72 @@ def attention_q_kv_packed(
     return o
 
 
+# @torch.compile(fullgraph=True)
+def attention_qkv_packed_rope(
+    # fmt: off
+    x: Tensor, pos: Tensor,
+    w_in: Tensor, b_in: Tensor | None,
+    w_norm: Tensor,
+    head_dim: int,
+    w_out: Tensor, b_out: Tensor | None,
+    freqs: Tensor,
+    attn_mask: Tensor | None,
+    eps: float,
+    attention_dropout: float,
+    dropout: float,
+    training: bool,
+    # fmt: on
+) -> Tensor:
+    q, k, v = project_qkv_packed(x, w_in, b_in, w_norm, head_dim, eps)
+    assert freqs.shape[1] == q.shape[1], f"Head count mismatch: expected {freqs.shape}, got {q.shape}"
+    freqs_cis = compute_mixed_cis_nd(freqs, pos, freqs.shape[1])
+    q = apply_rotary_emb(q, freqs_cis)
+    k = apply_rotary_emb(k, freqs_cis)
+
+    attention_dropout = 0.0 if not training else attention_dropout
+    o = F.scaled_dot_product_attention(
+        q, k, v, attn_mask=attn_mask, dropout_p=attention_dropout, is_causal=False, enable_gqa=True
+    )
+    o = _permute_and_fold_head(o)
+    o = F.linear(o, w_out, b_out)
+    o = F.dropout(o, p=dropout, training=training, inplace=True)
+    return o
+
+
+# @torch.compile(fullgraph=True)
+def attention_q_kv_packed_rope(
+    # fmt: off
+    q: Tensor, kv: Tensor, posq: Tensor, posk: Tensor,
+    w_q: Tensor, b_q: Tensor | None,
+    w_kv: Tensor, b_kv: Tensor | None,
+    w_norm: Tensor,
+    head_dim: int,
+    w_out: Tensor, b_out: Tensor | None,
+    freqs: Tensor,
+    attn_mask: Tensor | None,
+    eps: float,
+    attention_dropout: float,
+    dropout: float,
+    training: bool,
+    # fmt: on
+) -> Tensor:
+    q, k, v = project_q_kv_packed(q, kv, w_q, b_q, w_kv, b_kv, w_norm, head_dim, eps)
+    assert freqs.shape[1] == q.shape[1], f"Head count mismatch: expected {freqs.shape}, got {q.shape}"
+    freqs_cis_q = compute_mixed_cis_nd(freqs, posq, freqs.shape[1])
+    freqs_cis_k = compute_mixed_cis_nd(freqs, posk, freqs.shape[1])
+    q = apply_rotary_emb(q, freqs_cis_q)
+    k = apply_rotary_emb(k, freqs_cis_k)
+
+    attention_dropout = 0.0 if not training else attention_dropout
+    o = F.scaled_dot_product_attention(
+        q, k, v, attn_mask=attn_mask, dropout_p=attention_dropout, is_causal=False, enable_gqa=True
+    )
+    o = _permute_and_fold_head(o)
+    o = F.linear(o, w_out, b_out)
+    o = F.dropout(o, p=dropout, training=training, inplace=True)
+    return o
+
+
 @torch.compile(fullgraph=True)
 def attentive_pool(
     # fmt: off
@@ -137,6 +205,9 @@ class SelfAttention(nn.Module):
         attention_dropout: float = 0.1,
         bias: bool = True,
         eps: float = 1e-5,
+        use_rope: bool = False,
+        tokenized_size: Sequence[int] | None = None,
+        rope_theta: float = 100.0,
     ):
         super().__init__()
         self.norm = nn.RMSNorm(hidden_size, eps=eps)
@@ -145,6 +216,13 @@ class SelfAttention(nn.Module):
         self.dropout = nn.Dropout(hidden_dropout)
         self.attention_dropout = nn.Dropout(attention_dropout)
         self._head_dim = hidden_size // num_attention_heads
+        if use_rope:
+            if tokenized_size is None:
+                raise ValueError("tokenized_size must be provided when using RoPE")
+            self.rope = MixedRoPE(hidden_size, num_attention_heads, tokenized_size, rope_theta)
+        else:
+            self.rope = None
+
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
@@ -152,22 +230,45 @@ class SelfAttention(nn.Module):
         self.out_proj.reset_parameters()
         self.norm.reset_parameters()
         nn.init.trunc_normal_(self.qkv_proj.weight, std=0.02)
+        if self.rope is not None:
+            self.rope.reset_parameters()
 
-    def forward(self, x: Tensor, attn_mask: Tensor | None = None) -> Tensor:
-        return attention_qkv_packed(
-            # fmt: off
-            x,
-            self.qkv_proj.weight, self.qkv_proj.bias,
-            self.norm.weight,
-            self._head_dim,
-            self.out_proj.weight, self.out_proj.bias,
-            attn_mask,
-            self.norm.eps or 1e-5,
-            self.attention_dropout.p,
-            self.dropout.p,
-            self.training,
-            # fmt: on
-        )
+    def forward(self, x: Tensor, pos: Tensor | None = None, attn_mask: Tensor | None = None) -> Tensor:
+        if self.rope is not None:
+            if pos is None:
+                raise ValueError("pos must be provided when using RoPE")
+            elif pos.shape[:2] != x.shape[:2]:
+                raise ValueError(f"pos must have the batch/sequence dimension as x, got {pos.shape} and {x.shape}")
+            return attention_qkv_packed_rope(
+                # fmt: off
+                x, pos,
+                self.qkv_proj.weight, self.qkv_proj.bias,
+                self.norm.weight,
+                self._head_dim,
+                self.out_proj.weight, self.out_proj.bias,
+                self.rope.freqs,
+                attn_mask,
+                self.norm.eps or 1e-5,
+                self.attention_dropout.p,
+                self.dropout.p,
+                self.training,
+                # fmt: on
+            )
+        else:
+            return attention_qkv_packed(
+                # fmt: off
+                x,
+                self.qkv_proj.weight, self.qkv_proj.bias,
+                self.norm.weight,
+                self._head_dim,
+                self.out_proj.weight, self.out_proj.bias,
+                attn_mask,
+                self.norm.eps or 1e-5,
+                self.attention_dropout.p,
+                self.dropout.p,
+                self.training,
+                # fmt: on
+            )
 
 
 class CrossAttention(nn.Module):
@@ -181,6 +282,9 @@ class CrossAttention(nn.Module):
         attention_dropout: float = 0.1,
         bias: bool = True,
         eps: float = 1e-5,
+        use_rope: bool = False,
+        tokenized_size: Sequence[int] | None = None,
+        rope_theta: float = 100.0,
     ):
         super().__init__()
         self.norm = nn.RMSNorm(hidden_size, eps=eps)
@@ -190,6 +294,12 @@ class CrossAttention(nn.Module):
         self.dropout = nn.Dropout(hidden_dropout)
         self.attention_dropout = nn.Dropout(attention_dropout)
         self._head_dim = hidden_size // num_attention_heads
+        if use_rope:
+            if tokenized_size is None:
+                raise ValueError("tokenized_size must be provided when using RoPE")
+            self.rope = MixedRoPE(hidden_size, num_attention_heads, tokenized_size, rope_theta)
+        else:
+            self.rope = None
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
@@ -199,23 +309,56 @@ class CrossAttention(nn.Module):
         self.norm.reset_parameters()
         nn.init.trunc_normal_(self.q_proj.weight, std=0.02)
         nn.init.trunc_normal_(self.kv_proj.weight, std=0.02)
+        if self.rope is not None:
+            self.rope.reset_parameters()
 
-    def forward(self, q: Tensor, kv: Tensor, attn_mask: Tensor | None = None) -> Tensor:
-        return attention_q_kv_packed(
-            # fmt: off
-            q, kv,
-            self.q_proj.weight, self.q_proj.bias,
-            self.kv_proj.weight, self.kv_proj.bias,
-            self.norm.weight,
-            self._head_dim,
-            self.out_proj.weight, self.out_proj.bias,
-            attn_mask,
-            self.norm.eps or 1e-5,
-            self.attention_dropout.p,
-            self.dropout.p,
-            self.training,
-            # fmt: on
-        )
+    def forward(
+        self,
+        q: Tensor,
+        kv: Tensor,
+        posq: Tensor | None = None,
+        posk: Tensor | None = None,
+        attn_mask: Tensor | None = None,
+    ) -> Tensor:
+        if self.rope is not None:
+            if posq is None or posk is None:
+                raise ValueError("posq and posk must be provided when using RoPE")
+            elif posq.shape[:2] != q.shape[:2]:
+                raise ValueError(f"posq must have the batch/sequence dimension as q, got {posq.shape} and {q.shape}")
+            elif posk.shape[:2] != kv.shape[:2]:
+                raise ValueError(f"posk must have the batch/sequence dimension as kv, got {posk.shape} and {kv.shape}")
+            return attention_q_kv_packed_rope(
+                # fmt: off
+                q, kv, posq, posk,
+                self.q_proj.weight, self.q_proj.bias,
+                self.kv_proj.weight, self.kv_proj.bias,
+                self.norm.weight,
+                self._head_dim,
+                self.out_proj.weight, self.out_proj.bias,
+                self.rope.freqs,
+                attn_mask,
+                self.norm.eps or 1e-5,
+                self.attention_dropout.p,
+                self.dropout.p,
+                self.training,
+                # fmt: on
+            )
+        else:
+            return attention_q_kv_packed(
+                # fmt: off
+                q, kv,
+                self.q_proj.weight, self.q_proj.bias,
+                self.kv_proj.weight, self.kv_proj.bias,
+                self.norm.weight,
+                self._head_dim,
+                self.out_proj.weight, self.out_proj.bias,
+                attn_mask,
+                self.norm.eps or 1e-5,
+                self.attention_dropout.p,
+                self.dropout.p,
+                self.training,
+                # fmt: on
+            )
 
 
 class AttentivePool(nn.Module):

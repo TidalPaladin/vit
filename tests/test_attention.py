@@ -3,6 +3,7 @@ import torch
 from torch.testing import assert_close
 
 from vit.attention import AttentivePool, CrossAttention, SelfAttention
+from vit.pos_enc import create_grid
 
 
 class TestSelfAttention:
@@ -14,6 +15,17 @@ class TestSelfAttention:
         x = torch.randn(B, L, D, dtype=dtype, device=device)
         with torch.autocast(device_type=device.type, dtype=dtype):
             y = multihead_attention(x)
+        assert y.shape == (B, L, D)
+
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+    def test_forward_rope(self, dtype, device):
+        H, W = 8, 8
+        B, L, D = 16, H * W, 128
+        multihead_attention = SelfAttention(D, D // 16, use_rope=True, tokenized_size=(H, W)).to(device)
+        x = torch.randn(B, L, D, dtype=dtype, device=device)
+        pos = create_grid((H, W), device=device).expand(B, -1, -1)
+        with torch.autocast(device_type=device.type, dtype=dtype):
+            y = multihead_attention(x, pos)
         assert y.shape == (B, L, D)
 
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
@@ -54,6 +66,19 @@ class TestCrossAttention:
         kv = torch.randn(B, L // 2, D, dtype=dtype, device=device)
         with torch.autocast(device_type=device.type, dtype=dtype):
             y = multihead_attention(x, kv)
+        assert y.shape == (B, L, D)
+
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+    def test_forward_rope(self, dtype, device):
+        H, W = 8, 8
+        B, L, D = 16, H * W, 128
+        multihead_attention = CrossAttention(D, D // 16, use_rope=True, tokenized_size=(H, W)).to(device)
+        x = torch.randn(B, L, D, dtype=dtype, device=device)
+        kv = torch.randn(B, L // 4, D, dtype=dtype, device=device)
+        posq = create_grid((H, W), device=device).expand(B, -1, -1)
+        posk = create_grid((H // 2, W // 2), device=device).expand(B, -1, -1)
+        with torch.autocast(device_type=device.type, dtype=dtype):
+            y = multihead_attention(x, kv, posq, posk)
         assert y.shape == (B, L, D)
 
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])

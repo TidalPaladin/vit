@@ -20,37 +20,37 @@ class TestMixedRoPE:
         assert freqs.shape == (spatial_dims, nhead, dim // 2)
 
     def test_forward_2d(self, device):
-        B, H, W, D = 2, 8, 8, 16
+        B, H, W, D = 2, 8, 8, 64
         L = H * W
-        nhead = 2
+        nhead = 4
         layer = MixedRoPE(D, nhead, (H, W)).to(device)
 
-        grid = create_grid((H, W), device=device)
-        x = torch.randn(B, nhead, L, D, device=device)
+        grid = create_grid((H, W), device=device).expand(B, -1, -1)
+        x = torch.randn(B, nhead, L, D // nhead, device=device)
         out = layer(x, grid)
-        assert out.shape == (B, nhead, L, D)
+        assert out.shape == (B, nhead, L, D // nhead)
         assert not torch.allclose(x, out)
 
     def test_forward_3d(self, device):
-        B, T, H, W, D = 2, 8, 8, 8, 16
+        B, T, H, W, D = 2, 8, 8, 8, 64
         L = T * H * W
-        nhead = 2
+        nhead = 4
         layer = MixedRoPE(D, nhead, (T, H, W)).to(device)
 
-        grid = create_grid((T, H, W), device=device)
-        x = torch.randn(B, nhead, L, D, device=device)
+        grid = create_grid((T, H, W), device=device).expand(B, -1, -1)
+        x = torch.randn(B, nhead, L, D // nhead, device=device)
         out = layer(x, grid)
-        assert out.shape == (B, nhead, L, D)
+        assert out.shape == (B, nhead, L, D // nhead)
         assert not torch.allclose(x, out)
 
     def test_backward(self, device):
-        B, H, W, D = 2, 8, 8, 16
+        B, H, W, D = 2, 8, 8, 64
         L = H * W
-        nhead = 2
+        nhead = 4
         layer = MixedRoPE(D, nhead, (H, W)).to(device)
 
-        grid = create_grid((H, W), device=device)
-        x = torch.randn(B, nhead, L, D, device=device)
+        grid = create_grid((H, W), device=device).expand(B, -1, -1)
+        x = torch.randn(B, nhead, L, D // nhead, device=device)
         out = layer(x, grid)
         out.sum().backward()
         for param in layer.parameters():

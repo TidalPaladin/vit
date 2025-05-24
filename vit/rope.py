@@ -69,7 +69,7 @@ def generate_random_orthonormal_basis(n_dims: int):
     return Q
 
 
-@torch.compile(fullgraph=True, dynamic=False)
+# @torch.compile(fullgraph=True, dynamic=False)
 def compute_mixed_cis_nd(freqs: Tensor, positions: Tensor, num_heads: int):
     """
     Compute mixed complex exponentials for N-dimensional RoPE with batch support.
@@ -133,42 +133,7 @@ def compute_mixed_cis_nd(freqs: Tensor, positions: Tensor, num_heads: int):
     return freqs_cis
 
 
-def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
-    """
-    Reshape freqs_cis to broadcast with x tensor.
-    Handles both batched and non-batched cases.
-    """
-    ndim = x.ndim
-    freqs_ndim = freqs_cis.ndim
-
-    # For batched Q/K: [B, H, L, D] and freqs_cis: [B, H, L, D//2]
-    if ndim == 4 and freqs_ndim == 4:
-        # Already the right shape for broadcasting
-        return freqs_cis
-
-    # For non-batched Q/K: [H, L, D] and freqs_cis: [H, L, D//2]
-    elif ndim == 3 and freqs_ndim == 3:
-        # Already the right shape for broadcasting
-        return freqs_cis
-
-    # Handle mismatched dimensions by padding with 1s
-    elif freqs_ndim < ndim:
-        # Add leading dimensions of size 1
-        shape = [1] * (ndim - freqs_ndim) + list(freqs_cis.shape)
-        return freqs_cis.view(*shape)
-
-    # Fallback: try to match last few dimensions
-    else:
-        target_dims = min(freqs_ndim, ndim)
-        if freqs_cis.shape[-target_dims:] == x.shape[-target_dims:]:
-            shape = [1] * (ndim - target_dims) + list(freqs_cis.shape[-target_dims:])
-            return freqs_cis.view(*shape)
-        else:
-            # Last resort: just return as-is and let PyTorch broadcasting handle it
-            return freqs_cis
-
-
-@torch.compile(fullgraph=True, dynamic=False)
+# @torch.compile(fullgraph=True, dynamic=False)
 def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor):
     """
     Apply rotary embeddings to input tensor.
@@ -184,31 +149,14 @@ def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor):
     # Convert to complex representation
     x_ = torch.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2))
 
-    # Ensure freqs_cis can broadcast with x_
-    freqs_cis = reshape_for_broadcast(freqs_cis, x_)
-
     # Apply rotation
     x_out = torch.view_as_real(x_ * freqs_cis).flatten(-2)
 
     return x_out.type_as(x).to(x.device)
 
 
-# Keep the original 2D version for backward compatibility
-
-
-def compute_mixed_cis(freqs: torch.Tensor, t_x: torch.Tensor, t_y: torch.Tensor, num_heads: int):
-    """Original 2D version - kept for backward compatibility."""
-    if t_x.ndim == 1:
-        # Non-batched case
-        positions = torch.stack([t_x, t_y], dim=1)  # [L, 2]
-    else:
-        # Batched case: t_x, t_y are [B, L]
-        positions = torch.stack([t_x, t_y], dim=2)  # [B, L, 2]
-
-    return compute_mixed_cis_nd(freqs, positions, num_heads)
-
-
 class MixedRoPE(nn.Module):
+    freqs: nn.Parameter
 
     def __init__(
         self,
@@ -218,11 +166,29 @@ class MixedRoPE(nn.Module):
         rope_theta: float = 100.0,
     ):
         super().__init__()
+        self.hidden_size = hidden_size
         self.num_heads = num_heads
         self.tokenized_size = tokenized_size
-        freqs = init_random_nd_freqs(hidden_size, num_heads, len(tokenized_size), rope_theta)
+        self.rope_theta = rope_theta
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        head_dim = self.hidden_size // self.num_heads
+        freqs = init_random_nd_freqs(head_dim, self.num_heads, len(self.tokenized_size), self.rope_theta)
         self.freqs = nn.Parameter(freqs)
 
     def forward(self, x: Tensor, pos: Tensor) -> Tensor:
+        if x.shape[0] != pos.shape[0]:
+            raise ValueError(f"x and pos must have the same batch dimension, got {x.shape} and {pos.shape}")
+        if x.shape[1] != self.num_heads:
+            raise ValueError(
+                f"x must have the same number of heads as the RoPE module, got {x.shape[1]} and {self.num_heads}"
+            )
+        if x.shape[2] != pos.shape[1]:
+            raise ValueError(f"x must have the same sequence length as pos, got {x.shape} and {pos.shape}")
+        if x.shape[3] != self.hidden_size // self.num_heads:
+            raise ValueError(
+                f"x must have the same head dimension as the RoPE module, got {x.shape} and {self.hidden_size // self.num_heads}"
+            )
         freqs_cis = compute_mixed_cis_nd(self.freqs, pos, self.num_heads)
         return apply_rotary_emb(x, freqs_cis)
