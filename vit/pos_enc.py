@@ -139,21 +139,12 @@ def learnable_fourier_features(
     normalize_grid: bool,
     activation: Callable[[Tensor], Tensor],
     dropout: float,
-    jitter: bool,
     training: bool,
     # fmt: on
 ) -> Tensor:
     # Input Fourier features
     with torch.autocast(device_type=w_fourier.device.type, enabled=False):
         grid = create_grid(dims, device=w_fourier.device, normalize=normalize_grid)
-        if jitter and training:
-            # Normalized grid is in [-1, 1] with D steps where D is the dimension.
-            # We jitter the grid by at most 1 / (2 * D)
-            scale = grid.new_tensor(dims).mul_(2).reciprocal_()
-            noise = torch.empty_like(grid)
-            noise.uniform_(-1, 1).mul_(scale)
-            grid.add_(noise)
-
         y = F.linear(grid, w_fourier, b_fourier)
         y = torch.cat([y.sin(), y.cos()], dim=-1)
         f = y.shape[-1]
@@ -186,8 +177,6 @@ class LearnableFourierFeatures(nn.Module):
             Dropout rate
         activation:
             Activation function
-        jitter:
-            If true, jitter the input coordinates by a small amount
 
     Shapes:
         * Input - :math:`(C,)` where :math:`C` is the number of input dimensions
@@ -203,7 +192,6 @@ class LearnableFourierFeatures(nn.Module):
         gamma: float = 1.0,
         dropout: float = 0.2,
         activation: str = "gelu",
-        jitter: bool = True,
     ):
         super().__init__()
         fourier_size = fourier_size or hidden_size
@@ -215,7 +203,6 @@ class LearnableFourierFeatures(nn.Module):
         self.fc2 = nn.Linear(inner_size, hidden_size)
         self.dropout = nn.Dropout(dropout)
         self.activation = get_activation(activation)
-        self.jitter = jitter
         self.reset_parameters()
 
     def reset_parameters(self, gamma: float | None = None) -> None:
@@ -237,7 +224,6 @@ class LearnableFourierFeatures(nn.Module):
             normalize_grid=True,
             activation=self.activation,
             dropout=self.dropout.p,
-            jitter=self.jitter,
             training=self.training,
             # fmt: on
         )

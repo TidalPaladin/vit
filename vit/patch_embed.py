@@ -64,7 +64,6 @@ def patch_embed_learnable_fourier_pos(
     normalize_grid: bool,
     activation: Callable[[Tensor], Tensor],
     dropout: float,
-    jitter: bool,
     training: bool,
     eps: float,
     # fmt: on
@@ -85,7 +84,6 @@ def patch_embed_learnable_fourier_pos(
         normalize_grid,
         activation,
         dropout,
-        jitter,
         training,
     )
     y = y + pos
@@ -192,7 +190,6 @@ class PatchEmbed2d(nn.Module):
                 True,
                 self.pos_enc.activation,
                 self.pos_enc.dropout.p,
-                self.pos_enc.jitter,
                 self.training,
                 self.norm.eps or 1e-5,
             )
