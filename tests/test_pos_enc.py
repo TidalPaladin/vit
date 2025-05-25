@@ -113,7 +113,7 @@ class TestLearnableFourierFeatures:
     def test_deterministic(self, device):
         C, D = 2, 16
         torch.random.manual_seed(0)
-        layer = LearnableFourierFeatures(C, D).to(device)
+        layer = LearnableFourierFeatures(C, D, dropout=0.1).to(device)
 
         layer.eval()
         out1 = layer((8, 8))
