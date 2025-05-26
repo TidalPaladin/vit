@@ -142,19 +142,27 @@ def learnable_fourier_features(
     training: bool,
     # fmt: on
 ) -> Tensor:
-    # Input Fourier features
+    y = _make_fourier_features(dims, w_fourier, b_fourier, normalize_grid)
+    y = F.linear(y, w_fc1, b_fc1)
+    y = activation(y)
+    y = F.dropout(y, p=dropout, training=training)
+    y = F.linear(y, w_fc2, b_fc2)
+    return y
+
+
+def _make_fourier_features(
+    # fmt: off
+    dims: Sequence[int],
+    w_fourier: Tensor, b_fourier: Tensor | None,
+    normalize_grid: bool,
+    # fmt: on
+) -> Tensor:
     with torch.autocast(device_type=w_fourier.device.type, enabled=False):
         grid = create_grid(dims, device=w_fourier.device, normalize=normalize_grid)
         y = F.linear(grid, w_fourier, b_fourier)
         y = torch.cat([y.sin(), y.cos()], dim=-1)
         f = y.shape[-1]
         y = y / math.sqrt(f)
-
-    # MLP
-    y = F.linear(y, w_fc1, b_fc1)
-    y = activation(y)
-    y = F.dropout(y, p=dropout, training=training)
-    y = F.linear(y, w_fc2, b_fc2)
     return y
 
 
