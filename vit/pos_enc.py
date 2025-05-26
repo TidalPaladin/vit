@@ -142,15 +142,7 @@ def learnable_fourier_features(
     training: bool,
     # fmt: on
 ) -> Tensor:
-    # Input Fourier features
-    with torch.autocast(device_type=w_fourier.device.type, enabled=False):
-        grid = create_grid(dims, device=w_fourier.device, normalize=normalize_grid)
-        y = F.linear(grid, w_fourier, b_fourier)
-        y = torch.cat([y.sin(), y.cos()], dim=-1)
-        f = y.shape[-1]
-        y = y / math.sqrt(f)
-
-    # MLP
+    y = _make_fourier_features(dims, w_fourier, b_fourier, normalize_grid)
     y = F.linear(y, w_fc1, b_fc1)
     y = activation(y)
     y = F.dropout(y, p=dropout, training=training)
@@ -158,8 +150,24 @@ def learnable_fourier_features(
     return y
 
 
+def _make_fourier_features(
+    # fmt: off
+    dims: Sequence[int],
+    w_fourier: Tensor, b_fourier: Tensor | None,
+    normalize_grid: bool,
+    # fmt: on
+) -> Tensor:
+    with torch.autocast(device_type=w_fourier.device.type, enabled=False):
+        grid = create_grid(dims, device=w_fourier.device, normalize=normalize_grid)
+        y = F.linear(grid, w_fourier, b_fourier)
+        y = torch.cat([y.sin(), y.cos()], dim=-1)
+        f = y.shape[-1]
+        y = y / math.sqrt(f)
+    return y
+
+
 class LearnableFourierFeatures(nn.Module):
-    """
+    r"""
     Computes learnable Fourier feature positional embeddings.
 
     Args:
@@ -172,7 +180,11 @@ class LearnableFourierFeatures(nn.Module):
         inner_size:
             Hidden dimension size of the inner MLP
         gamma:
-            Scale parameter for the Fourier features at initialization
+            Scale parameter for the Fourier features at initialization. Fourier features are initialized
+            using a normal distribution with standard deviation :math:`\gamma^{-2}`. Generally this can
+            be left at 1.0. Use values <1 to enforce a stricter locality prior, and values >1 to focus
+            on global context.
+
         dropout:
             Dropout rate
         activation:
