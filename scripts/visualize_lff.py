@@ -2,13 +2,17 @@
 import math
 from typing import List
 
-import click
-import matplotlib.pyplot as plt
-import numpy as np
-import seaborn as sns
 import torch
 
-from vit.pos_enc import LearnableFourierFeatures, create_grid, fourier_features_only
+
+try:
+    import click
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+except ImportError:
+    raise ImportError("Please install the following packages: click, matplotlib, seaborn")
+
+from vit.pos_enc import LearnableFourierFeatures, _make_fourier_features, create_grid
 
 
 def create_position_grid(grid_size: List[int], spatial_dims: int) -> torch.Tensor:
@@ -62,7 +66,7 @@ def compute_similarity_heatmap(
 
     # Apply RoPE to get position-dependent embeddings
     with torch.no_grad():
-        embeddings = fourier_features_only(grid_size, layer.fourier.weight, layer.fourier.bias, True)
+        embeddings = _make_fourier_features(grid_size, layer.fourier.weight, layer.fourier.bias, True)
 
     # Get query position embedding
     query_pos_tensor = embeddings.view(*grid_size, embed_dim)
@@ -202,13 +206,6 @@ def analyze_distance_relationship(
     plt.title(f"LFF Similarity vs Distance ({spatial_dims}D)")
     plt.grid(True, alpha=0.3)
 
-    # Add trend line
-    z = np.polyfit(sorted_distances.numpy(), sorted_similarities.numpy(), 2)
-    p = np.poly1d(z)
-    x_trend = np.linspace(sorted_distances.min(), sorted_distances.max(), 100)
-    plt.plot(x_trend, p(x_trend), "r--", alpha=0.8, label="Trend")
-    plt.legend()
-
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches="tight")
         print(f"Saved distance analysis to {save_path}")
@@ -280,7 +277,14 @@ def main(spatial_dims, grid_size, query_pos, embed_dim, gamma, output_dir, analy
         plot_3d_heatmap(similarities, grid_size, query_pos, save_path)
 
     if analyze_distance:
-        save_path = f"{output_dir}/lff_distance_analysis.png" if output_dir else None
+        match (output_dir, spatial_dims):
+            case (None, _):
+                save_path = None
+            case (_, 2):
+                save_path = f"{output_dir}/lff_distance_analysis_2d.png"
+            case (_, 3):
+                save_path = f"{output_dir}/lff_distance_analysis_3d.png"
+        positions = create_grid(grid_size, normalize=False).squeeze(0)
         analyze_distance_relationship(similarities, positions, query_pos, spatial_dims, save_path)
 
     # Print some statistics

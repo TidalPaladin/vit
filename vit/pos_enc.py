@@ -167,7 +167,7 @@ def _make_fourier_features(
 
 
 class LearnableFourierFeatures(nn.Module):
-    """
+    r"""
     Computes learnable Fourier feature positional embeddings.
 
     Args:
@@ -180,7 +180,11 @@ class LearnableFourierFeatures(nn.Module):
         inner_size:
             Hidden dimension size of the inner MLP
         gamma:
-            Scale parameter for the Fourier features at initialization
+            Scale parameter for the Fourier features at initialization. Fourier features are initialized
+            using a normal distribution with standard deviation :math:`\gamma^{-2}`. Generally this can
+            be left at 1.0. Use values <1 to enforce a stricter locality prior, and values >1 to focus
+            on global context.
+
         dropout:
             Dropout rate
         activation:

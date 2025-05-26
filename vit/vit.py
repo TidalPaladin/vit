@@ -46,7 +46,7 @@ class ViTConfig:
     activation: str = "srelu"
     drop_path_rate: float = 0.0
     num_register_tokens: int = 0
-    pos_emb: Literal["factorized", "fourier", "none"] = "factorized"
+    pos_emb: Literal["learnable", "factorized", "fourier", "none"] = "fourier"
 
     # Trainable blocks
     mlp_requires_grad: bool = True
