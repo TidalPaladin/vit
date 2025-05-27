@@ -60,6 +60,20 @@ class TestViT:
         assert out.shape == (2, 196, 128)
 
     @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+    def test_forward_return_register_tokens(self, device, config, num_register_tokens, dtype):
+        config = replace(
+            config,
+            num_register_tokens=num_register_tokens,
+        )
+        x = torch.randn(2, 3, 224, 224, device=device)
+        model = ViT(config).to(device)
+        with torch.autocast(device_type=device.type, dtype=dtype, enabled=True):
+            out, register_tokens = model(x, return_register_tokens=True)
+        assert out.shape == (2, 196, 128)
+        assert register_tokens.shape == (2, num_register_tokens, 128)
+
+    @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
     def test_forward_masked(self, device, config, num_register_tokens):
         config = replace(
             config,
