@@ -69,9 +69,8 @@ class TestViT:
         x = torch.randn(2, 3, 224, 224, device=device)
         model = ViT(config).to(device)
         with torch.autocast(device_type=device.type, dtype=dtype, enabled=True):
-            out, register_tokens = model(x, return_register_tokens=True)
-        assert out.shape == (2, 196, 128)
-        assert register_tokens.shape == (2, num_register_tokens, 128)
+            out = model(x, return_register_tokens=True)
+        assert out.shape == (2, 196 + num_register_tokens, 128)
 
     @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
     def test_forward_masked(self, device, config, num_register_tokens):

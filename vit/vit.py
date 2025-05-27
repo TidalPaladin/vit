@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Self, Sequence, Tuple, Type, cast
+from typing import Any, Literal, Self, Sequence, Type, cast
 
 import torch
 import torch.nn as nn
@@ -176,9 +176,7 @@ class ViT(nn.Module):
 
         return mask
 
-    def forward(
-        self, x: Tensor, mask: Tensor | None = None, return_register_tokens: bool = False
-    ) -> Tensor | Tuple[Tensor, Tensor]:
+    def forward(self, x: Tensor, mask: Tensor | None = None, return_register_tokens: bool = False) -> Tensor:
         x = self.stem(x)
         if mask is not None:
             x = apply_mask(mask, x)
@@ -192,12 +190,11 @@ class ViT(nn.Module):
         for block in self.blocks:
             assert isinstance(block, TransformerEncoderLayer)
             x = block(x)
-        x = x[..., self.config.num_register_tokens :, :].contiguous()
+
         if return_register_tokens:
-            register_tokens = x[..., : self.config.num_register_tokens, :].contiguous()
-            return x, register_tokens
-        else:
             return x
+        else:
+            return x[..., self.config.num_register_tokens :, :].contiguous()
 
     def mlp_requires_grad_(self, requires_grad: bool = True) -> None:
         for block in self.blocks:
