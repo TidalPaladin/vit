@@ -176,7 +176,7 @@ class ViT(nn.Module):
 
         return mask
 
-    def forward(self, x: Tensor, mask: Tensor | None = None) -> Tensor:
+    def forward(self, x: Tensor, mask: Tensor | None = None, return_register_tokens: bool = False) -> Tensor:
         x = self.stem(x)
         if mask is not None:
             x = apply_mask(mask, x)
@@ -190,8 +190,11 @@ class ViT(nn.Module):
         for block in self.blocks:
             assert isinstance(block, TransformerEncoderLayer)
             x = block(x)
-        x = x[:, self.config.num_register_tokens :].contiguous()
-        return x
+
+        if return_register_tokens:
+            return x
+        else:
+            return x[..., self.config.num_register_tokens :, :].contiguous()
 
     def mlp_requires_grad_(self, requires_grad: bool = True) -> None:
         for block in self.blocks:
