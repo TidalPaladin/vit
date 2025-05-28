@@ -47,6 +47,7 @@ class ViTConfig:
     drop_path_rate: float = 0.0
     num_register_tokens: int = 0
     pos_emb: Literal["learnable", "factorized", "fourier", "none"] = "learnable"
+    output_norm: bool = False
 
     # Trainable blocks
     mlp_requires_grad: bool = True
@@ -94,6 +95,11 @@ class ViT(nn.Module):
         )
 
         self.blocks = nn.ModuleList([self.create_encoder_layer() for _ in range(config.depth)])
+
+        if config.output_norm:
+            self.output_norm = nn.RMSNorm(config.hidden_size)
+        else:
+            self.output_norm = None
 
         self.mlp_requires_grad_(self.config.mlp_requires_grad)
         self.self_attention_requires_grad_(self.config.self_attention_requires_grad)
@@ -190,6 +196,9 @@ class ViT(nn.Module):
         for block in self.blocks:
             assert isinstance(block, TransformerEncoderLayer)
             x = block(x)
+
+        if self.output_norm is not None:
+            x = self.output_norm(x)
 
         if return_register_tokens:
             return x
