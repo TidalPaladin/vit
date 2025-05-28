@@ -48,10 +48,12 @@ class TestViT:
 
     @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_forward(self, device, config, num_register_tokens, dtype):
+    @pytest.mark.parametrize("output_norm", [False, True])
+    def test_forward(self, device, config, num_register_tokens, dtype, output_norm):
         config = replace(
             config,
             num_register_tokens=num_register_tokens,
+            output_norm=output_norm,
         )
         x = torch.randn(2, 3, 224, 224, device=device)
         model = ViT(config).to(device)
@@ -61,10 +63,12 @@ class TestViT:
 
     @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_forward_return_register_tokens(self, device, config, num_register_tokens, dtype):
+    @pytest.mark.parametrize("output_norm", [False, True])
+    def test_forward_return_register_tokens(self, device, config, num_register_tokens, dtype, output_norm):
         config = replace(
             config,
             num_register_tokens=num_register_tokens,
+            output_norm=output_norm,
         )
         x = torch.randn(2, 3, 224, 224, device=device)
         model = ViT(config).to(device)
