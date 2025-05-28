@@ -134,9 +134,7 @@ class PatchEmbed2d(nn.Module):
             case "fourier":
                 self.pos_enc = LearnableFourierFeatures(2, hidden_size, **kwargs)
             case "learnable":
-                self.pos_enc = LearnablePosition(
-                    hidden_size, self.tokenized_size(tuple(img_size)), dropout=0.1, **kwargs
-                )
+                self.pos_enc = LearnablePosition(hidden_size, self.tokenized_size(tuple(img_size)), **kwargs)
             case "none":
                 self.pos_enc = None
             case _:

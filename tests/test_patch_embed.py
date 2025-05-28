@@ -40,8 +40,3 @@ class TestPatchEmbed2d:
         y1 = layer(x)
         y2 = layer(x)
         assert_close(y1, y2)
-
-        layer.train()
-        y1 = layer(x)
-        y2 = layer(x)
-        assert not torch.allclose(y1, y2)
