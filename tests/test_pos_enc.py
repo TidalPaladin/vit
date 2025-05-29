@@ -40,6 +40,8 @@ class TestLearnablePosition:
         assert layer.positions.shape == (144, D)
         assert layer.positions.requires_grad is True
         assert layer.positions.device == device
+        out = layer((12, 12))
+        assert out.shape == (1, 144, D)
 
     def test_deterministic(self):
         D = 16

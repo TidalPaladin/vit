@@ -44,6 +44,7 @@ class LearnablePosition(nn.Module):
     def expand_positions(self, size: Sequence[int]) -> None:
         positions = learnable_position(size, self.spatial_size, self.positions, self.dropout.p, self.training)
         self.positions = nn.Parameter(positions.reshape(-1, self.positions.shape[-1]))
+        self.spatial_size = size
 
     def forward(self, dims: Sequence[int] | None) -> Tensor:
         dims = dims or self.spatial_size
