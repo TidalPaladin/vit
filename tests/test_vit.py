@@ -5,6 +5,7 @@ import pytest
 import torch
 import torch.nn as nn
 
+from vit.head import HeadConfig
 from vit.vit import ViT, ViTConfig
 
 
@@ -123,3 +124,14 @@ class TestViT:
         for block in model.blocks:
             assert_all_requires_grad(block.mlp)
             assert_none_requires_grad(block.self_attention)
+
+    def test_with_head(self, device, config):
+        config = replace(
+            config,
+            heads={"cls": HeadConfig(head_type="linear", pool_type="avg", out_dim=128, stop_gradient=False)},
+        )
+        x = torch.randn(2, 3, 224, 224, device=device)
+        model = ViT(config).to(device)
+        out = model(x)
+        pred = model.heads["cls"](out)
+        assert pred.shape == (2, 128)

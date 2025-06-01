@@ -1,12 +1,13 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal, Self, Sequence, Type, cast
+from typing import Any, Dict, Literal, Self, Sequence, Type, cast
 
 import torch
 import torch.nn as nn
 import yaml
 from torch import Tensor
 
+from .head import HeadConfig
 from .patch_embed import PatchEmbed2d
 from .tokens import apply_mask, create_mask
 from .transformer import CrossAttentionTransformer, TransformerDecoderLayer, TransformerEncoderLayer
@@ -52,6 +53,9 @@ class ViTConfig:
     # Trainable blocks
     mlp_requires_grad: bool = True
     self_attention_requires_grad: bool = True
+
+    # Heads
+    heads: Dict[str, HeadConfig] = field(default_factory=dict)
 
     def instantiate(self) -> "ViT":
         return ViT(self)
@@ -103,6 +107,10 @@ class ViT(nn.Module):
 
         self.mlp_requires_grad_(self.config.mlp_requires_grad)
         self.self_attention_requires_grad_(self.config.self_attention_requires_grad)
+
+        self.heads = nn.ModuleDict(
+            {name: head_config.instantiate(config) for name, head_config in config.heads.items()}
+        )
 
     @property
     def config(self) -> ViTConfig:
