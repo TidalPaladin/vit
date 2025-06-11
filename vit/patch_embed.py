@@ -22,10 +22,14 @@ def patch_embed(
     w_patch: Tensor, b_patch: Tensor | None,
     w_norm: Tensor,
     eps: float,
+    is_3d: bool = False,
     # fmt: on
 ) -> Tensor:
     patch_size = w_patch.shape[2:]
-    y = F.conv2d(x, w_patch, b_patch, stride=patch_size)
+    if is_3d:
+        y = F.conv3d(x, w_patch, b_patch, stride=patch_size)
+    else:
+        y = F.conv2d(x, w_patch, b_patch, stride=patch_size)
     y = y.flatten(2).transpose(1, 2)
     y = F.rms_norm(y, y.shape[-1:], w_norm, eps)
     return y
@@ -40,12 +44,16 @@ def patch_embed_relative_factorized_pos(
     w_fc2: Tensor, b_fc2: Tensor | None,
     w_norm: Tensor,
     eps: float,
+    is_3d: bool = False,
     # fmt: on
 ) -> Tensor:
     dims = x.shape[2:]
     patch_size = w_patch.shape[2:]
     dims = tuple(s // p for s, p in zip(dims, patch_size))
-    y = F.conv2d(x, w_patch, b_patch, stride=patch_size)
+    if is_3d:
+        y = F.conv3d(x, w_patch, b_patch, stride=patch_size)
+    else:
+        y = F.conv2d(x, w_patch, b_patch, stride=patch_size)
     y = y.flatten(2).transpose(1, 2)
     y = y + relative_factorized_position(dims, w_fc1, b_fc1, w_fc2, b_fc2)
     y = F.rms_norm(y, y.shape[-1:], w_norm, eps)
@@ -66,12 +74,16 @@ def patch_embed_learnable_fourier_pos(
     dropout: float,
     training: bool,
     eps: float,
+    is_3d: bool = False,
     # fmt: on
 ) -> Tensor:
     dims = x.shape[2:]
     patch_size = w_patch.shape[2:]
     dims = tuple(s // p for s, p in zip(dims, patch_size))
-    y = F.conv2d(x, w_patch, b_patch, stride=patch_size)
+    if is_3d:
+        y = F.conv3d(x, w_patch, b_patch, stride=patch_size)
+    else:
+        y = F.conv2d(x, w_patch, b_patch, stride=patch_size)
     y = y.flatten(2).transpose(1, 2)
     pos = learnable_fourier_features(
         dims,
@@ -102,12 +114,16 @@ def patch_embed_learnable_pos(
     eps: float,
     dropout: float,
     training: bool,
+    is_3d: bool = False,
     # fmt: on
 ) -> Tensor:
     dims = x.shape[2:]
     patch_size = w_patch.shape[2:]
     dims = tuple(s // p for s, p in zip(dims, patch_size))
-    y = F.conv2d(x, w_patch, b_patch, stride=patch_size)
+    if is_3d:
+        y = F.conv3d(x, w_patch, b_patch, stride=patch_size)
+    else:
+        y = F.conv2d(x, w_patch, b_patch, stride=patch_size)
     y = y.flatten(2).transpose(1, 2)
     y = y + learnable_position(dims, positions_size, positions, dropout, training)
     y = F.rms_norm(y, y.shape[-1:], w_norm, eps)
@@ -210,4 +226,107 @@ class PatchEmbed2d(nn.Module):
                 self.patch.bias,
                 self.norm.weight,
                 self.norm.eps or 1e-5,
+            )
+
+
+class PatchEmbed3d(nn.Module):
+
+    def __init__(
+        self,
+        in_channels: int,
+        hidden_size: int,
+        patch_size: Sequence[int],
+        img_size: Sequence[int],
+        eps: float = 1e-5,
+        pos_emb: Literal["factorized", "fourier", "none", "learnable"] = "learnable",
+        **kwargs,
+    ):
+        super().__init__()
+        self.patch = nn.Conv3d(in_channels, hidden_size, tuple(patch_size), stride=tuple(patch_size))
+        match pos_emb:
+            case "factorized":
+                self.pos_enc = RelativeFactorizedPosition(3, hidden_size, **kwargs)
+            case "fourier":
+                self.pos_enc = LearnableFourierFeatures(3, hidden_size, **kwargs)
+            case "learnable":
+                self.pos_enc = LearnablePosition(hidden_size, self.tokenized_size(tuple(img_size)), **kwargs)
+            case "none":
+                self.pos_enc = None
+            case _:
+                raise ValueError(f"Invalid pos_emb: {pos_emb}")
+        self.norm = nn.RMSNorm(hidden_size, eps=eps)
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        self.patch.reset_parameters()
+        self.norm.reset_parameters()
+        if self.pos_enc is not None:
+            self.pos_enc.reset_parameters()
+
+    @property
+    def patch_size(self) -> Tuple[int, int, int]:
+        return self.patch.weight.shape[2:]
+
+    def tokenized_size(self, size: Tuple[int, int, int]) -> Tuple[int, int, int]:
+        dt, ht, wt = tuple(s // p for s, p in zip(size, self.patch_size))
+        return dt, ht, wt
+
+    def original_size(self, size: Tuple[int, int, int]) -> Tuple[int, int, int]:
+        dt, ht, wt = tuple(s * p for s, p in zip(size, self.patch_size))
+        return dt, ht, wt
+
+    def forward(self, x: Tensor) -> Tensor:
+        if isinstance(self.pos_enc, RelativeFactorizedPosition):
+            return patch_embed_relative_factorized_pos(
+                x,
+                self.patch.weight,
+                self.patch.bias,
+                self.pos_enc.fc1.weight,
+                self.pos_enc.fc1.bias,
+                self.pos_enc.fc2.weight,
+                self.pos_enc.fc2.bias,
+                self.norm.weight,
+                self.norm.eps or 1e-5,
+                True,
+            )
+        elif isinstance(self.pos_enc, LearnableFourierFeatures):
+            return patch_embed_learnable_fourier_pos(
+                x,
+                self.patch.weight,
+                self.patch.bias,
+                self.pos_enc.fourier.weight,
+                self.pos_enc.fourier.bias,
+                self.pos_enc.fc1.weight,
+                self.pos_enc.fc1.bias,
+                self.pos_enc.fc2.weight,
+                self.pos_enc.fc2.bias,
+                self.norm.weight,
+                True,
+                self.pos_enc.activation,
+                self.pos_enc.dropout.p,
+                self.training,
+                self.norm.eps or 1e-5,
+                True,
+            )
+        elif isinstance(self.pos_enc, LearnablePosition):
+            return patch_embed_learnable_pos(
+                x,
+                self.patch.weight,
+                self.patch.bias,
+                self.pos_enc.positions,
+                self.pos_enc.spatial_size,
+                self.norm.weight,
+                self.norm.eps or 1e-5,
+                self.pos_enc.dropout.p,
+                self.training,
+                True,
+            )
+        else:
+            return patch_embed(
+                x,
+                self.patch.weight,
+                self.patch.bias,
+                self.norm.weight,
+                self.norm.eps or 1e-5,
+                True,
             )

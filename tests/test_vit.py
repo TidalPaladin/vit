@@ -1,3 +1,4 @@
+import math
 from dataclasses import replace
 from typing import Any
 
@@ -9,12 +10,13 @@ from vit.head import HeadConfig
 from vit.vit import ViT, ViTConfig
 
 
-@pytest.fixture
-def config():
+@pytest.fixture(params=[pytest.param(False, id="2d"), pytest.param(True, id="3d")])
+def config(request):
+    is_3d = request.param
     config = ViTConfig(
         in_channels=3,
-        patch_size=(16, 16),
-        img_size=(224, 224),
+        patch_size=(16, 16) if not is_3d else (16, 16, 16),
+        img_size=(224, 224) if not is_3d else (32, 224, 224),
         depth=3,
         hidden_size=128,
         ffn_hidden_size=256,
@@ -56,11 +58,12 @@ class TestViT:
             num_register_tokens=num_register_tokens,
             output_norm=output_norm,
         )
-        x = torch.randn(2, 3, 224, 224, device=device)
+        x = torch.randn(2, 3, *config.img_size, device=device)
         model = ViT(config).to(device)
         with torch.autocast(device_type=device.type, dtype=dtype, enabled=True):
             out = model(x)
-        assert out.shape == (2, 196, 128)
+        L = math.prod(model.stem.tokenized_size(config.img_size))
+        assert out.shape == (2, L, 128)
 
     @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
@@ -71,11 +74,12 @@ class TestViT:
             num_register_tokens=num_register_tokens,
             output_norm=output_norm,
         )
-        x = torch.randn(2, 3, 224, 224, device=device)
+        x = torch.randn(2, 3, *config.img_size, device=device)
         model = ViT(config).to(device)
         with torch.autocast(device_type=device.type, dtype=dtype, enabled=True):
             out = model(x, return_register_tokens=True)
-        assert out.shape == (2, 196 + num_register_tokens, 128)
+        L = math.prod(model.stem.tokenized_size(config.img_size))
+        assert out.shape == (2, L + num_register_tokens, 128)
 
     @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
     def test_forward_masked(self, device, config, num_register_tokens):
@@ -83,11 +87,12 @@ class TestViT:
             config,
             num_register_tokens=num_register_tokens,
         )
-        x = torch.randn(2, 3, 224, 224, device=device)
+        x = torch.randn(2, 3, *config.img_size, device=device)
         model = ViT(config).to(device)
         mask = model.create_mask(x, 0.5, 1)
         out = model(x, mask)
-        assert out.shape == (2, 196 // 2, 128)
+        L = math.prod(model.stem.tokenized_size(config.img_size))
+        assert out.shape == (2, L // 2, 128)
 
     @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
@@ -96,7 +101,7 @@ class TestViT:
             config,
             num_register_tokens=num_register_tokens,
         )
-        x = torch.randn(2, 3, 224, 224, device=device, requires_grad=True)
+        x = torch.randn(2, 3, *config.img_size, device=device, requires_grad=True)
         model = ViT(config).to(device)
         with torch.autocast(device_type=device.type, dtype=dtype, enabled=True):
             out = model(x)
@@ -130,7 +135,7 @@ class TestViT:
             config,
             heads={"cls": HeadConfig(head_type="linear", pool_type="avg", out_dim=128, stop_gradient=False)},
         )
-        x = torch.randn(2, 3, 224, 224, device=device)
+        x = torch.randn(2, 3, *config.img_size, device=device)
         model = ViT(config).to(device)
         out = model(x)
         pred = model.heads["cls"](out)
