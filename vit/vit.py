@@ -8,7 +8,7 @@ import yaml
 from torch import Tensor
 
 from .head import HeadConfig
-from .patch_embed import PatchEmbed2d
+from .patch_embed import PatchEmbed2d, PatchEmbed3d
 from .tokens import apply_mask, create_mask
 from .transformer import CrossAttentionTransformer, TransformerDecoderLayer, TransformerEncoderLayer
 
@@ -94,9 +94,17 @@ class ViT(nn.Module):
             self.register_tokens = None
 
         # Stem tokenizer
-        self.stem = PatchEmbed2d(
-            config.in_channels, config.hidden_size, config.patch_size, config.img_size, pos_emb=config.pos_emb
-        )
+        match len(config.patch_size):
+            case 2:
+                self.stem = PatchEmbed2d(
+                    config.in_channels, config.hidden_size, config.patch_size, config.img_size, pos_emb=config.pos_emb
+                )
+            case 3:
+                self.stem = PatchEmbed3d(
+                    config.in_channels, config.hidden_size, config.patch_size, config.img_size, pos_emb=config.pos_emb
+                )
+            case _:
+                raise ValueError(f"Invalid patch size: {config.patch_size}")
 
         self.blocks = nn.ModuleList([self.create_encoder_layer() for _ in range(config.depth)])
 
