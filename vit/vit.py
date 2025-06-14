@@ -47,7 +47,7 @@ class ViTConfig:
     activation: str = "srelu"
     drop_path_rate: float = 0.0
     num_register_tokens: int = 0
-    pos_emb: Literal["learnable", "factorized", "fourier", "none"] = "learnable"
+    pos_emb: Literal["learnable", "fourier", "none"] = "learnable"
     output_norm: bool = False
 
     # Trainable blocks
@@ -198,8 +198,15 @@ class ViT(nn.Module):
 
         return mask
 
-    def forward(self, x: Tensor, mask: Tensor | None = None, return_register_tokens: bool = False) -> Tensor:
-        x = self.stem(x)
+    def forward(
+        self,
+        x: Tensor,
+        mask: Tensor | None = None,
+        return_register_tokens: bool = False,
+        with_pos: bool = True,
+        with_image: bool = True,
+    ) -> Tensor:
+        x = self.stem(x, with_pos=with_pos, with_image=with_image)
         if mask is not None:
             x = apply_mask(mask, x)
 

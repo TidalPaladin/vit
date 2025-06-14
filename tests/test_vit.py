@@ -140,3 +140,17 @@ class TestViT:
         out = model(x)
         pred = model.heads["cls"](out)
         assert pred.shape == (2, 128)
+
+    def test_forward_partial(self, device, config):
+        x = torch.randn(2, 3, *config.img_size, device=device)
+        model = ViT(config).to(device)
+        with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=True):
+            out1 = model(x)
+            out2 = model(x, with_pos=False)
+            out3 = model(x, with_image=False)
+            with pytest.raises(ValueError):
+                model(x, with_pos=False, with_image=False)
+
+        assert not torch.allclose(out1, out2)
+        assert not torch.allclose(out1, out3)
+        assert not torch.allclose(out2, out3)

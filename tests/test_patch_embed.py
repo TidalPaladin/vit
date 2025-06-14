@@ -9,7 +9,7 @@ from vit.patch_embed import PatchEmbed2d, PatchEmbed3d
 
 class TestPatchEmbed2d:
 
-    @pytest.mark.parametrize("pos_emb", ["factorized", "fourier", "none", "learnable"])
+    @pytest.mark.parametrize("pos_emb", ["fourier", "none", "learnable"])
     def test_forward(self, device, pos_emb):
         B, C, H, W = 2, 3, 64, 64
         D_model = 64
@@ -19,7 +19,7 @@ class TestPatchEmbed2d:
             y = layer(x)
         assert y.shape == (B, math.prod((H // 4, W // 4)), D_model)
 
-    @pytest.mark.parametrize("pos_emb", ["factorized", "fourier", "none", "learnable"])
+    @pytest.mark.parametrize("pos_emb", ["fourier", "none", "learnable"])
     def test_backward(self, device, pos_emb):
         B, C, H, W = 2, 3, 64, 64
         D_model = 64
@@ -41,10 +41,25 @@ class TestPatchEmbed2d:
         y2 = layer(x)
         assert_close(y1, y2)
 
+    def test_forward_partial(self, device):
+        B, C, H, W = 2, 3, 64, 64
+        D_model = 64
+        layer = PatchEmbed2d(C, D_model, (4, 4), (H, W), pos_emb="learnable").to(device)
+        x = torch.randn(B, C, H, W, device=device)
+        with torch.autocast(device_type=device.type, dtype=torch.bfloat16):
+            y1 = layer(x, with_pos=True, with_image=True)
+            y2 = layer(x, with_pos=True, with_image=False)
+            y3 = layer(x, with_pos=False, with_image=True)
+            with pytest.raises(ValueError):
+                layer(x, with_pos=False, with_image=False)
+        assert not torch.allclose(y1, y2)
+        assert not torch.allclose(y1, y3)
+        assert not torch.allclose(y2, y3)
+
 
 class TestPatchEmbed3d:
 
-    @pytest.mark.parametrize("pos_emb", ["factorized", "fourier", "none", "learnable"])
+    @pytest.mark.parametrize("pos_emb", ["fourier", "none", "learnable"])
     def test_forward(self, device, pos_emb):
         B, C, D, H, W = 2, 3, 4, 64, 64
         D_model = 64
@@ -54,7 +69,7 @@ class TestPatchEmbed3d:
             y = layer(x)
         assert y.shape == (B, math.prod((D // 4, H // 4, W // 4)), D_model)
 
-    @pytest.mark.parametrize("pos_emb", ["factorized", "fourier", "none", "learnable"])
+    @pytest.mark.parametrize("pos_emb", ["fourier", "none", "learnable"])
     def test_backward(self, device, pos_emb):
         B, C, D, H, W = 2, 3, 4, 64, 64
         D_model = 64

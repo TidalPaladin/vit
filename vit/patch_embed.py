@@ -1,132 +1,25 @@
-from typing import Callable, Literal, Sequence, Tuple
+from typing import Literal, Sequence, Tuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from .pos_enc import (
-    LearnableFourierFeatures,
-    LearnablePosition,
-    RelativeFactorizedPosition,
-    learnable_fourier_features,
-    learnable_position,
-    relative_factorized_position,
-)
+from .pos_enc import LearnableFourierFeatures, LearnablePosition
 
 
 @torch.compile(fullgraph=True, dynamic=False)
-def patch_embed(
-    # fmt: off
-    x: Tensor,
-    w_patch: Tensor, b_patch: Tensor | None,
-    w_norm: Tensor,
-    eps: float,
-    is_3d: bool = False,
-    # fmt: on
-) -> Tensor:
+def patch_embed(x: Tensor, w_patch: Tensor, b_patch: Tensor | None) -> Tensor:
     patch_size = w_patch.shape[2:]
-    if is_3d:
+    if w_patch.ndim == 5:
         y = F.conv3d(x, w_patch, b_patch, stride=patch_size)
-    else:
+    elif w_patch.ndim == 4:
         y = F.conv2d(x, w_patch, b_patch, stride=patch_size)
-    y = y.flatten(2).transpose(1, 2)
-    y = F.rms_norm(y, y.shape[-1:], w_norm, eps)
-    return y
-
-
-@torch.compile(fullgraph=True, dynamic=False)
-def patch_embed_relative_factorized_pos(
-    # fmt: off
-    x: Tensor,
-    w_patch: Tensor, b_patch: Tensor | None,
-    w_fc1: Tensor, b_fc1: Tensor | None,
-    w_fc2: Tensor, b_fc2: Tensor | None,
-    w_norm: Tensor,
-    eps: float,
-    is_3d: bool = False,
-    # fmt: on
-) -> Tensor:
-    dims = x.shape[2:]
-    patch_size = w_patch.shape[2:]
-    dims = tuple(s // p for s, p in zip(dims, patch_size))
-    if is_3d:
-        y = F.conv3d(x, w_patch, b_patch, stride=patch_size)
+    elif w_patch.ndim == 3:
+        y = F.conv1d(x, w_patch, b_patch, stride=patch_size)
     else:
-        y = F.conv2d(x, w_patch, b_patch, stride=patch_size)
+        raise ValueError(f"Invalid patch weight shape: {w_patch.shape}")
     y = y.flatten(2).transpose(1, 2)
-    y = y + relative_factorized_position(dims, w_fc1, b_fc1, w_fc2, b_fc2)
-    y = F.rms_norm(y, y.shape[-1:], w_norm, eps)
-    return y
-
-
-@torch.compile(fullgraph=True, dynamic=False)
-def patch_embed_learnable_fourier_pos(
-    # fmt: off
-    x: Tensor,
-    w_patch: Tensor, b_patch: Tensor | None,
-    w_fourier: Tensor, b_fourier: Tensor | None,
-    w_fc1: Tensor, b_fc1: Tensor | None,
-    w_fc2: Tensor, b_fc2: Tensor | None,
-    w_norm: Tensor,
-    normalize_grid: bool,
-    activation: Callable[[Tensor], Tensor],
-    dropout: float,
-    training: bool,
-    eps: float,
-    is_3d: bool = False,
-    # fmt: on
-) -> Tensor:
-    dims = x.shape[2:]
-    patch_size = w_patch.shape[2:]
-    dims = tuple(s // p for s, p in zip(dims, patch_size))
-    if is_3d:
-        y = F.conv3d(x, w_patch, b_patch, stride=patch_size)
-    else:
-        y = F.conv2d(x, w_patch, b_patch, stride=patch_size)
-    y = y.flatten(2).transpose(1, 2)
-    pos = learnable_fourier_features(
-        dims,
-        w_fourier,
-        b_fourier,
-        w_fc1,
-        b_fc1,
-        w_fc2,
-        b_fc2,
-        normalize_grid,
-        activation,
-        dropout,
-        training,
-    )
-    y = y + pos
-    y = F.rms_norm(y, y.shape[-1:], w_norm, eps)
-    return y
-
-
-@torch.compile(fullgraph=True, dynamic=False)
-def patch_embed_learnable_pos(
-    # fmt: off
-    x: Tensor,
-    w_patch: Tensor, b_patch: Tensor | None,
-    positions: Tensor,
-    positions_size: Sequence[int],
-    w_norm: Tensor,
-    eps: float,
-    dropout: float,
-    training: bool,
-    is_3d: bool = False,
-    # fmt: on
-) -> Tensor:
-    dims = x.shape[2:]
-    patch_size = w_patch.shape[2:]
-    dims = tuple(s // p for s, p in zip(dims, patch_size))
-    if is_3d:
-        y = F.conv3d(x, w_patch, b_patch, stride=patch_size)
-    else:
-        y = F.conv2d(x, w_patch, b_patch, stride=patch_size)
-    y = y.flatten(2).transpose(1, 2)
-    y = y + learnable_position(dims, positions_size, positions, dropout, training)
-    y = F.rms_norm(y, y.shape[-1:], w_norm, eps)
     return y
 
 
@@ -138,15 +31,13 @@ class PatchEmbed2d(nn.Module):
         hidden_size: int,
         patch_size: Sequence[int],
         img_size: Sequence[int],
+        pos_emb: Literal["fourier", "none", "learnable"] = "learnable",
         eps: float = 1e-5,
-        pos_emb: Literal["factorized", "fourier", "none", "learnable"] = "learnable",
         **kwargs,
     ):
         super().__init__()
         self.patch = nn.Conv2d(in_channels, hidden_size, tuple(patch_size), stride=tuple(patch_size))
         match pos_emb:
-            case "factorized":
-                self.pos_enc = RelativeFactorizedPosition(2, hidden_size, **kwargs)
             case "fourier":
                 self.pos_enc = LearnableFourierFeatures(2, hidden_size, **kwargs)
             case "learnable":
@@ -176,57 +67,18 @@ class PatchEmbed2d(nn.Module):
         ht, wt = tuple(s * p for s, p in zip(size, self.patch_size))
         return ht, wt
 
-    def forward(self, x: Tensor) -> Tensor:
-        if isinstance(self.pos_enc, RelativeFactorizedPosition):
-            return patch_embed_relative_factorized_pos(
-                x,
-                self.patch.weight,
-                self.patch.bias,
-                self.pos_enc.fc1.weight,
-                self.pos_enc.fc1.bias,
-                self.pos_enc.fc2.weight,
-                self.pos_enc.fc2.bias,
-                self.norm.weight,
-                self.norm.eps or 1e-5,
-            )
-        elif isinstance(self.pos_enc, LearnableFourierFeatures):
-            return patch_embed_learnable_fourier_pos(
-                x,
-                self.patch.weight,
-                self.patch.bias,
-                self.pos_enc.fourier.weight,
-                self.pos_enc.fourier.bias,
-                self.pos_enc.fc1.weight,
-                self.pos_enc.fc1.bias,
-                self.pos_enc.fc2.weight,
-                self.pos_enc.fc2.bias,
-                self.norm.weight,
-                True,
-                self.pos_enc.activation,
-                self.pos_enc.dropout.p,
-                self.training,
-                self.norm.eps or 1e-5,
-            )
-        elif isinstance(self.pos_enc, LearnablePosition):
-            return patch_embed_learnable_pos(
-                x,
-                self.patch.weight,
-                self.patch.bias,
-                self.pos_enc.positions,
-                self.pos_enc.spatial_size,
-                self.norm.weight,
-                self.norm.eps or 1e-5,
-                self.pos_enc.dropout.p,
-                self.training,
-            )
+    def forward(self, x: Tensor, with_pos: bool = True, with_image: bool = True) -> Tensor:
+        y = patch_embed(x, self.patch.weight, self.patch.bias)
+        pos = self.pos_enc(self.tokenized_size(x.shape[2:])).type_as(y) if self.pos_enc is not None else None
+        if with_pos and with_image and pos is not None:
+            y = y + pos
+        elif with_pos and pos is not None:
+            y = pos
+        elif with_image or pos is None:
+            pass
         else:
-            return patch_embed(
-                x,
-                self.patch.weight,
-                self.patch.bias,
-                self.norm.weight,
-                self.norm.eps or 1e-5,
-            )
+            raise ValueError("At least one of with_pos or with_image must be True")
+        return self.norm(y)
 
 
 class PatchEmbed3d(nn.Module):
@@ -238,14 +90,12 @@ class PatchEmbed3d(nn.Module):
         patch_size: Sequence[int],
         img_size: Sequence[int],
         eps: float = 1e-5,
-        pos_emb: Literal["factorized", "fourier", "none", "learnable"] = "learnable",
+        pos_emb: Literal["fourier", "none", "learnable"] = "learnable",
         **kwargs,
     ):
         super().__init__()
         self.patch = nn.Conv3d(in_channels, hidden_size, tuple(patch_size), stride=tuple(patch_size))
         match pos_emb:
-            case "factorized":
-                self.pos_enc = RelativeFactorizedPosition(3, hidden_size, **kwargs)
             case "fourier":
                 self.pos_enc = LearnableFourierFeatures(3, hidden_size, **kwargs)
             case "learnable":
@@ -275,58 +125,15 @@ class PatchEmbed3d(nn.Module):
         dt, ht, wt = tuple(s * p for s, p in zip(size, self.patch_size))
         return dt, ht, wt
 
-    def forward(self, x: Tensor) -> Tensor:
-        if isinstance(self.pos_enc, RelativeFactorizedPosition):
-            return patch_embed_relative_factorized_pos(
-                x,
-                self.patch.weight,
-                self.patch.bias,
-                self.pos_enc.fc1.weight,
-                self.pos_enc.fc1.bias,
-                self.pos_enc.fc2.weight,
-                self.pos_enc.fc2.bias,
-                self.norm.weight,
-                self.norm.eps or 1e-5,
-                True,
-            )
-        elif isinstance(self.pos_enc, LearnableFourierFeatures):
-            return patch_embed_learnable_fourier_pos(
-                x,
-                self.patch.weight,
-                self.patch.bias,
-                self.pos_enc.fourier.weight,
-                self.pos_enc.fourier.bias,
-                self.pos_enc.fc1.weight,
-                self.pos_enc.fc1.bias,
-                self.pos_enc.fc2.weight,
-                self.pos_enc.fc2.bias,
-                self.norm.weight,
-                True,
-                self.pos_enc.activation,
-                self.pos_enc.dropout.p,
-                self.training,
-                self.norm.eps or 1e-5,
-                True,
-            )
-        elif isinstance(self.pos_enc, LearnablePosition):
-            return patch_embed_learnable_pos(
-                x,
-                self.patch.weight,
-                self.patch.bias,
-                self.pos_enc.positions,
-                self.pos_enc.spatial_size,
-                self.norm.weight,
-                self.norm.eps or 1e-5,
-                self.pos_enc.dropout.p,
-                self.training,
-                True,
-            )
+    def forward(self, x: Tensor, with_pos: bool = True, with_image: bool = True) -> Tensor:
+        y = patch_embed(x, self.patch.weight, self.patch.bias)
+        pos = self.pos_enc(self.tokenized_size(x.shape[2:])).type_as(y) if self.pos_enc is not None else None
+        if with_pos and with_image and pos is not None:
+            y = y + pos
+        elif with_pos and pos is not None:
+            y = pos
+        elif with_image or pos is None:
+            pass
         else:
-            return patch_embed(
-                x,
-                self.patch.weight,
-                self.patch.bias,
-                self.norm.weight,
-                self.norm.eps or 1e-5,
-                True,
-            )
+            raise ValueError("At least one of with_pos or with_image must be True")
+        return self.norm(y)
