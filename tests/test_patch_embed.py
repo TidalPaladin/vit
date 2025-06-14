@@ -42,7 +42,8 @@ class TestPatchEmbed2d:
         assert_close(y1, y2)
 
     def test_forward_partial(self, device):
-        B, C, H, W = 2, 3, 64, 64
+        torch.random.manual_seed(0)
+        B, C, H, W = 8, 3, 64, 64
         D_model = 64
         layer = PatchEmbed2d(C, D_model, (4, 4), (H, W), pos_emb="learnable").to(device)
         x = torch.randn(B, C, H, W, device=device)
@@ -55,6 +56,19 @@ class TestPatchEmbed2d:
         assert not torch.allclose(y1, y2)
         assert not torch.allclose(y1, y3)
         assert not torch.allclose(y2, y3)
+
+    def test_forward_partial_mask(self, device):
+        torch.random.manual_seed(0)
+        B, C, H, W = 8, 3, 64, 64
+        D_model = 64
+        layer = PatchEmbed2d(C, D_model, (4, 4), (H, W), pos_emb="learnable").to(device)
+        x = torch.randn(B, C, H, W, device=device)
+        with_pos = torch.randint(0, 2, (B,), device=device, dtype=torch.bool)
+        with_image = torch.randint(0, 2, (B,), device=device, dtype=torch.bool)
+        with torch.autocast(device_type=device.type, dtype=torch.bfloat16):
+            y1 = layer(x)
+            y2 = layer(x, with_pos=with_pos, with_image=with_image)
+        assert not torch.allclose(y1, y2)
 
 
 class TestPatchEmbed3d:
@@ -82,7 +96,8 @@ class TestPatchEmbed3d:
             assert not param.grad.isnan().any()
 
     def test_learnable_dropout_deterministic(self):
-        B, C, D, H, W = 2, 3, 4, 64, 64
+        torch.random.manual_seed(0)
+        B, C, D, H, W = 8, 3, 4, 64, 64
         D_model = 64
         layer = PatchEmbed3d(C, D_model, (4, 4, 4), (D, H, W), pos_emb="learnable")
         x = torch.randn(B, C, D, H, W)
@@ -90,3 +105,16 @@ class TestPatchEmbed3d:
         y1 = layer(x)
         y2 = layer(x)
         assert_close(y1, y2)
+
+    def test_forward_partial_mask(self, device):
+        torch.random.manual_seed(0)
+        B, C, D, H, W = 8, 3, 4, 64, 64
+        D_model = 64
+        layer = PatchEmbed3d(C, D_model, (4, 4, 4), (D, H, W), pos_emb="learnable").to(device)
+        x = torch.randn(B, C, D, H, W, device=device)
+        with_pos = torch.randint(0, 2, (B,), device=device, dtype=torch.bool)
+        with_image = torch.randint(0, 2, (B,), device=device, dtype=torch.bool)
+        with torch.autocast(device_type=device.type, dtype=torch.bfloat16):
+            y1 = layer(x)
+            y2 = layer(x, with_pos=with_pos, with_image=with_image)
+        assert not torch.allclose(y1, y2)

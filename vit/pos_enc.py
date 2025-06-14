@@ -14,8 +14,6 @@ def learnable_position(
     dims: Sequence[int],
     positions_size: Sequence[int],
     positions: Tensor,
-    dropout: float,
-    training: bool,
 ) -> Tensor:
     L = math.prod(dims)
     if dims != positions_size:
@@ -23,18 +21,16 @@ def learnable_position(
         positions = F.interpolate(positions, size=dims, mode="bicubic", antialias=False)
         positions = positions.movedim(1, -1)
         positions = positions.view(1, L, -1)
-    positions = F.dropout(positions, p=dropout, training=training)
     return positions.view(1, L, -1)
 
 
 class LearnablePosition(nn.Module):
 
-    def __init__(self, hidden_size: int, spatial_size: Sequence[int], dropout: float = 0.0):
+    def __init__(self, hidden_size: int, spatial_size: Sequence[int]):
         super().__init__()
         total_size = math.prod(spatial_size)
         self.positions = nn.Parameter(torch.empty(total_size, hidden_size))
         self.spatial_size = spatial_size
-        self.dropout = nn.Dropout(dropout)
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
@@ -42,13 +38,13 @@ class LearnablePosition(nn.Module):
 
     @torch.no_grad()
     def expand_positions(self, size: Sequence[int]) -> None:
-        positions = learnable_position(size, self.spatial_size, self.positions, self.dropout.p, self.training)
+        positions = learnable_position(size, self.spatial_size, self.positions)
         self.positions = nn.Parameter(positions.reshape(-1, self.positions.shape[-1]))
         self.spatial_size = size
 
     def forward(self, dims: Sequence[int] | None) -> Tensor:
         dims = dims or self.spatial_size
-        return learnable_position(dims, self.spatial_size, self.positions, self.dropout.p, self.training)
+        return learnable_position(dims, self.spatial_size, self.positions)
 
 
 @torch.compile(fullgraph=True)

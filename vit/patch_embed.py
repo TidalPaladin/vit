@@ -23,6 +23,22 @@ def patch_embed(x: Tensor, w_patch: Tensor, b_patch: Tensor | None) -> Tensor:
     return y
 
 
+def _check_mask(with_pos: bool | Tensor, with_image: bool | Tensor) -> None:
+    if isinstance(with_pos, bool) and isinstance(with_image, bool) and not (with_pos or with_image):
+        raise ValueError("At least one of with_pos or with_image must be True")
+
+
+def _to_mask(val: bool | Tensor, n: int, device: torch.device) -> Tensor:
+    if isinstance(val, bool):
+        return torch.full((n, 1, 1), val, dtype=torch.bool, device=device)
+    elif isinstance(val, Tensor):
+        if val.shape != (n,):
+            raise ValueError(f"Invalid mask shape: {val.shape}")
+        return val.bool().view(n, 1, 1)
+    else:
+        raise ValueError(f"Invalid mask value: {val}")  # pragma: no cover
+
+
 class PatchEmbed2d(nn.Module):
 
     def __init__(
@@ -68,16 +84,16 @@ class PatchEmbed2d(nn.Module):
         return ht, wt
 
     def forward(self, x: Tensor, with_pos: bool = True, with_image: bool = True) -> Tensor:
+        _check_mask(with_pos, with_image)
         y = patch_embed(x, self.patch.weight, self.patch.bias)
-        pos = self.pos_enc(self.tokenized_size(x.shape[2:])).type_as(y) if self.pos_enc is not None else None
-        if with_pos and with_image and pos is not None:
-            y = y + pos
-        elif with_pos and pos is not None:
-            y = pos
-        elif with_image or pos is None:
-            pass
-        else:
-            raise ValueError("At least one of with_pos or with_image must be True")
+        pos = (
+            self.pos_enc(self.tokenized_size(x.shape[2:])).type_as(y)
+            if self.pos_enc is not None
+            else torch.zeros_like(y)
+        )
+        y_mask = _to_mask(with_image, y.shape[0], device=y.device)
+        pos_mask = _to_mask(with_pos, y.shape[0], device=y.device)
+        y = y * y_mask + pos * pos_mask
         return self.norm(y)
 
 
@@ -125,15 +141,15 @@ class PatchEmbed3d(nn.Module):
         dt, ht, wt = tuple(s * p for s, p in zip(size, self.patch_size))
         return dt, ht, wt
 
-    def forward(self, x: Tensor, with_pos: bool = True, with_image: bool = True) -> Tensor:
+    def forward(self, x: Tensor, with_pos: bool | Tensor = True, with_image: bool | Tensor = True) -> Tensor:
+        _check_mask(with_pos, with_image)
         y = patch_embed(x, self.patch.weight, self.patch.bias)
-        pos = self.pos_enc(self.tokenized_size(x.shape[2:])).type_as(y) if self.pos_enc is not None else None
-        if with_pos and with_image and pos is not None:
-            y = y + pos
-        elif with_pos and pos is not None:
-            y = pos
-        elif with_image or pos is None:
-            pass
-        else:
-            raise ValueError("At least one of with_pos or with_image must be True")
+        pos = (
+            self.pos_enc(self.tokenized_size(x.shape[2:])).type_as(y)
+            if self.pos_enc is not None
+            else torch.zeros_like(y)
+        )
+        y_mask = _to_mask(with_image, y.shape[0], device=y.device)
+        pos_mask = _to_mask(with_pos, y.shape[0], device=y.device)
+        y = y * y_mask + pos * pos_mask
         return self.norm(y)
