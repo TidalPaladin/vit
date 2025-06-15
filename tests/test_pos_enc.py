@@ -2,7 +2,7 @@ import pytest
 import torch
 from torch.testing import assert_close
 
-from vit.pos_enc import LearnableFourierFeatures, LearnablePosition, RelativeFactorizedPosition, create_grid
+from vit.pos_enc import LearnableFourierFeatures, LearnablePosition, create_grid
 
 
 class TestLearnablePosition:
@@ -71,41 +71,22 @@ def test_create_grid(normalize, device):
         assert torch.all(grid[0, -1] == torch.tensor([3, 3], device=device))
 
 
-class TestRelativeFactorizedPosition:
-
-    def test_forward(self, device):
-        C, D = 2, 16
-        torch.random.manual_seed(0)
-        layer = RelativeFactorizedPosition(C, D).to(device)
-        out = layer((8, 8))
-        assert out.shape == (1, 64, D)
-        assert out.device == device
-
-    def test_backward(self, device):
-        C, D = 2, 16
-        torch.random.manual_seed(0)
-        layer = RelativeFactorizedPosition(C, D).to(device)
-        out = layer((8, 8))
-        out.sum().backward()
-        for param in layer.parameters():
-            assert param.grad is not None
-            assert not param.grad.isnan().any()
-
-
 class TestLearnableFourierFeatures:
 
-    def test_forward(self, device):
+    @pytest.mark.parametrize("activation", ["gelu", "swiglu"])
+    def test_forward(self, device, activation):
         C, D = 2, 16
         torch.random.manual_seed(0)
-        layer = LearnableFourierFeatures(C, D).to(device)
+        layer = LearnableFourierFeatures(C, D, activation=activation).to(device)
         out = layer((8, 8))
         assert out.shape == (1, 64, D)
         assert out.device == device
 
-    def test_backward(self, device):
+    @pytest.mark.parametrize("activation", ["gelu", "swiglu"])
+    def test_backward(self, device, activation):
         C, D = 2, 16
         torch.random.manual_seed(0)
-        layer = LearnableFourierFeatures(C, D).to(device)
+        layer = LearnableFourierFeatures(C, D, activation=activation).to(device)
         out = layer((8, 8))
         out.sum().backward()
         for param in layer.parameters():

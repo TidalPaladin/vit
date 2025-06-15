@@ -8,11 +8,19 @@ from torch import Tensor
 from .pos_enc import (
     LearnableFourierFeatures,
     LearnablePosition,
-    RelativeFactorizedPosition,
     learnable_fourier_features,
+    learnable_fourier_features_glu,
     learnable_position,
-    relative_factorized_position,
 )
+
+
+def _add_pos_with_dropout(y: Tensor, pos: Tensor, pos_dropout: float, training: bool) -> Tensor:
+    if pos_dropout > 0.0 and training:
+        mask = torch.rand(y.shape[0], 1, 1, device=y.device) > pos_dropout
+        y = torch.addcmul(y, pos, mask)
+    else:
+        y = y + pos
+    return y
 
 
 @torch.compile(fullgraph=True, dynamic=False)
@@ -36,42 +44,19 @@ def patch_embed(
 
 
 @torch.compile(fullgraph=True, dynamic=False)
-def patch_embed_relative_factorized_pos(
-    # fmt: off
-    x: Tensor,
-    w_patch: Tensor, b_patch: Tensor | None,
-    w_fc1: Tensor, b_fc1: Tensor | None,
-    w_fc2: Tensor, b_fc2: Tensor | None,
-    w_norm: Tensor,
-    eps: float,
-    is_3d: bool = False,
-    # fmt: on
-) -> Tensor:
-    dims = x.shape[2:]
-    patch_size = w_patch.shape[2:]
-    dims = tuple(s // p for s, p in zip(dims, patch_size))
-    if is_3d:
-        y = F.conv3d(x, w_patch, b_patch, stride=patch_size)
-    else:
-        y = F.conv2d(x, w_patch, b_patch, stride=patch_size)
-    y = y.flatten(2).transpose(1, 2)
-    y = y + relative_factorized_position(dims, w_fc1, b_fc1, w_fc2, b_fc2)
-    y = F.rms_norm(y, y.shape[-1:], w_norm, eps)
-    return y
-
-
-@torch.compile(fullgraph=True, dynamic=False)
 def patch_embed_learnable_fourier_pos(
     # fmt: off
     x: Tensor,
     w_patch: Tensor, b_patch: Tensor | None,
     w_fourier: Tensor, b_fourier: Tensor | None,
     w_fc1: Tensor, b_fc1: Tensor | None,
+    fc_lu_weight: Tensor | None, fc_lu_bias: Tensor | None,
     w_fc2: Tensor, b_fc2: Tensor | None,
     w_norm: Tensor,
     normalize_grid: bool,
     activation: Callable[[Tensor], Tensor],
     dropout: float,
+    pos_dropout: float,
     training: bool,
     eps: float,
     is_3d: bool = False,
@@ -85,20 +70,37 @@ def patch_embed_learnable_fourier_pos(
     else:
         y = F.conv2d(x, w_patch, b_patch, stride=patch_size)
     y = y.flatten(2).transpose(1, 2)
-    pos = learnable_fourier_features(
-        dims,
-        w_fourier,
-        b_fourier,
-        w_fc1,
-        b_fc1,
-        w_fc2,
-        b_fc2,
-        normalize_grid,
-        activation,
-        dropout,
-        training,
-    )
-    y = y + pos
+    if fc_lu_weight is not None:
+        pos = learnable_fourier_features_glu(
+            dims,
+            w_fourier,
+            b_fourier,
+            w_fc1,
+            b_fc1,
+            fc_lu_weight,
+            fc_lu_bias,
+            w_fc2,
+            b_fc2,
+            normalize_grid,
+            activation,
+            dropout,
+            training,
+        )
+    else:
+        pos = learnable_fourier_features(
+            dims,
+            w_fourier,
+            b_fourier,
+            w_fc1,
+            b_fc1,
+            w_fc2,
+            b_fc2,
+            normalize_grid,
+            activation,
+            dropout,
+            training,
+        )
+    y = _add_pos_with_dropout(y, pos, pos_dropout, training)
     y = F.rms_norm(y, y.shape[-1:], w_norm, eps)
     return y
 
@@ -113,6 +115,7 @@ def patch_embed_learnable_pos(
     w_norm: Tensor,
     eps: float,
     dropout: float,
+    pos_dropout: float,
     training: bool,
     is_3d: bool = False,
     # fmt: on
@@ -125,7 +128,8 @@ def patch_embed_learnable_pos(
     else:
         y = F.conv2d(x, w_patch, b_patch, stride=patch_size)
     y = y.flatten(2).transpose(1, 2)
-    y = y + learnable_position(dims, positions_size, positions, dropout, training)
+    pos = learnable_position(dims, positions_size, positions, dropout, training)
+    y = _add_pos_with_dropout(y, pos, pos_dropout, training)
     y = F.rms_norm(y, y.shape[-1:], w_norm, eps)
     return y
 
@@ -139,14 +143,14 @@ class PatchEmbed2d(nn.Module):
         patch_size: Sequence[int],
         img_size: Sequence[int],
         eps: float = 1e-5,
-        pos_emb: Literal["factorized", "fourier", "none", "learnable"] = "learnable",
+        pos_emb: Literal["fourier", "none", "learnable"] = "learnable",
+        pos_dropout: float = 0.0,
         **kwargs,
     ):
         super().__init__()
+        self.pos_dropout = pos_dropout
         self.patch = nn.Conv2d(in_channels, hidden_size, tuple(patch_size), stride=tuple(patch_size))
         match pos_emb:
-            case "factorized":
-                self.pos_enc = RelativeFactorizedPosition(2, hidden_size, **kwargs)
             case "fourier":
                 self.pos_enc = LearnableFourierFeatures(2, hidden_size, **kwargs)
             case "learnable":
@@ -177,19 +181,7 @@ class PatchEmbed2d(nn.Module):
         return ht, wt
 
     def forward(self, x: Tensor) -> Tensor:
-        if isinstance(self.pos_enc, RelativeFactorizedPosition):
-            return patch_embed_relative_factorized_pos(
-                x,
-                self.patch.weight,
-                self.patch.bias,
-                self.pos_enc.fc1.weight,
-                self.pos_enc.fc1.bias,
-                self.pos_enc.fc2.weight,
-                self.pos_enc.fc2.bias,
-                self.norm.weight,
-                self.norm.eps or 1e-5,
-            )
-        elif isinstance(self.pos_enc, LearnableFourierFeatures):
+        if isinstance(self.pos_enc, LearnableFourierFeatures):
             return patch_embed_learnable_fourier_pos(
                 x,
                 self.patch.weight,
@@ -198,12 +190,15 @@ class PatchEmbed2d(nn.Module):
                 self.pos_enc.fourier.bias,
                 self.pos_enc.fc1.weight,
                 self.pos_enc.fc1.bias,
+                self.pos_enc.fc_lu.weight if self.pos_enc.fc_lu is not None else None,
+                self.pos_enc.fc_lu.bias if self.pos_enc.fc_lu is not None else None,
                 self.pos_enc.fc2.weight,
                 self.pos_enc.fc2.bias,
                 self.norm.weight,
                 True,
                 self.pos_enc.activation,
                 self.pos_enc.dropout.p,
+                self.pos_dropout,
                 self.training,
                 self.norm.eps or 1e-5,
             )
@@ -217,6 +212,7 @@ class PatchEmbed2d(nn.Module):
                 self.norm.weight,
                 self.norm.eps or 1e-5,
                 self.pos_enc.dropout.p,
+                self.pos_dropout,
                 self.training,
             )
         else:
@@ -238,14 +234,14 @@ class PatchEmbed3d(nn.Module):
         patch_size: Sequence[int],
         img_size: Sequence[int],
         eps: float = 1e-5,
-        pos_emb: Literal["factorized", "fourier", "none", "learnable"] = "learnable",
+        pos_emb: Literal["fourier", "none", "learnable"] = "learnable",
+        pos_dropout: float = 0.0,
         **kwargs,
     ):
         super().__init__()
+        self.pos_dropout = pos_dropout
         self.patch = nn.Conv3d(in_channels, hidden_size, tuple(patch_size), stride=tuple(patch_size))
         match pos_emb:
-            case "factorized":
-                self.pos_enc = RelativeFactorizedPosition(3, hidden_size, **kwargs)
             case "fourier":
                 self.pos_enc = LearnableFourierFeatures(3, hidden_size, **kwargs)
             case "learnable":
@@ -276,20 +272,7 @@ class PatchEmbed3d(nn.Module):
         return dt, ht, wt
 
     def forward(self, x: Tensor) -> Tensor:
-        if isinstance(self.pos_enc, RelativeFactorizedPosition):
-            return patch_embed_relative_factorized_pos(
-                x,
-                self.patch.weight,
-                self.patch.bias,
-                self.pos_enc.fc1.weight,
-                self.pos_enc.fc1.bias,
-                self.pos_enc.fc2.weight,
-                self.pos_enc.fc2.bias,
-                self.norm.weight,
-                self.norm.eps or 1e-5,
-                True,
-            )
-        elif isinstance(self.pos_enc, LearnableFourierFeatures):
+        if isinstance(self.pos_enc, LearnableFourierFeatures):
             return patch_embed_learnable_fourier_pos(
                 x,
                 self.patch.weight,
@@ -298,12 +281,15 @@ class PatchEmbed3d(nn.Module):
                 self.pos_enc.fourier.bias,
                 self.pos_enc.fc1.weight,
                 self.pos_enc.fc1.bias,
+                self.pos_enc.fc_lu.weight if self.pos_enc.fc_lu is not None else None,
+                self.pos_enc.fc_lu.bias if self.pos_enc.fc_lu is not None else None,
                 self.pos_enc.fc2.weight,
                 self.pos_enc.fc2.bias,
                 self.norm.weight,
                 True,
                 self.pos_enc.activation,
                 self.pos_enc.dropout.p,
+                self.pos_dropout,
                 self.training,
                 self.norm.eps or 1e-5,
                 True,
@@ -318,6 +304,7 @@ class PatchEmbed3d(nn.Module):
                 self.norm.weight,
                 self.norm.eps or 1e-5,
                 self.pos_enc.dropout.p,
+                self.pos_dropout,
                 self.training,
                 True,
             )

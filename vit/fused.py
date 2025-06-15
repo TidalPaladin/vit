@@ -53,14 +53,15 @@ def norm_mlp(
     x: Tensor,
     fc1_weight: Tensor, fc1_bias: Tensor | None,
     fc2_weight: Tensor, fc2_bias: Tensor | None,
-    norm_weight: Tensor,
+    norm_weight: Tensor | None,
     activation: Callable[[Tensor], Tensor],
     eps: float,
     dropout: float,
     training: bool,
     # fmt: on
 ) -> Tensor:
-    x = F.rms_norm(x, x.shape[-1:], weight=norm_weight, eps=eps)
+    if norm_weight is not None:
+        x = F.rms_norm(x, x.shape[-1:], weight=norm_weight, eps=eps)
     x = F.linear(x, fc1_weight, fc1_bias)
     x = activation(x)
     x = F.dropout(x, p=dropout, training=training)
@@ -84,14 +85,15 @@ def norm_mlp_glu(
     fc1_weight: Tensor, fc1_bias: Tensor | None,
     fc_lu_weight: Tensor, fc_lu_bias: Tensor | None,
     fc2_weight: Tensor, fc2_bias: Tensor | None,
-    norm_weight: Tensor,
+    norm_weight: Tensor | None,
     activation: Callable[[Tensor], Tensor],
     eps: float,
     dropout: float,
     training: bool,
     # fmt: on
 ) -> Tensor:
-    x = F.rms_norm(x, x.shape[-1:], weight=norm_weight, eps=eps)
+    if norm_weight is not None:
+        x = F.rms_norm(x, x.shape[-1:], weight=norm_weight, eps=eps)
     x = activation(F.linear(x, fc1_weight, fc1_bias)) * F.linear(x, fc_lu_weight, fc_lu_bias)
     x = F.dropout(x, p=dropout, training=training)
     x = F.linear(x, fc2_weight, fc2_bias)

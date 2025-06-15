@@ -47,8 +47,9 @@ class ViTConfig:
     activation: str = "srelu"
     drop_path_rate: float = 0.0
     num_register_tokens: int = 0
-    pos_emb: Literal["learnable", "factorized", "fourier", "none"] = "learnable"
+    pos_emb: Literal["learnable", "fourier", "none"] = "learnable"
     output_norm: bool = False
+    pos_dropout: float = 0.0
 
     # Trainable blocks
     mlp_requires_grad: bool = True
@@ -94,14 +95,30 @@ class ViT(nn.Module):
             self.register_tokens = None
 
         # Stem tokenizer
+        if config.pos_emb == "fourier":
+            stem_kwargs = {"activation": config.activation}
+        else:
+            stem_kwargs = {}
         match len(config.patch_size):
             case 2:
                 self.stem = PatchEmbed2d(
-                    config.in_channels, config.hidden_size, config.patch_size, config.img_size, pos_emb=config.pos_emb
+                    config.in_channels,
+                    config.hidden_size,
+                    config.patch_size,
+                    config.img_size,
+                    pos_emb=config.pos_emb,
+                    pos_dropout=config.pos_dropout,
+                    **stem_kwargs,
                 )
             case 3:
                 self.stem = PatchEmbed3d(
-                    config.in_channels, config.hidden_size, config.patch_size, config.img_size, pos_emb=config.pos_emb
+                    config.in_channels,
+                    config.hidden_size,
+                    config.patch_size,
+                    config.img_size,
+                    pos_emb=config.pos_emb,
+                    pos_dropout=config.pos_dropout,
+                    **stem_kwargs,
                 )
             case _:
                 raise ValueError(f"Invalid patch size: {config.patch_size}")
