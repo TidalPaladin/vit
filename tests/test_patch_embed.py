@@ -31,6 +31,17 @@ class TestPatchEmbed2d:
             assert param.grad is not None
             assert not param.grad.isnan().any()
 
+    def test_backward_fourier_swiglu(self, device):
+        B, C, H, W = 2, 3, 64, 64
+        D_model = 64
+        layer = PatchEmbed2d(C, D_model, (4, 4), (H, W), pos_emb="fourier", activation="swiglu").to(device)
+        x = torch.randn(B, C, H, W, requires_grad=True, device=device)
+        y = layer(x)
+        y.sum().backward()
+        for param in layer.parameters():
+            assert param.grad is not None
+            assert not param.grad.isnan().any()
+
     @pytest.mark.parametrize("pos_emb", ["learnable", "fourier"])
     @pytest.mark.parametrize("dropout,pos_dropout", [(0.1, 0.0), (0.0, 0.1), (0.1, 0.1)])
     def test_dropout_deterministic(self, pos_emb, dropout, pos_dropout):
@@ -67,6 +78,17 @@ class TestPatchEmbed3d:
         B, C, D, H, W = 2, 3, 4, 64, 64
         D_model = 64
         layer = PatchEmbed3d(C, D_model, (4, 4, 4), (D, H, W), pos_emb=pos_emb).to(device)
+        x = torch.randn(B, C, D, H, W, requires_grad=True, device=device)
+        y = layer(x)
+        y.sum().backward()
+        for param in layer.parameters():
+            assert param.grad is not None
+            assert not param.grad.isnan().any()
+
+    def test_backward_fourier_swiglu(self, device):
+        B, C, D, H, W = 2, 3, 4, 64, 64
+        D_model = 64
+        layer = PatchEmbed3d(C, D_model, (4, 4, 4), (D, H, W), pos_emb="fourier", activation="swiglu").to(device)
         x = torch.randn(B, C, D, H, W, requires_grad=True, device=device)
         y = layer(x)
         y.sum().backward()

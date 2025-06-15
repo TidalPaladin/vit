@@ -5,7 +5,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from .pos_enc import LearnableFourierFeatures, LearnablePosition, learnable_fourier_features, learnable_position
+from .pos_enc import (
+    LearnableFourierFeatures,
+    LearnablePosition,
+    learnable_fourier_features,
+    learnable_fourier_features_glu,
+    learnable_position,
+)
 
 
 def _add_pos_with_dropout(y: Tensor, pos: Tensor, pos_dropout: float, training: bool) -> Tensor:
@@ -44,6 +50,7 @@ def patch_embed_learnable_fourier_pos(
     w_patch: Tensor, b_patch: Tensor | None,
     w_fourier: Tensor, b_fourier: Tensor | None,
     w_fc1: Tensor, b_fc1: Tensor | None,
+    fc_lu_weight: Tensor | None, fc_lu_bias: Tensor | None,
     w_fc2: Tensor, b_fc2: Tensor | None,
     w_norm: Tensor,
     normalize_grid: bool,
@@ -63,19 +70,36 @@ def patch_embed_learnable_fourier_pos(
     else:
         y = F.conv2d(x, w_patch, b_patch, stride=patch_size)
     y = y.flatten(2).transpose(1, 2)
-    pos = learnable_fourier_features(
-        dims,
-        w_fourier,
-        b_fourier,
-        w_fc1,
-        b_fc1,
-        w_fc2,
-        b_fc2,
-        normalize_grid,
-        activation,
-        dropout,
-        training,
-    )
+    if fc_lu_weight is not None:
+        pos = learnable_fourier_features_glu(
+            dims,
+            w_fourier,
+            b_fourier,
+            w_fc1,
+            b_fc1,
+            fc_lu_weight,
+            fc_lu_bias,
+            w_fc2,
+            b_fc2,
+            normalize_grid,
+            activation,
+            dropout,
+            training,
+        )
+    else:
+        pos = learnable_fourier_features(
+            dims,
+            w_fourier,
+            b_fourier,
+            w_fc1,
+            b_fc1,
+            w_fc2,
+            b_fc2,
+            normalize_grid,
+            activation,
+            dropout,
+            training,
+        )
     y = _add_pos_with_dropout(y, pos, pos_dropout, training)
     y = F.rms_norm(y, y.shape[-1:], w_norm, eps)
     return y
@@ -166,6 +190,8 @@ class PatchEmbed2d(nn.Module):
                 self.pos_enc.fourier.bias,
                 self.pos_enc.fc1.weight,
                 self.pos_enc.fc1.bias,
+                self.pos_enc.fc_lu.weight if self.pos_enc.fc_lu is not None else None,
+                self.pos_enc.fc_lu.bias if self.pos_enc.fc_lu is not None else None,
                 self.pos_enc.fc2.weight,
                 self.pos_enc.fc2.bias,
                 self.norm.weight,
@@ -255,6 +281,8 @@ class PatchEmbed3d(nn.Module):
                 self.pos_enc.fourier.bias,
                 self.pos_enc.fc1.weight,
                 self.pos_enc.fc1.bias,
+                self.pos_enc.fc_lu.weight if self.pos_enc.fc_lu is not None else None,
+                self.pos_enc.fc_lu.bias if self.pos_enc.fc_lu is not None else None,
                 self.pos_enc.fc2.weight,
                 self.pos_enc.fc2.bias,
                 self.norm.weight,
