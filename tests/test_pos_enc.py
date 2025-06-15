@@ -73,18 +73,20 @@ def test_create_grid(normalize, device):
 
 class TestLearnableFourierFeatures:
 
-    def test_forward(self, device):
+    @pytest.mark.parametrize("activation", ["gelu", "swiglu"])
+    def test_forward(self, device, activation):
         C, D = 2, 16
         torch.random.manual_seed(0)
-        layer = LearnableFourierFeatures(C, D).to(device)
+        layer = LearnableFourierFeatures(C, D, activation=activation).to(device)
         out = layer((8, 8))
         assert out.shape == (1, 64, D)
         assert out.device == device
 
-    def test_backward(self, device):
+    @pytest.mark.parametrize("activation", ["gelu", "swiglu"])
+    def test_backward(self, device, activation):
         C, D = 2, 16
         torch.random.manual_seed(0)
-        layer = LearnableFourierFeatures(C, D).to(device)
+        layer = LearnableFourierFeatures(C, D, activation=activation).to(device)
         out = layer((8, 8))
         out.sum().backward()
         for param in layer.parameters():

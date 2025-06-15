@@ -6,8 +6,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
+from .fused import norm_mlp, norm_mlp_glu
 from .helpers import get_activation
-from .fused import norm_mlp
 
 
 @torch.compile(fullgraph=True, dynamic=False)
@@ -94,10 +94,26 @@ def learnable_fourier_features(
     # fmt: on
 ) -> Tensor:
     y = _make_fourier_features(dims, w_fourier, b_fourier, normalize_grid)
-    y = F.linear(y, w_fc1, b_fc1)
-    y = activation(y)
-    y = F.dropout(y, p=dropout, training=training)
-    y = F.linear(y, w_fc2, b_fc2)
+    y = norm_mlp(y, w_fc1, b_fc1, w_fc2, b_fc2, None, activation, 1e-5, dropout, training)
+    return y
+
+
+@torch.compile(fullgraph=True, dynamic=False)
+def learnable_fourier_features_glu(
+    # fmt: off
+    dims: Sequence[int],
+    w_fourier: Tensor, b_fourier: Tensor | None,
+    w_fc1: Tensor, b_fc1: Tensor | None,
+    fc_lu_weight: Tensor, fc_lu_bias: Tensor | None,
+    w_fc2: Tensor, b_fc2: Tensor | None,
+    normalize_grid: bool,
+    activation: Callable[[Tensor], Tensor],
+    dropout: float,
+    training: bool,
+    # fmt: on
+) -> Tensor:
+    y = _make_fourier_features(dims, w_fourier, b_fourier, normalize_grid)
+    y = norm_mlp_glu(y, w_fc1, b_fc1, fc_lu_weight, fc_lu_bias, w_fc2, b_fc2, None, activation, 1e-5, dropout, training)
     return y
 
 
@@ -164,6 +180,7 @@ class LearnableFourierFeatures(nn.Module):
         self.fourier = nn.Linear(d_in, fourier_size // 2, bias=False)
         self.fc1 = nn.Linear(fourier_size, inner_size)
         self.fc2 = nn.Linear(inner_size, hidden_size)
+        self.fc_lu = nn.Linear(fourier_size, inner_size) if activation.endswith("glu") else None
         self.dropout = nn.Dropout(dropout)
         self.activation = get_activation(activation)
         self.reset_parameters()
@@ -178,15 +195,30 @@ class LearnableFourierFeatures(nn.Module):
         nn.init.trunc_normal_(self.fc2.weight, std=0.02)
 
     def forward(self, dims: Sequence[int]) -> Tensor:
-        return learnable_fourier_features(
-            # fmt: off
-            dims,
-            self.fourier.weight, self.fourier.bias,
-            self.fc1.weight, self.fc1.bias,
-            self.fc2.weight, self.fc2.bias,
-            normalize_grid=True,
-            activation=self.activation,
-            dropout=self.dropout.p,
-            training=self.training,
-            # fmt: on
-        )
+        if self.fc_lu is not None:
+            return learnable_fourier_features_glu(
+                # fmt: off
+                dims,
+                self.fourier.weight, self.fourier.bias,
+                self.fc1.weight, self.fc1.bias,
+                self.fc_lu.weight, self.fc_lu.bias,
+                self.fc2.weight, self.fc2.bias,
+                normalize_grid=True,
+                activation=self.activation,
+                dropout=self.dropout.p,
+                training=self.training,
+                # fmt: on
+            )
+        else:
+            return learnable_fourier_features(
+                # fmt: off
+                dims,
+                self.fourier.weight, self.fourier.bias,
+                self.fc1.weight, self.fc1.bias,
+                self.fc2.weight, self.fc2.bias,
+                normalize_grid=True,
+                activation=self.activation,
+                dropout=self.dropout.p,
+                training=self.training,
+                # fmt: on
+            )

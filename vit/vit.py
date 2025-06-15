@@ -95,6 +95,10 @@ class ViT(nn.Module):
             self.register_tokens = None
 
         # Stem tokenizer
+        if config.pos_emb == "fourier":
+            stem_kwargs = {"activation": config.activation}
+        else:
+            stem_kwargs = {}
         match len(config.patch_size):
             case 2:
                 self.stem = PatchEmbed2d(
@@ -104,6 +108,7 @@ class ViT(nn.Module):
                     config.img_size,
                     pos_emb=config.pos_emb,
                     pos_dropout=config.pos_dropout,
+                    **stem_kwargs,
                 )
             case 3:
                 self.stem = PatchEmbed3d(
@@ -113,6 +118,7 @@ class ViT(nn.Module):
                     config.img_size,
                     pos_emb=config.pos_emb,
                     pos_dropout=config.pos_dropout,
+                    **stem_kwargs,
                 )
             case _:
                 raise ValueError(f"Invalid patch size: {config.patch_size}")
