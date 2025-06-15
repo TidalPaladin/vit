@@ -38,8 +38,12 @@ class LearnablePosition(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.reset_parameters()
 
+    @torch.no_grad()
     def reset_parameters(self) -> None:
-        nn.init.trunc_normal_(self.positions, std=0.02)
+        w = self.positions.new_empty(self.positions.shape[1] // 2, 2)
+        w.normal_()
+        features = _make_fourier_features(self.spatial_size, w, None, True).squeeze_(0)
+        self.positions.data.copy_(features)
 
     @torch.no_grad()
     def expand_positions(self, size: Sequence[int]) -> None:
