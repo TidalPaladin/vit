@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Literal, Self, Sequence, Type, cast
+from typing import Any, Dict, Self, Sequence, Type, cast
 
 import torch
 import torch.nn as nn
@@ -47,9 +47,7 @@ class ViTConfig:
     activation: str = "srelu"
     drop_path_rate: float = 0.0
     num_register_tokens: int = 0
-    pos_emb: Literal["learnable", "fourier", "none"] = "learnable"
     output_norm: bool = False
-    pos_dropout: float = 0.0
 
     # Trainable blocks
     mlp_requires_grad: bool = True
@@ -95,33 +93,13 @@ class ViT(nn.Module):
             self.register_tokens = None
 
         # Stem tokenizer
-        if config.pos_emb == "fourier":
-            stem_kwargs = {"activation": config.activation}
-        else:
-            stem_kwargs = {}
-        match len(config.patch_size):
-            case 2:
-                self.stem = PatchEmbed2d(
-                    config.in_channels,
-                    config.hidden_size,
-                    config.patch_size,
-                    config.img_size,
-                    pos_emb=config.pos_emb,
-                    pos_dropout=config.pos_dropout,
-                    **stem_kwargs,
-                )
-            case 3:
-                self.stem = PatchEmbed3d(
-                    config.in_channels,
-                    config.hidden_size,
-                    config.patch_size,
-                    config.img_size,
-                    pos_emb=config.pos_emb,
-                    pos_dropout=config.pos_dropout,
-                    **stem_kwargs,
-                )
-            case _:
-                raise ValueError(f"Invalid patch size: {config.patch_size}")
+        PatchEmbed = PatchEmbed2d if len(config.patch_size) == 2 else PatchEmbed3d
+        self.stem = PatchEmbed(
+            config.in_channels,
+            config.hidden_size,
+            config.patch_size,
+            config.img_size,
+        )
 
         self.blocks = nn.ModuleList([self.create_encoder_layer() for _ in range(config.depth)])
 

@@ -1,8 +1,7 @@
 import pytest
 import torch
-from torch.testing import assert_close
 
-from vit.pos_enc import LearnableFourierFeatures, LearnablePosition, create_grid
+from vit.pos_enc import LearnablePosition, create_grid
 
 
 class TestLearnablePosition:
@@ -43,20 +42,6 @@ class TestLearnablePosition:
         out = layer((12, 12))
         assert out.shape == (1, 144, D)
 
-    def test_deterministic(self):
-        D = 16
-        torch.random.manual_seed(0)
-        layer = LearnablePosition(D, (8, 8), dropout=0.1)
-        layer.eval()
-        out1 = layer((8, 8))
-        out2 = layer((8, 8))
-        assert_close(out1, out2)
-
-        layer.train()
-        out1 = layer((8, 8))
-        out2 = layer((8, 8))
-        assert not torch.allclose(out1, out2)
-
 
 @pytest.mark.parametrize("normalize", [True, False])
 def test_create_grid(normalize, device):
@@ -69,41 +54,3 @@ def test_create_grid(normalize, device):
     else:
         assert torch.all(grid[0, 0] == torch.tensor([0, 0], device=device))
         assert torch.all(grid[0, -1] == torch.tensor([3, 3], device=device))
-
-
-class TestLearnableFourierFeatures:
-
-    @pytest.mark.parametrize("activation", ["gelu", "swiglu"])
-    def test_forward(self, device, activation):
-        C, D = 2, 16
-        torch.random.manual_seed(0)
-        layer = LearnableFourierFeatures(C, D, activation=activation).to(device)
-        out = layer((8, 8))
-        assert out.shape == (1, 64, D)
-        assert out.device == device
-
-    @pytest.mark.parametrize("activation", ["gelu", "swiglu"])
-    def test_backward(self, device, activation):
-        C, D = 2, 16
-        torch.random.manual_seed(0)
-        layer = LearnableFourierFeatures(C, D, activation=activation).to(device)
-        out = layer((8, 8))
-        out.sum().backward()
-        for param in layer.parameters():
-            assert param.grad is not None
-            assert not param.grad.isnan().any()
-
-    def test_deterministic(self, device):
-        C, D = 2, 16
-        torch.random.manual_seed(0)
-        layer = LearnableFourierFeatures(C, D, dropout=0.1).to(device)
-
-        layer.eval()
-        out1 = layer((8, 8))
-        out2 = layer((8, 8))
-        assert_close(out1, out2)
-
-        layer.train()
-        out1 = layer((8, 8))
-        out2 = layer((8, 8))
-        assert not torch.allclose(out1, out2)
