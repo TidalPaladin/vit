@@ -74,6 +74,10 @@ class LearnablePosition(nn.Module):
     def hidden_size(self) -> int:
         return self.positions.shape[-1]
 
+    @property
+    def center_position(self) -> Tensor:
+        return self.positions[self.positions.shape[0] // 2]
+
     def reset_parameters(self) -> None:
         fourier_features_(self.positions.view(*self.spatial_size, self.hidden_size))
 

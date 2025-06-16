@@ -47,7 +47,6 @@ class ViTConfig:
     activation: str = "srelu"
     drop_path_rate: float = 0.0
     num_register_tokens: int = 0
-    output_norm: bool = False
 
     # Trainable blocks
     mlp_requires_grad: bool = True
@@ -85,13 +84,6 @@ class ViT(nn.Module):
         super().__init__()
         self._config = config
 
-        # Register tokens
-        if config.num_register_tokens > 0:
-            self.register_tokens = nn.Parameter(torch.empty(config.num_register_tokens, config.hidden_size))
-            nn.init.normal_(self.register_tokens)
-        else:
-            self.register_tokens = None
-
         # Stem tokenizer
         PatchEmbed = PatchEmbed2d if len(config.patch_size) == 2 else PatchEmbed3d
         self.stem = PatchEmbed(
@@ -101,12 +93,16 @@ class ViT(nn.Module):
             config.img_size,
         )
 
-        self.blocks = nn.ModuleList([self.create_encoder_layer() for _ in range(config.depth)])
-
-        if config.output_norm:
-            self.output_norm = nn.RMSNorm(config.hidden_size)
+        # Register tokens
+        if config.num_register_tokens > 0:
+            self.register_tokens = nn.Parameter(torch.empty(config.num_register_tokens, config.hidden_size))
+            nn.init.trunc_normal_(self.register_tokens, std=0.02)
+            self.register_tokens.data.add_(self.stem.pos_enc.center_position)
         else:
-            self.output_norm = None
+            self.register_tokens = None
+
+        self.blocks = nn.ModuleList([self.create_encoder_layer() for _ in range(config.depth)])
+        self.output_norm = nn.RMSNorm(config.hidden_size)
 
         self.mlp_requires_grad_(self.config.mlp_requires_grad)
         self.self_attention_requires_grad_(self.config.self_attention_requires_grad)
