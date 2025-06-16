@@ -40,7 +40,7 @@ class LearnablePosition(nn.Module):
 
     @torch.no_grad()
     def reset_parameters(self) -> None:
-        w = self.positions.new_empty(self.positions.shape[1] // 2, 2)
+        w = self.positions.new_empty(self.positions.shape[1] // 2, len(self.spatial_size))
         w.normal_()
         features = _make_fourier_features(self.spatial_size, w, None, True).squeeze_(0)
         self.positions.data.copy_(features)
