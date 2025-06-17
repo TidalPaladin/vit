@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from .pos_enc import LearnablePosition, learnable_position
+from .pos_enc import FourierPosition, fourier_position
 
 
 @torch.compile(fullgraph=True, dynamic=False)
@@ -13,8 +13,8 @@ def patch_embed(
     # fmt: off
     x: Tensor,
     w_patch: Tensor, b_patch: Tensor | None,
-    positions: Tensor,
-    positions_size: Sequence[int],
+    w_fourier: Tensor,
+    w_fourier_proj: Tensor, b_fourier_proj: Tensor | None,
     w_norm: Tensor,
     eps: float,
     is_3d: bool = False,
@@ -28,7 +28,7 @@ def patch_embed(
     else:
         y = F.conv2d(x, w_patch, b_patch, stride=patch_size)
     y = y.flatten(2).transpose(1, 2)
-    pos = learnable_position(dims, positions_size, positions)
+    pos = fourier_position(dims, w_fourier, w_fourier_proj, b_fourier_proj)
     y = y + pos
     y = F.rms_norm(y, y.shape[-1:], w_norm, eps)
     return y
@@ -46,7 +46,7 @@ class PatchEmbed2d(nn.Module):
     ):
         super().__init__()
         self.patch = nn.Conv2d(in_channels, hidden_size, tuple(patch_size), stride=tuple(patch_size))
-        self.pos_enc = LearnablePosition(hidden_size, self.tokenized_size(tuple(img_size)))
+        self.pos_enc = FourierPosition(hidden_size, self.tokenized_size(tuple(img_size)))
         self.norm = nn.RMSNorm(hidden_size, eps=eps)
         self.reset_parameters()
 
@@ -72,8 +72,9 @@ class PatchEmbed2d(nn.Module):
             x,
             self.patch.weight,
             self.patch.bias,
-            self.pos_enc.positions,
-            self.pos_enc.spatial_size,
+            self.pos_enc.w,
+            self.pos_enc.proj.weight,
+            self.pos_enc.proj.bias,
             self.norm.weight,
             self.norm.eps or 1e-5,
         )
@@ -91,7 +92,7 @@ class PatchEmbed3d(nn.Module):
     ):
         super().__init__()
         self.patch = nn.Conv3d(in_channels, hidden_size, tuple(patch_size), stride=tuple(patch_size))
-        self.pos_enc = LearnablePosition(hidden_size, self.tokenized_size(tuple(img_size)))
+        self.pos_enc = FourierPosition(hidden_size, self.tokenized_size(tuple(img_size)))
         self.norm = nn.RMSNorm(hidden_size, eps=eps)
         self.reset_parameters()
 
@@ -117,8 +118,9 @@ class PatchEmbed3d(nn.Module):
             x,
             self.patch.weight,
             self.patch.bias,
-            self.pos_enc.positions,
-            self.pos_enc.spatial_size,
+            self.pos_enc.w,
+            self.pos_enc.proj.weight,
+            self.pos_enc.proj.bias,
             self.norm.weight,
             self.norm.eps or 1e-5,
             is_3d=True,

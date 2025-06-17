@@ -66,20 +66,12 @@ class LearnablePosition(nn.Module):
     def __init__(self, hidden_size: int, spatial_size: Sequence[int]):
         super().__init__()
         total_size = math.prod(spatial_size)
-        self.positions = nn.Parameter(torch.empty(total_size, hidden_size))
         self.spatial_size = spatial_size
+        self.positions = nn.Parameter(torch.empty(total_size, hidden_size))
         self.reset_parameters()
 
-    @property
-    def hidden_size(self) -> int:
-        return self.positions.shape[-1]
-
-    @property
-    def center_position(self) -> Tensor:
-        return self.positions[self.positions.shape[0] // 2]
-
     def reset_parameters(self) -> None:
-        fourier_features_(self.positions.view(*self.spatial_size, self.hidden_size))
+        fourier_features_(self.positions.view(*self.spatial_size, self.positions.shape[-1]))
 
     @torch.no_grad()
     def expand_positions(self, size: Sequence[int]) -> None:
@@ -90,3 +82,31 @@ class LearnablePosition(nn.Module):
     def forward(self, dims: Sequence[int] | None) -> Tensor:
         dims = dims or self.spatial_size
         return learnable_position(dims, self.spatial_size, self.positions)
+
+
+@torch.compile(fullgraph=True, dynamic=False)
+def fourier_position(dims: Sequence[int], w: Tensor, w_proj: Tensor, b_proj: Tensor | None) -> Tensor:
+    math.prod(dims)
+    grid = create_grid(dims, device=w.device, normalize=True)
+    features = grid @ w
+    features = torch.cat([features.sin(), features.cos()], dim=-1)
+    features = features / math.sqrt(w.shape[-1])
+    return F.linear(features, w_proj, b_proj)
+
+
+class FourierPosition(nn.Module):
+
+    def __init__(self, hidden_size: int, spatial_size: Sequence[int]):
+        super().__init__()
+        self.spatial_size = spatial_size
+        self.w = nn.Parameter(torch.empty(len(spatial_size), hidden_size // 2))
+        self.proj = nn.Linear(hidden_size, hidden_size)
+        self.reset_parameters()
+
+    def reset_parameters(self, std: float = 1.0) -> None:
+        nn.init.normal_(self.w, std=std)
+        self.proj.reset_parameters()
+
+    def forward(self, dims: Sequence[int] | None) -> Tensor:
+        dims = dims or self.spatial_size
+        return fourier_position(dims, self.w, self.proj.weight, self.proj.bias)

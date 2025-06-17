@@ -97,7 +97,6 @@ class ViT(nn.Module):
         if config.num_register_tokens > 0:
             self.register_tokens = nn.Parameter(torch.empty(config.num_register_tokens, config.hidden_size))
             nn.init.trunc_normal_(self.register_tokens, std=0.02)
-            self.register_tokens.data.add_(self.stem.pos_enc.center_position)
         else:
             self.register_tokens = None
 
