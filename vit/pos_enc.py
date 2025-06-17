@@ -86,7 +86,6 @@ class LearnablePosition(nn.Module):
 
 @torch.compile(fullgraph=True, dynamic=False)
 def fourier_position(dims: Sequence[int], w: Tensor, w_proj: Tensor, b_proj: Tensor | None) -> Tensor:
-    math.prod(dims)
     grid = create_grid(dims, device=w.device, normalize=True)
     features = grid @ w
     features = torch.cat([features.sin(), features.cos()], dim=-1)
@@ -110,3 +109,45 @@ class FourierPosition(nn.Module):
     def forward(self, dims: Sequence[int] | None) -> Tensor:
         dims = dims or self.spatial_size
         return fourier_position(dims, self.w, self.proj.weight, self.proj.bias)
+
+
+@torch.compile(fullgraph=True, dynamic=False)
+def hybrid_position(
+    # fmt: off
+    dims: Sequence[int], 
+    w: Tensor, w_proj: Tensor, b_proj: Tensor | None,
+    positions_size: Sequence[int], positions: Tensor,
+    # fmt: on
+) -> Tensor:
+    pos_fourier = fourier_position(dims, w, w_proj, b_proj)
+    pos_learnable = learnable_position(dims, positions_size, positions)
+    return pos_fourier + pos_learnable
+
+
+class HybridPosition(nn.Module):
+
+    def __init__(self, hidden_size: int, spatial_size: Sequence[int]):
+        super().__init__()
+        self.fourier = FourierPosition(hidden_size, spatial_size)
+        self.learnable = LearnablePosition(hidden_size, spatial_size)
+        self.reset_parameters()
+
+    def reset_parameters(self, std: float = 1.0) -> None:
+        self.fourier.reset_parameters(std)
+        self.learnable.reset_parameters()
+        nn.init.zeros_(self.learnable.positions)
+
+    @torch.no_grad()
+    def expand_positions(self, size: Sequence[int]) -> None:
+        self.learnable.expand_positions(size)
+
+    def forward(self, dims: Sequence[int] | None) -> Tensor:
+        dims = dims or self.learnable.spatial_size
+        return hybrid_position(
+            dims,
+            self.fourier.w,
+            self.fourier.proj.weight,
+            self.fourier.proj.bias,
+            self.learnable.spatial_size,
+            self.learnable.positions,
+        )
