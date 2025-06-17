@@ -18,7 +18,7 @@ class PatchEmbed2d(nn.Module):
     ):
         super().__init__()
         self.patch = nn.Conv2d(in_channels, hidden_size, tuple(patch_size), stride=tuple(patch_size))
-        self.norm = nn.BatchNorm2d(hidden_size, eps=eps)
+        self.norm = nn.RMSNorm(hidden_size, eps=eps)
         self.pos_enc = HybridPosition(hidden_size, self.tokenized_size(tuple(img_size)))
         self.reset_parameters()
 
@@ -40,8 +40,8 @@ class PatchEmbed2d(nn.Module):
         return ht, wt
 
     def forward(self, x: Tensor) -> Tensor:
-        y = self.norm(self.patch(x))
-        y = y.flatten(2).transpose(1, 2)
+        y = self.patch(x).flatten(2).transpose(1, 2)
+        y = self.norm(y)
         pos = self.pos_enc(self.tokenized_size(x.shape[2:]))
         return y + pos
 
@@ -58,7 +58,7 @@ class PatchEmbed3d(nn.Module):
     ):
         super().__init__()
         self.patch = nn.Conv3d(in_channels, hidden_size, tuple(patch_size), stride=tuple(patch_size))
-        self.norm = nn.BatchNorm3d(hidden_size, eps=eps)
+        self.norm = nn.RMSNorm(hidden_size, eps=eps)
         self.pos_enc = HybridPosition(hidden_size, self.tokenized_size(tuple(img_size)))
         self.reset_parameters()
 
@@ -80,7 +80,7 @@ class PatchEmbed3d(nn.Module):
         return dt, ht, wt
 
     def forward(self, x: Tensor) -> Tensor:
-        y = self.norm(self.patch(x))
-        y = y.flatten(2).transpose(1, 2)
+        y = self.patch(x).flatten(2).transpose(1, 2)
+        y = self.norm(y)
         pos = self.pos_enc(self.tokenized_size(x.shape[2:]))
         return y + pos
