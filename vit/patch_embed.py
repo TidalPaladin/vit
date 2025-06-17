@@ -1,5 +1,6 @@
 from typing import Sequence, Tuple
 
+import torch
 import torch.nn as nn
 from torch import Tensor
 
@@ -39,6 +40,7 @@ class PatchEmbed2d(nn.Module):
         ht, wt = tuple(s * p for s, p in zip(size, self.patch_size))
         return ht, wt
 
+    @torch.compile(fullgraph=True, dynamic=False)
     def forward(self, x: Tensor) -> Tensor:
         y = self.patch(x).flatten(2).transpose(1, 2)
         y = self.norm(y)
@@ -79,6 +81,7 @@ class PatchEmbed3d(nn.Module):
         dt, ht, wt = tuple(s * p for s, p in zip(size, self.patch_size))
         return dt, ht, wt
 
+    @torch.compile(fullgraph=True, dynamic=False)
     def forward(self, x: Tensor) -> Tensor:
         y = self.patch(x).flatten(2).transpose(1, 2)
         y = self.norm(y)
