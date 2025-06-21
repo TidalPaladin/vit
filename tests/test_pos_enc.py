@@ -7,10 +7,11 @@ from vit.pos_enc import FourierPosition, LearnablePosition, create_grid
 
 class TestLearnablePosition:
 
-    def test_forward(self, device):
+    @pytest.mark.parametrize("fourier_init", [True, False])
+    def test_forward(self, device, fourier_init):
         D = 16
         torch.random.manual_seed(0)
-        layer = LearnablePosition(D, (8, 8)).to(device)
+        layer = LearnablePosition(D, (8, 8), fourier_init=fourier_init).to(device)
         out = layer((8, 8))
         assert out.shape == (1, 64, D)
         assert out.device == device

@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from .pos_enc import FourierPosition
+from .pos_enc import PositionEncoder, create_position_encoder
 
 
 class PatchEmbed2d(nn.Module):
@@ -16,11 +16,12 @@ class PatchEmbed2d(nn.Module):
         patch_size: Sequence[int],
         img_size: Sequence[int],
         eps: float = 1e-5,
+        pos_enc: PositionEncoder = "fourier",
     ):
         super().__init__()
         self.patch = nn.Conv2d(in_channels, hidden_size, tuple(patch_size), stride=tuple(patch_size))
         self.norm = nn.RMSNorm(hidden_size, eps=eps)
-        self.pos_enc = FourierPosition(hidden_size, self.tokenized_size(tuple(img_size)))
+        self.pos_enc = create_position_encoder(pos_enc, hidden_size, self.tokenized_size(tuple(img_size)))
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
@@ -57,11 +58,12 @@ class PatchEmbed3d(nn.Module):
         patch_size: Sequence[int],
         img_size: Sequence[int],
         eps: float = 1e-5,
+        pos_enc: PositionEncoder = "fourier",
     ):
         super().__init__()
         self.patch = nn.Conv3d(in_channels, hidden_size, tuple(patch_size), stride=tuple(patch_size))
         self.norm = nn.RMSNorm(hidden_size, eps=eps)
-        self.pos_enc = FourierPosition(hidden_size, self.tokenized_size(tuple(img_size)))
+        self.pos_enc = create_position_encoder(pos_enc, hidden_size, self.tokenized_size(tuple(img_size)))
         self.reset_parameters()
 
     def reset_parameters(self) -> None:

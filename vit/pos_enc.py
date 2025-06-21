@@ -1,5 +1,5 @@
 import math
-from typing import Callable, Sequence
+from typing import Callable, Literal, Sequence, Union
 
 import torch
 import torch.nn as nn
@@ -7,6 +7,24 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from .helpers import get_activation
+
+
+PositionEncoder = Literal["fourier", "learnable"]
+
+
+def create_position_encoder(
+    pos_enc: PositionEncoder,
+    hidden_size: int,
+    spatial_size: Sequence[int],
+    **kwargs,
+) -> Union["LearnablePosition", "FourierPosition"]:
+    match pos_enc:
+        case "learnable":
+            return LearnablePosition(hidden_size, spatial_size, **kwargs)
+        case "fourier":
+            return FourierPosition(hidden_size, spatial_size, **kwargs)
+        case _:
+            raise ValueError(f"Invalid position encoder: {pos_enc}")
 
 
 @torch.no_grad()
@@ -65,15 +83,18 @@ def learnable_position(dims: Sequence[int], positions_size: Sequence[int], posit
 
 class LearnablePosition(nn.Module):
 
-    def __init__(self, hidden_size: int, spatial_size: Sequence[int]):
+    def __init__(self, hidden_size: int, spatial_size: Sequence[int], fourier_init: bool = False):
         super().__init__()
         total_size = math.prod(spatial_size)
         self.spatial_size = spatial_size
         self.positions = nn.Parameter(torch.empty(total_size, hidden_size))
-        self.reset_parameters()
+        self.reset_parameters(fourier_init)
 
-    def reset_parameters(self) -> None:
-        fourier_features_(self.positions.view(*self.spatial_size, self.positions.shape[-1]))
+    def reset_parameters(self, fourier_init: bool = False) -> None:
+        if fourier_init:
+            fourier_features_(self.positions.view(*self.spatial_size, self.positions.shape[-1]))
+        else:
+            nn.init.trunc_normal_(self.positions, std=0.02)
 
     @torch.no_grad()
     def expand_positions(self, size: Sequence[int]) -> None:
@@ -86,7 +107,7 @@ class LearnablePosition(nn.Module):
         return learnable_position(dims, self.spatial_size, self.positions)
 
 
-# @torch.compile(fullgraph=True, dynamic=False)
+@torch.compile(fullgraph=True, dynamic=False)
 def fourier_position(
     dims: Sequence[int],
     w_fourier: Tensor,
