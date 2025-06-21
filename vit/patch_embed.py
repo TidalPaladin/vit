@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from .pos_enc import HybridPosition
+from .pos_enc import HSirenPosition
 
 
 class PatchEmbed2d(nn.Module):
@@ -20,7 +20,7 @@ class PatchEmbed2d(nn.Module):
         super().__init__()
         self.patch = nn.Conv2d(in_channels, hidden_size, tuple(patch_size), stride=tuple(patch_size))
         self.norm = nn.RMSNorm(hidden_size, eps=eps)
-        self.pos_enc = HybridPosition(hidden_size, self.tokenized_size(tuple(img_size)))
+        self.pos_enc = HSirenPosition(hidden_size, self.tokenized_size(tuple(img_size)))
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
@@ -61,7 +61,7 @@ class PatchEmbed3d(nn.Module):
         super().__init__()
         self.patch = nn.Conv3d(in_channels, hidden_size, tuple(patch_size), stride=tuple(patch_size))
         self.norm = nn.RMSNorm(hidden_size, eps=eps)
-        self.pos_enc = HybridPosition(hidden_size, self.tokenized_size(tuple(img_size)))
+        self.pos_enc = HSirenPosition(hidden_size, self.tokenized_size(tuple(img_size)))
         self.reset_parameters()
 
     def reset_parameters(self) -> None:

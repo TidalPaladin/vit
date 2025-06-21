@@ -151,3 +151,30 @@ class HybridPosition(nn.Module):
             self.learnable.spatial_size,
             self.learnable.positions,
         )
+
+
+@torch.compile(fullgraph=True, dynamic=False)
+def hsiren_position(dims: Sequence[int], w: Tensor, w_proj: Tensor, b_proj: Tensor | None) -> Tensor:
+    grid = create_grid(dims, device=w.device, normalize=True)
+    features = grid @ w
+    features = torch.sinh(2 * features).sin()
+    features = features / math.sqrt(w.shape[-1])
+    return F.linear(features, w_proj, b_proj)
+
+
+class HSirenPosition(nn.Module):
+
+    def __init__(self, hidden_size: int, spatial_size: Sequence[int]):
+        super().__init__()
+        self.spatial_size = spatial_size
+        self.w = nn.Parameter(torch.empty(len(spatial_size), hidden_size))
+        self.proj = nn.Linear(hidden_size, hidden_size)
+        self.reset_parameters()
+
+    def reset_parameters(self, std: float = 1.0) -> None:
+        nn.init.normal_(self.w, std=std)
+        self.proj.reset_parameters()
+
+    def forward(self, dims: Sequence[int] | None) -> Tensor:
+        dims = dims or self.spatial_size
+        return hsiren_position(dims, self.w, self.proj.weight, self.proj.bias)
