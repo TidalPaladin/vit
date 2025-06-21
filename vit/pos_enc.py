@@ -1,10 +1,12 @@
 import math
-from typing import Sequence
+from typing import Callable, Sequence
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
+
+from .helpers import get_activation
 
 
 @torch.no_grad()
@@ -84,70 +86,59 @@ class LearnablePosition(nn.Module):
         return learnable_position(dims, self.spatial_size, self.positions)
 
 
-@torch.compile(fullgraph=True, dynamic=False)
-def fourier_position(dims: Sequence[int], w: Tensor, w_proj: Tensor, b_proj: Tensor | None) -> Tensor:
-    grid = create_grid(dims, device=w.device, normalize=True)
-    features = grid @ w
+# @torch.compile(fullgraph=True, dynamic=False)
+def fourier_position(
+    dims: Sequence[int],
+    w_fourier: Tensor,
+    w_fc1: Tensor,
+    b_fc1: Tensor | None,
+    w_fc2: Tensor,
+    b_fc2: Tensor | None,
+    activation: Callable[[Tensor], Tensor],
+    dropout: float,
+    training: bool,
+) -> Tensor:
+    grid = create_grid(dims, device=w_fourier.device, normalize=True)
+    features = grid @ w_fourier
     features = torch.cat([features.sin(), features.cos()], dim=-1)
-    features = features / math.sqrt(w.shape[-1])
-    return F.linear(features, w_proj, b_proj)
+    features = features / math.sqrt(w_fourier.shape[-1])
+
+    y = F.linear(features, w_fc1, b_fc1)
+    y = activation(y)
+    y = F.dropout(y, p=dropout, training=training)
+    y = F.linear(y, w_fc2, b_fc2)
+    return y
 
 
 class FourierPosition(nn.Module):
 
-    def __init__(self, hidden_size: int, spatial_size: Sequence[int]):
+    def __init__(self, hidden_size: int, spatial_size: Sequence[int], activation: str = "gelu", dropout: float = 0.1):
         super().__init__()
         self.spatial_size = spatial_size
-        self.w = nn.Parameter(torch.empty(len(spatial_size), hidden_size // 2))
-        self.proj = nn.Linear(hidden_size, hidden_size)
+        self.w_fourier = nn.Parameter(torch.empty(len(spatial_size), hidden_size // 2))
+        self.w_fc1 = nn.Linear(hidden_size, 4 * hidden_size)
+        self.w_fc2 = nn.Linear(4 * hidden_size, hidden_size)
+        self.activation = get_activation(activation)
+        self.dropout = nn.Dropout(dropout)
         self.reset_parameters()
 
     def reset_parameters(self, std: float = 1.0) -> None:
-        nn.init.normal_(self.w, std=std)
-        self.proj.reset_parameters()
+        nn.init.normal_(self.w_fourier, std=std)
+        nn.init.trunc_normal_(self.w_fc1.weight, std=0.02)
+        nn.init.trunc_normal_(self.w_fc2.weight, std=0.02)
+        nn.init.zeros_(self.w_fc1.bias)
+        nn.init.zeros_(self.w_fc2.bias)
 
     def forward(self, dims: Sequence[int] | None) -> Tensor:
         dims = dims or self.spatial_size
-        return fourier_position(dims, self.w, self.proj.weight, self.proj.bias)
-
-
-@torch.compile(fullgraph=True, dynamic=False)
-def hybrid_position(
-    # fmt: off
-    dims: Sequence[int], 
-    w: Tensor, w_proj: Tensor, b_proj: Tensor | None,
-    positions_size: Sequence[int], positions: Tensor,
-    # fmt: on
-) -> Tensor:
-    pos_fourier = fourier_position(dims, w, w_proj, b_proj)
-    pos_learnable = learnable_position(dims, positions_size, positions)
-    return pos_fourier + pos_learnable
-
-
-class HybridPosition(nn.Module):
-
-    def __init__(self, hidden_size: int, spatial_size: Sequence[int]):
-        super().__init__()
-        self.fourier = FourierPosition(hidden_size, spatial_size)
-        self.learnable = LearnablePosition(hidden_size, spatial_size)
-        self.reset_parameters()
-
-    def reset_parameters(self, std: float = 1.0) -> None:
-        self.fourier.reset_parameters(std)
-        self.learnable.reset_parameters()
-        nn.init.zeros_(self.learnable.positions)
-
-    @torch.no_grad()
-    def expand_positions(self, size: Sequence[int]) -> None:
-        self.learnable.expand_positions(size)
-
-    def forward(self, dims: Sequence[int] | None) -> Tensor:
-        dims = dims or self.learnable.spatial_size
-        return hybrid_position(
+        return fourier_position(
             dims,
-            self.fourier.w,
-            self.fourier.proj.weight,
-            self.fourier.proj.bias,
-            self.learnable.spatial_size,
-            self.learnable.positions,
+            self.w_fourier,
+            self.w_fc1.weight,
+            self.w_fc1.bias,
+            self.w_fc2.weight,
+            self.w_fc2.bias,
+            self.activation,
+            self.dropout.p,
+            self.training,
         )

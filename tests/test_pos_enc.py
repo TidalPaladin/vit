@@ -1,7 +1,8 @@
 import pytest
 import torch
+from torch.testing import assert_close
 
-from vit.pos_enc import FourierPosition, HybridPosition, LearnablePosition, create_grid
+from vit.pos_enc import FourierPosition, LearnablePosition, create_grid
 
 
 class TestLearnablePosition:
@@ -70,6 +71,20 @@ class TestFourierPosition:
         out = layer((12, 12))
         assert out.shape == (1, 144, D)
 
+    def test_deterministic(self, device):
+        D = 16
+        torch.random.manual_seed(0)
+        layer = FourierPosition(D, (8, 8)).to(device)
+        layer.eval()
+        out1 = layer((8, 8))
+        out2 = layer((8, 8))
+        assert_close(out1, out2)
+
+        layer.train()
+        out1 = layer((8, 8))
+        out2 = layer((8, 8))
+        assert not torch.allclose(out1, out2)
+
 
 @pytest.mark.parametrize("normalize", [True, False])
 def test_create_grid(normalize, device):
@@ -82,42 +97,3 @@ def test_create_grid(normalize, device):
     else:
         assert torch.all(grid[0, 0] == torch.tensor([0, 0], device=device))
         assert torch.all(grid[0, -1] == torch.tensor([3, 3], device=device))
-
-
-class TestHybridPosition:
-
-    def test_forward(self, device):
-        D = 16
-        torch.random.manual_seed(0)
-        layer = HybridPosition(D, (8, 8)).to(device)
-        out = layer((8, 8))
-        assert out.shape == (1, 64, D)
-        assert out.device == device
-
-    def test_backward(self, device):
-        D = 16
-        torch.random.manual_seed(0)
-        layer = HybridPosition(D, (8, 8)).to(device)
-        out = layer((8, 8))
-        out.sum().backward()
-        for param in layer.parameters():
-            assert param.grad is not None
-            assert not param.grad.isnan().any()
-
-    def test_forward_interpolate(self):
-        D = 16
-        torch.random.manual_seed(0)
-        layer = HybridPosition(D, (8, 8))
-        out = layer((12, 12))
-        assert out.shape == (1, 144, D)
-
-    def test_expand_positions(self, device):
-        D = 16
-        torch.random.manual_seed(0)
-        layer = HybridPosition(D, (8, 8)).to(device)
-        layer.expand_positions((12, 12))
-        assert layer.learnable.positions.shape == (144, D)
-        assert layer.learnable.positions.requires_grad is True
-        assert layer.learnable.positions.device == device
-        out = layer((12, 12))
-        assert out.shape == (1, 144, D)
