@@ -83,16 +83,20 @@ def learnable_position(dims: Sequence[int], positions_size: Sequence[int], posit
 
 class LearnablePosition(nn.Module):
 
-    def __init__(self, hidden_size: int, spatial_size: Sequence[int], fourier_init: bool = False):
+    def __init__(self, hidden_size: int, spatial_size: Sequence[int], fourier_init: bool = True):
         super().__init__()
         total_size = math.prod(spatial_size)
         self.spatial_size = spatial_size
         self.positions = nn.Parameter(torch.empty(total_size, hidden_size))
         self.reset_parameters(fourier_init)
 
+    @torch.no_grad()
     def reset_parameters(self, fourier_init: bool = False) -> None:
         if fourier_init:
             fourier_features_(self.positions.view(*self.spatial_size, self.positions.shape[-1]))
+            shift = self.positions.mean()
+            scale = 0.02 / self.positions.std()
+            self.positions.data.sub_(shift).mul_(scale)
         else:
             nn.init.trunc_normal_(self.positions, std=0.02)
 
