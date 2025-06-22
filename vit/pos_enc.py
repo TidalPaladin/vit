@@ -9,7 +9,7 @@ from torch import Tensor
 from .helpers import get_activation
 
 
-PositionEncoder = Literal["fourier", "learnable"]
+PositionEncoder = Literal["fourier", "learnable", "none"]
 
 
 def create_position_encoder(
@@ -17,12 +17,14 @@ def create_position_encoder(
     hidden_size: int,
     spatial_size: Sequence[int],
     **kwargs,
-) -> Union["LearnablePosition", "FourierPosition"]:
+) -> Union["LearnablePosition", "FourierPosition", None]:
     match pos_enc:
         case "learnable":
             return LearnablePosition(hidden_size, spatial_size, **kwargs)
         case "fourier":
             return FourierPosition(hidden_size, spatial_size, **kwargs)
+        case "none":
+            return None
         case _:
             raise ValueError(f"Invalid position encoder: {pos_enc}")
 

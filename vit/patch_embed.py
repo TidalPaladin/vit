@@ -27,7 +27,8 @@ class PatchEmbed2d(nn.Module):
     def reset_parameters(self) -> None:
         self.patch.reset_parameters()
         self.norm.reset_parameters()
-        self.pos_enc.reset_parameters()
+        if self.pos_enc is not None:
+            self.pos_enc.reset_parameters()
 
     @property
     def patch_size(self) -> Tuple[int, int]:
@@ -45,8 +46,11 @@ class PatchEmbed2d(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         y = self.patch(x).flatten(2).transpose(1, 2)
         y = self.norm(y)
-        pos = self.pos_enc(self.tokenized_size(x.shape[2:]))
-        return y + pos
+        if self.pos_enc is not None:
+            pos = self.pos_enc(self.tokenized_size(x.shape[2:]))
+            return y + pos
+        else:
+            return y
 
 
 class PatchEmbed3d(nn.Module):
@@ -69,7 +73,8 @@ class PatchEmbed3d(nn.Module):
     def reset_parameters(self) -> None:
         self.patch.reset_parameters()
         self.norm.reset_parameters()
-        self.pos_enc.reset_parameters()
+        if self.pos_enc is not None:
+            self.pos_enc.reset_parameters()
 
     @property
     def patch_size(self) -> Tuple[int, int, int]:
@@ -87,5 +92,8 @@ class PatchEmbed3d(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         y = self.patch(x).flatten(2).transpose(1, 2)
         y = self.norm(y)
-        pos = self.pos_enc(self.tokenized_size(x.shape[2:]))
-        return y + pos
+        if self.pos_enc is not None:
+            pos = self.pos_enc(self.tokenized_size(x.shape[2:]))
+            return y + pos
+        else:
+            return y
