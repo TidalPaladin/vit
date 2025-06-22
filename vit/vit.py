@@ -9,6 +9,7 @@ from torch import Tensor
 
 from .head import HeadConfig
 from .patch_embed import PatchEmbed2d, PatchEmbed3d
+from .pos_enc import PositionEncoder
 from .tokens import apply_mask, create_mask
 from .transformer import CrossAttentionTransformer, TransformerDecoderLayer, TransformerEncoderLayer
 
@@ -47,6 +48,7 @@ class ViTConfig:
     activation: str = "srelu"
     drop_path_rate: float = 0.0
     num_register_tokens: int = 0
+    pos_enc: PositionEncoder = "fourier"
 
     # Trainable blocks
     mlp_requires_grad: bool = True
@@ -91,6 +93,7 @@ class ViT(nn.Module):
             config.hidden_size,
             config.patch_size,
             config.img_size,
+            pos_enc=config.pos_enc,
         )
 
         # Register tokens

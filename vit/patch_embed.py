@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from .pos_enc import HybridPosition
+from .pos_enc import PositionEncoder, create_position_encoder
 
 
 class PatchEmbed2d(nn.Module):
@@ -16,17 +16,19 @@ class PatchEmbed2d(nn.Module):
         patch_size: Sequence[int],
         img_size: Sequence[int],
         eps: float = 1e-5,
+        pos_enc: PositionEncoder = "fourier",
     ):
         super().__init__()
         self.patch = nn.Conv2d(in_channels, hidden_size, tuple(patch_size), stride=tuple(patch_size))
         self.norm = nn.RMSNorm(hidden_size, eps=eps)
-        self.pos_enc = HybridPosition(hidden_size, self.tokenized_size(tuple(img_size)))
+        self.pos_enc = create_position_encoder(pos_enc, hidden_size, self.tokenized_size(tuple(img_size)))
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
         self.patch.reset_parameters()
         self.norm.reset_parameters()
-        self.pos_enc.reset_parameters()
+        if self.pos_enc is not None:
+            self.pos_enc.reset_parameters()
 
     @property
     def patch_size(self) -> Tuple[int, int]:
@@ -44,8 +46,11 @@ class PatchEmbed2d(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         y = self.patch(x).flatten(2).transpose(1, 2)
         y = self.norm(y)
-        pos = self.pos_enc(self.tokenized_size(x.shape[2:]))
-        return y + pos
+        if self.pos_enc is not None:
+            pos = self.pos_enc(self.tokenized_size(x.shape[2:]))
+            return y + pos
+        else:
+            return y
 
 
 class PatchEmbed3d(nn.Module):
@@ -57,17 +62,19 @@ class PatchEmbed3d(nn.Module):
         patch_size: Sequence[int],
         img_size: Sequence[int],
         eps: float = 1e-5,
+        pos_enc: PositionEncoder = "fourier",
     ):
         super().__init__()
         self.patch = nn.Conv3d(in_channels, hidden_size, tuple(patch_size), stride=tuple(patch_size))
         self.norm = nn.RMSNorm(hidden_size, eps=eps)
-        self.pos_enc = HybridPosition(hidden_size, self.tokenized_size(tuple(img_size)))
+        self.pos_enc = create_position_encoder(pos_enc, hidden_size, self.tokenized_size(tuple(img_size)))
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
         self.patch.reset_parameters()
         self.norm.reset_parameters()
-        self.pos_enc.reset_parameters()
+        if self.pos_enc is not None:
+            self.pos_enc.reset_parameters()
 
     @property
     def patch_size(self) -> Tuple[int, int, int]:
@@ -85,5 +92,8 @@ class PatchEmbed3d(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         y = self.patch(x).flatten(2).transpose(1, 2)
         y = self.norm(y)
-        pos = self.pos_enc(self.tokenized_size(x.shape[2:]))
-        return y + pos
+        if self.pos_enc is not None:
+            pos = self.pos_enc(self.tokenized_size(x.shape[2:]))
+            return y + pos
+        else:
+            return y
