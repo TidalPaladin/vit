@@ -124,8 +124,14 @@ def fourier_position(
     activation: Callable[[Tensor], Tensor],
     dropout: float,
     training: bool,
+    augment: bool = False,
 ) -> Tensor:
     grid = create_grid(dims, device=w_fourier.device, normalize=True)
+    if augment and training:
+        shift = grid.new_empty(grid.shape[-1]).uniform_(-1, 1)
+        scale = grid.new_empty(grid.shape[-1]).uniform_(0.25, 1.0)
+        grid.mul_(scale).add_(shift)
+
     features = grid @ w_fourier
     features = torch.cat([features.sin(), features.cos()], dim=-1)
     features = features / math.sqrt(w_fourier.shape[-1])
@@ -139,7 +145,14 @@ def fourier_position(
 
 class FourierPosition(nn.Module):
 
-    def __init__(self, hidden_size: int, spatial_size: Sequence[int], activation: str = "gelu", dropout: float = 0.1):
+    def __init__(
+        self,
+        hidden_size: int,
+        spatial_size: Sequence[int],
+        activation: str = "gelu",
+        dropout: float = 0.1,
+        augment: bool = True,
+    ):
         super().__init__()
         self.spatial_size = spatial_size
         self.w_fourier = nn.Parameter(torch.empty(len(spatial_size), hidden_size // 2))
@@ -147,6 +160,7 @@ class FourierPosition(nn.Module):
         self.w_fc2 = nn.Linear(4 * hidden_size, hidden_size)
         self.activation = get_activation(activation)
         self.dropout = nn.Dropout(dropout)
+        self.augment = augment
         self.reset_parameters()
 
     def reset_parameters(self, std: float = 1.0) -> None:
@@ -168,4 +182,5 @@ class FourierPosition(nn.Module):
             self.activation,
             self.dropout.p,
             self.training,
+            self.augment,
         )
