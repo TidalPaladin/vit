@@ -51,10 +51,12 @@ class TestViT:
 
     @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_forward(self, device, config, num_register_tokens, dtype):
+    @pytest.mark.parametrize("qk_bias", [False, True])
+    def test_forward(self, device, config, num_register_tokens, dtype, qk_bias):
         config = replace(
             config,
             num_register_tokens=num_register_tokens,
+            qk_bias=qk_bias,
         )
         x = torch.randn(2, 3, *config.img_size, device=device)
         model = ViT(config).to(device)
@@ -65,10 +67,12 @@ class TestViT:
 
     @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_forward_return_register_tokens(self, device, config, num_register_tokens, dtype):
+    @pytest.mark.parametrize("qk_bias", [False, True])
+    def test_forward_return_register_tokens(self, device, config, num_register_tokens, dtype, qk_bias):
         config = replace(
             config,
             num_register_tokens=num_register_tokens,
+            qk_bias=qk_bias,
         )
         x = torch.randn(2, 3, *config.img_size, device=device)
         model = ViT(config).to(device)
@@ -78,10 +82,12 @@ class TestViT:
         assert out.shape == (2, L + num_register_tokens, 128)
 
     @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
-    def test_forward_masked(self, device, config, num_register_tokens):
+    @pytest.mark.parametrize("qk_bias", [False, True])
+    def test_forward_masked(self, device, config, num_register_tokens, qk_bias):
         config = replace(
             config,
             num_register_tokens=num_register_tokens,
+            qk_bias=qk_bias,
         )
         x = torch.randn(2, 3, *config.img_size, device=device)
         model = ViT(config).to(device)
@@ -92,10 +98,12 @@ class TestViT:
 
     @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_backward(self, device, config, num_register_tokens, dtype):
+    @pytest.mark.parametrize("qk_bias", [False, True])
+    def test_backward(self, device, config, num_register_tokens, dtype, qk_bias):
         config = replace(
             config,
             num_register_tokens=num_register_tokens,
+            qk_bias=qk_bias,
         )
         x = torch.randn(2, 3, *config.img_size, device=device, requires_grad=True)
         model = ViT(config).to(device)

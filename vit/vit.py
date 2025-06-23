@@ -1,3 +1,4 @@
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Self, Sequence, Type, cast
@@ -9,7 +10,7 @@ from torch import Tensor
 
 from .head import HeadConfig
 from .patch_embed import PatchEmbed2d, PatchEmbed3d
-from .pos_enc import PositionEncoder
+from .pos_enc import LearnablePosition, PositionEncoder
 from .tokens import apply_mask, create_mask
 from .transformer import CrossAttentionTransformer, TransformerDecoderLayer, TransformerEncoderLayer
 
@@ -49,6 +50,7 @@ class ViTConfig:
     drop_path_rate: float = 0.0
     num_register_tokens: int = 0
     pos_enc: PositionEncoder = "fourier"
+    qk_bias: bool = False
 
     # Trainable blocks
     mlp_requires_grad: bool = True
@@ -105,6 +107,16 @@ class ViT(nn.Module):
 
         self.blocks = nn.ModuleList([self.create_encoder_layer() for _ in range(config.depth)])
         self.output_norm = nn.RMSNorm(config.hidden_size)
+        if config.qk_bias:
+            self.bias_q = nn.ModuleList(
+                [
+                    LearnablePosition(config.hidden_size, self.stem.tokenized_size(tuple(config.img_size)))
+                    for _ in range(config.depth)
+                ]
+            )
+            self.bias_k = deepcopy(self.bias_q)
+        else:
+            self.bias_q = self.bias_k = None
 
         self.mlp_requires_grad_(self.config.mlp_requires_grad)
         self.self_attention_requires_grad_(self.config.self_attention_requires_grad)
@@ -192,19 +204,31 @@ class ViT(nn.Module):
         return mask
 
     def forward(self, x: Tensor, mask: Tensor | None = None, return_register_tokens: bool = False) -> Tensor:
+        tokenized_size = self.stem.tokenized_size(x.shape[2:])
         x = self.stem(x)
         if mask is not None:
             x = apply_mask(mask, x)
 
         B = x.shape[0]
-        x = (
-            torch.cat([self.register_tokens.unsqueeze(0).expand(B, -1, -1), x], dim=1)
-            if self.register_tokens is not None
-            else x
+        register_tokens = (
+            self.register_tokens.unsqueeze(0).expand(B, -1, -1) if self.register_tokens is not None else None
         )
-        for block in self.blocks:
+        x = torch.cat([register_tokens, x], dim=1) if register_tokens is not None else x
+        for i, block in enumerate(self.blocks):
             assert isinstance(block, TransformerEncoderLayer)
-            x = block(x)
+            if self.bias_q is not None and self.bias_k is not None:
+                bias_q = self.bias_q[i](tokenized_size).expand(B, -1, -1) # type: ignore
+                bias_k = self.bias_k[i](tokenized_size).expand(B, -1, -1) # type: ignore
+                if mask is not None:
+                    bias_q = apply_mask(mask, bias_q)
+                    bias_k = apply_mask(mask, bias_k)
+                if register_tokens is not None:
+                    bias_q = torch.cat([torch.zeros_like(register_tokens), bias_q], dim=1)
+                    bias_k = torch.cat([torch.zeros_like(register_tokens), bias_k], dim=1)
+            else:
+                bias_q = bias_k = None
+
+            x = block(x, bias_q=bias_q, bias_k=bias_k)
 
         if self.output_norm is not None:
             x = self.output_norm(x)

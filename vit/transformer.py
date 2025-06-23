@@ -37,8 +37,8 @@ class TransformerEncoderLayer(nn.Module):
         self.self_attention.reset_parameters()
         self.mlp.reset_parameters()
 
-    def forward(self, x: Tensor) -> Tensor:
-        o = self.self_attention(x)
+    def forward(self, x: Tensor, bias_q: Tensor | None = None, bias_k: Tensor | None = None) -> Tensor:
+        o = self.self_attention(x, bias_q=bias_q, bias_k=bias_k)
         x = x + drop_path(o, self.drop_path_rate, self.training)
 
         o = self.mlp(x)
@@ -86,11 +86,19 @@ class TransformerDecoderLayer(nn.Module):
         self.cross_attention.reset_parameters()
         self.mlp.reset_parameters()
 
-    def forward(self, x: Tensor, kv: Tensor) -> Tensor:
-        o = self.self_attention(x)
+    def forward(
+        self,
+        x: Tensor,
+        kv: Tensor,
+        bias_q_self: Tensor | None = None,
+        bias_k_self: Tensor | None = None,
+        bias_q_cross: Tensor | None = None,
+        bias_kv_cross: Tensor | None = None,
+    ) -> Tensor:
+        o = self.self_attention(x, bias_q=bias_q_self, bias_k=bias_k_self)
         x = x + drop_path(o, self.drop_path_rate, self.training)
 
-        o = self.cross_attention(x, kv)
+        o = self.cross_attention(x, kv, bias_q=bias_q_cross, bias_kv=bias_kv_cross)
         x = x + drop_path(o, self.drop_path_rate, self.training)
 
         o = self.mlp(x)
@@ -129,8 +137,8 @@ class CrossAttentionTransformer(nn.Module):
         self.cross_attention.reset_parameters()
         self.mlp.reset_parameters()
 
-    def forward(self, x: Tensor, kv: Tensor) -> Tensor:
-        o = self.cross_attention(x, kv)
+    def forward(self, x: Tensor, kv: Tensor, bias_q: Tensor | None = None, bias_kv: Tensor | None = None) -> Tensor:
+        o = self.cross_attention(x, kv, bias_q=bias_q, bias_kv=bias_kv)
         x = x + drop_path(o, self.drop_path_rate, self.training)
 
         o = self.mlp(x)
