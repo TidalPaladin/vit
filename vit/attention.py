@@ -17,7 +17,7 @@ def _permute_and_fold_head(x: Tensor) -> Tensor:
     return x.transpose(1, 2).reshape(B, S, H * D)
 
 
-# @torch.compile(fullgraph=True)
+@torch.compile(fullgraph=True)
 def project_qkv_packed(
     # fmt: off
     x: Tensor,
@@ -40,7 +40,7 @@ def project_qkv_packed(
     return q, k, v
 
 
-# @torch.compile(fullgraph=True)
+@torch.compile(fullgraph=True)
 def project_q_kv_packed(
     # fmt: off
     q: Tensor, kv: Tensor,
@@ -65,7 +65,7 @@ def project_q_kv_packed(
     return q, k, v
 
 
-# @torch.compile(fullgraph=True)
+@torch.compile(fullgraph=True)
 def attention_qkv_packed(
     # fmt: off
     x: Tensor,
@@ -92,7 +92,7 @@ def attention_qkv_packed(
     return o
 
 
-# @torch.compile(fullgraph=True)
+@torch.compile(fullgraph=True)
 def attention_q_kv_packed(
     # fmt: off
     q: Tensor, kv: Tensor,
