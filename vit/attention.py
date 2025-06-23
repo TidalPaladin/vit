@@ -22,6 +22,7 @@ def project_qkv_packed(
     # fmt: off
     x: Tensor,
     w_in: Tensor, b_in: Tensor | None,
+    bias_q: Tensor | None, bias_k: Tensor | None, 
     w_norm: Tensor,
     head_dim: int,
     eps: float,
@@ -29,6 +30,10 @@ def project_qkv_packed(
 ) -> Tuple[Tensor, Tensor, Tensor]:
     x = F.rms_norm(x, x.shape[-1:], w_norm, eps=eps)
     q, k, v = F.linear(x, w_in, b_in).chunk(3, dim=-1)
+    if bias_q is not None:
+        q = q + bias_q
+    if bias_k is not None:
+        k = k + bias_k
     q = _unfold_head_and_permute(q, head_dim)
     k = _unfold_head_and_permute(k, head_dim)
     v = _unfold_head_and_permute(v, head_dim)
@@ -41,6 +46,7 @@ def project_q_kv_packed(
     q: Tensor, kv: Tensor,
     w_q: Tensor, b_q: Tensor | None,
     w_kv: Tensor, b_kv: Tensor | None,
+    bias_q: Tensor | None, bias_k: Tensor | None, 
     w_norm: Tensor,
     head_dim: int,
     eps: float,
@@ -49,6 +55,10 @@ def project_q_kv_packed(
     q = F.rms_norm(q, q.shape[-1:], w_norm, eps=eps)
     q = F.linear(q, w_q, b_q)
     k, v = F.linear(kv, w_kv, b_kv).chunk(2, dim=-1)
+    if bias_q is not None:
+        q = q + bias_q
+    if bias_k is not None:
+        k = k + bias_k
     q = _unfold_head_and_permute(q, head_dim)
     k = _unfold_head_and_permute(k, head_dim)
     v = _unfold_head_and_permute(v, head_dim)
@@ -60,6 +70,7 @@ def attention_qkv_packed(
     # fmt: off
     x: Tensor,
     w_in: Tensor, b_in: Tensor | None,
+    bias_q: Tensor | None, bias_k: Tensor | None, 
     w_norm: Tensor,
     head_dim: int,
     w_out: Tensor, b_out: Tensor | None,
@@ -70,7 +81,7 @@ def attention_qkv_packed(
     training: bool,
     # fmt: on
 ) -> Tensor:
-    q, k, v = project_qkv_packed(x, w_in, b_in, w_norm, head_dim, eps)
+    q, k, v = project_qkv_packed(x, w_in, b_in, bias_q, bias_k, w_norm, head_dim, eps)
     attention_dropout = 0.0 if not training else attention_dropout
     o = F.scaled_dot_product_attention(
         q, k, v, attn_mask=attn_mask, dropout_p=attention_dropout, is_causal=False, enable_gqa=True
@@ -87,6 +98,7 @@ def attention_q_kv_packed(
     q: Tensor, kv: Tensor,
     w_q: Tensor, b_q: Tensor | None,
     w_kv: Tensor, b_kv: Tensor | None,
+    bias_q: Tensor | None, bias_k: Tensor | None, 
     w_norm: Tensor,
     head_dim: int,
     w_out: Tensor, b_out: Tensor | None,
@@ -97,7 +109,7 @@ def attention_q_kv_packed(
     training: bool,
     # fmt: on
 ) -> Tensor:
-    q, k, v = project_q_kv_packed(q, kv, w_q, b_q, w_kv, b_kv, w_norm, head_dim, eps)
+    q, k, v = project_q_kv_packed(q, kv, w_q, b_q, w_kv, b_kv, bias_q, bias_k, w_norm, head_dim, eps)
     attention_dropout = 0.0 if not training else attention_dropout
     o = F.scaled_dot_product_attention(
         q, k, v, attn_mask=attn_mask, dropout_p=attention_dropout, is_causal=False, enable_gqa=True
@@ -153,11 +165,18 @@ class SelfAttention(nn.Module):
         self.norm.reset_parameters()
         nn.init.trunc_normal_(self.qkv_proj.weight, std=0.02)
 
-    def forward(self, x: Tensor, attn_mask: Tensor | None = None) -> Tensor:
+    def forward(
+        self,
+        x: Tensor,
+        attn_mask: Tensor | None = None,
+        bias_q: Tensor | None = None,
+        bias_k: Tensor | None = None,
+    ) -> Tensor:
         return attention_qkv_packed(
             # fmt: off
             x,
             self.qkv_proj.weight, self.qkv_proj.bias,
+            bias_q, bias_k,
             self.norm.weight,
             self._head_dim,
             self.out_proj.weight, self.out_proj.bias,
@@ -200,12 +219,20 @@ class CrossAttention(nn.Module):
         nn.init.trunc_normal_(self.q_proj.weight, std=0.02)
         nn.init.trunc_normal_(self.kv_proj.weight, std=0.02)
 
-    def forward(self, q: Tensor, kv: Tensor, attn_mask: Tensor | None = None) -> Tensor:
+    def forward(
+        self,
+        q: Tensor,
+        kv: Tensor,
+        attn_mask: Tensor | None = None,
+        bias_q: Tensor | None = None,
+        bias_kv: Tensor | None = None,
+    ) -> Tensor:
         return attention_q_kv_packed(
             # fmt: off
             q, kv,
             self.q_proj.weight, self.q_proj.bias,
             self.kv_proj.weight, self.kv_proj.bias,
+            bias_q, bias_kv,
             self.norm.weight,
             self._head_dim,
             self.out_proj.weight, self.out_proj.bias,

@@ -17,6 +17,19 @@ class TestSelfAttention:
         assert y.shape == (B, L, D)
 
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+    def test_forward_bias(self, dtype, device):
+        B, L, D = 16, 128, 128
+        multihead_attention = SelfAttention(D, D // 16).to(device)
+        multihead_attention.eval()
+        x = torch.randn(B, L, D, dtype=dtype, device=device)
+        bias_q = torch.randn(B, L, D, dtype=dtype, device=device)
+        bias_k = torch.randn(B, L, D, dtype=dtype, device=device)
+        with torch.autocast(device_type=device.type, dtype=dtype):
+            y1 = multihead_attention(x)
+            y2 = multihead_attention(x, bias_q=bias_q, bias_k=bias_k)
+        assert not torch.allclose(y1, y2)
+
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
     def test_backward(self, dtype, device):
         B, L, D = 16, 128, 128
         multihead_attention = SelfAttention(D, D // 16).to(device)
@@ -55,6 +68,20 @@ class TestCrossAttention:
         with torch.autocast(device_type=device.type, dtype=dtype):
             y = multihead_attention(x, kv)
         assert y.shape == (B, L, D)
+
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+    def test_forward_bias(self, dtype, device):
+        B, L, D = 16, 128, 128
+        multihead_attention = CrossAttention(D, D // 16).to(device)
+        multihead_attention.eval()
+        x = torch.randn(B, L, D, dtype=dtype, device=device)
+        kv = torch.randn(B, L // 2, D, dtype=dtype, device=device)
+        bias_q = torch.randn(B, L, D, dtype=dtype, device=device)
+        bias_kv = torch.randn(B, L // 2, D, dtype=dtype, device=device)
+        with torch.autocast(device_type=device.type, dtype=dtype):
+            y1 = multihead_attention(x, kv)
+            y2 = multihead_attention(x, kv, bias_q=bias_q, bias_kv=bias_kv)
+        assert not torch.allclose(y1, y2)
 
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
     def test_backward(self, dtype, device):
