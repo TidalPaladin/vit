@@ -1,9 +1,11 @@
+import torch
 import torch.nn as nn
 from torch import Tensor
 
 from .attention import CrossAttention, SelfAttention
 from .drop_path import drop_path
 from .fused import NormMLP
+from .layer_scale import LayerScale
 
 
 class TransformerEncoderLayer(nn.Module):
@@ -19,6 +21,7 @@ class TransformerEncoderLayer(nn.Module):
         activation: str = "gelu",
         drop_path_rate: float = 0.0,
         eps: float = 1e-5,
+        layer_scale: float | None = None,
     ):
         super().__init__()
         self.drop_path_rate = drop_path_rate
@@ -31,17 +34,24 @@ class TransformerEncoderLayer(nn.Module):
             eps,
         )
         self.mlp = NormMLP(hidden_size, ffn_hidden_size, bias, activation, eps, hidden_dropout)
+        self.layer_scale_attn = (
+            LayerScale(hidden_size, layer_scale, inplace=True) if layer_scale is not None else nn.Identity()
+        )
+        self.layer_scale_mlp = (
+            LayerScale(hidden_size, layer_scale, inplace=True) if layer_scale is not None else nn.Identity()
+        )
         self.reset_parameters()
 
     def reset_parameters(self):
         self.self_attention.reset_parameters()
         self.mlp.reset_parameters()
 
+    @torch.compile
     def forward(self, x: Tensor) -> Tensor:
-        o = self.self_attention(x)
+        o = self.layer_scale_attn(self.self_attention(x))
         x = x + drop_path(o, self.drop_path_rate, self.training)
 
-        o = self.mlp(x)
+        o = self.layer_scale_mlp(self.layer_scale_mlp(self.mlp(x)))
         x = x + drop_path(o, self.drop_path_rate, self.training)
         return x
 
@@ -59,6 +69,7 @@ class TransformerDecoderLayer(nn.Module):
         activation: str = "gelu",
         drop_path_rate: float = 0.0,
         eps: float = 1e-5,
+        layer_scale: float | None = None,
     ):
         super().__init__()
         self.drop_path_rate = drop_path_rate
@@ -79,6 +90,15 @@ class TransformerDecoderLayer(nn.Module):
             eps,
         )
         self.mlp = NormMLP(hidden_size, ffn_hidden_size, bias, activation, eps, hidden_dropout)
+        self.layer_scale_attn = (
+            LayerScale(hidden_size, layer_scale, inplace=True) if layer_scale is not None else nn.Identity()
+        )
+        self.layer_scale_mlp = (
+            LayerScale(hidden_size, layer_scale, inplace=True) if layer_scale is not None else nn.Identity()
+        )
+        self.layer_scale_cross = (
+            LayerScale(hidden_size, layer_scale, inplace=True) if layer_scale is not None else nn.Identity()
+        )
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -87,13 +107,13 @@ class TransformerDecoderLayer(nn.Module):
         self.mlp.reset_parameters()
 
     def forward(self, x: Tensor, kv: Tensor) -> Tensor:
-        o = self.self_attention(x)
+        o = self.layer_scale_attn(self.self_attention(x))
         x = x + drop_path(o, self.drop_path_rate, self.training)
 
-        o = self.cross_attention(x, kv)
+        o = self.layer_scale_cross(self.cross_attention(x, kv))
         x = x + drop_path(o, self.drop_path_rate, self.training)
 
-        o = self.mlp(x)
+        o = self.layer_scale_mlp(self.mlp(x))
         x = x + drop_path(o, self.drop_path_rate, self.training)
         return x
 
@@ -111,6 +131,7 @@ class CrossAttentionTransformer(nn.Module):
         activation: str = "gelu",
         drop_path_rate: float = 0.0,
         eps: float = 1e-5,
+        layer_scale: float | None = None,
     ):
         super().__init__()
         self.drop_path_rate = drop_path_rate
@@ -123,6 +144,12 @@ class CrossAttentionTransformer(nn.Module):
             eps,
         )
         self.mlp = NormMLP(hidden_size, ffn_hidden_size, bias, activation, eps, hidden_dropout)
+        self.layer_scale_cross = (
+            LayerScale(hidden_size, layer_scale, inplace=True) if layer_scale is not None else nn.Identity()
+        )
+        self.layer_scale_mlp = (
+            LayerScale(hidden_size, layer_scale, inplace=True) if layer_scale is not None else nn.Identity()
+        )
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -130,9 +157,9 @@ class CrossAttentionTransformer(nn.Module):
         self.mlp.reset_parameters()
 
     def forward(self, x: Tensor, kv: Tensor) -> Tensor:
-        o = self.cross_attention(x, kv)
+        o = self.layer_scale_cross(self.cross_attention(x, kv))
         x = x + drop_path(o, self.drop_path_rate, self.training)
 
-        o = self.mlp(x)
+        o = self.layer_scale_mlp(self.mlp(x))
         x = x + drop_path(o, self.drop_path_rate, self.training)
         return x
