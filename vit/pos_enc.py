@@ -73,27 +73,31 @@ def create_grid(
 
 
 @torch.compile(fullgraph=True, dynamic=False)
-def learnable_position(dims: Sequence[int], positions_size: Sequence[int], positions: Tensor) -> Tensor:
+def learnable_position(
+    dims: Sequence[int], positions_size: Sequence[int], positions: Tensor, dropout: float = 0.0, training: bool = False
+) -> Tensor:
     L = math.prod(dims)
     if dims != positions_size:
         positions = positions.view(1, *positions_size, -1).movedim(-1, 1)
         positions = F.interpolate(positions, size=dims, mode="bicubic", antialias=False)
         positions = positions.movedim(1, -1)
         positions = positions.view(1, L, -1)
+    positions = F.dropout(positions, p=dropout, training=training)
     return positions.view(1, L, -1)
 
 
 class LearnablePosition(nn.Module):
 
-    def __init__(self, hidden_size: int, spatial_size: Sequence[int], fourier_init: bool = True):
+    def __init__(self, hidden_size: int, spatial_size: Sequence[int], fourier_init: bool = True, dropout: float = 0.1):
         super().__init__()
         total_size = math.prod(spatial_size)
         self.spatial_size = spatial_size
         self.positions = nn.Parameter(torch.empty(total_size, hidden_size))
+        self.dropout = nn.Dropout(dropout)
         self.reset_parameters(fourier_init)
 
     @torch.no_grad()
-    def reset_parameters(self, fourier_init: bool = False) -> None:
+    def reset_parameters(self, fourier_init: bool = True) -> None:
         if fourier_init:
             fourier_features_(self.positions.view(*self.spatial_size, self.positions.shape[-1]))
             shift = self.positions.mean()
@@ -104,13 +108,13 @@ class LearnablePosition(nn.Module):
 
     @torch.no_grad()
     def expand_positions(self, size: Sequence[int]) -> None:
-        positions = learnable_position(size, self.spatial_size, self.positions)
+        positions = learnable_position(size, self.spatial_size, self.positions, training=False)
         self.positions = nn.Parameter(positions.reshape(-1, self.positions.shape[-1]))
         self.spatial_size = size
 
     def forward(self, dims: Sequence[int] | None) -> Tensor:
         dims = dims or self.spatial_size
-        return learnable_position(dims, self.spatial_size, self.positions)
+        return learnable_position(dims, self.spatial_size, self.positions, self.dropout.p, self.training)
 
 
 @torch.compile(fullgraph=True, dynamic=False)

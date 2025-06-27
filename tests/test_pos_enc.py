@@ -44,6 +44,20 @@ class TestLearnablePosition:
         out = layer((12, 12))
         assert out.shape == (1, 144, D)
 
+    def test_deterministic(self, device):
+        D = 16
+        torch.random.manual_seed(0)
+        layer = LearnablePosition(D, (8, 8)).to(device)
+        layer.eval()
+        out1 = layer((8, 8))
+        out2 = layer((8, 8))
+        assert_close(out1, out2)
+
+        layer.train()
+        out1 = layer((8, 8))
+        out2 = layer((8, 8))
+        assert not torch.allclose(out1, out2)
+
 
 class TestFourierPosition:
 
