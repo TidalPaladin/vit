@@ -19,7 +19,7 @@ class PatchEmbed2d(nn.Module):
     ):
         super().__init__()
         self.patch = nn.Conv2d(in_channels, hidden_size, tuple(patch_size), stride=tuple(patch_size))
-        self.pos_enc = create_position_encoder(pos_enc, hidden_size, self.tokenized_size(tuple(img_size)))
+        self.pos_enc = create_position_encoder(pos_enc, hidden_size, self.tokenized_size(tuple(img_size)), dropout=0.1)
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
@@ -61,7 +61,7 @@ class PatchEmbed3d(nn.Module):
     ):
         super().__init__()
         self.patch = nn.Conv3d(in_channels, hidden_size, tuple(patch_size), stride=tuple(patch_size))
-        self.pos_enc = create_position_encoder(pos_enc, hidden_size, self.tokenized_size(tuple(img_size)))
+        self.pos_enc = create_position_encoder(pos_enc, hidden_size, self.tokenized_size(tuple(img_size)), dropout=0.1)
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
