@@ -9,10 +9,11 @@ from vit.patch_embed import PatchEmbed2d, PatchEmbed3d
 class TestPatchEmbed2d:
 
     @pytest.mark.parametrize("pos_enc", ["fourier", "learnable", "none"])
-    def test_forward(self, device, pos_enc):
+    @pytest.mark.parametrize("combine", ["add", "concat"])
+    def test_forward(self, device, pos_enc, combine):
         B, C, H, W = 2, 3, 64, 64
         D_model = 64
-        layer = PatchEmbed2d(C, D_model, (4, 4), (H, W), pos_enc=pos_enc).to(device)
+        layer = PatchEmbed2d(C, D_model, (4, 4), (H, W), pos_enc=pos_enc, combine=combine).to(device)
         x = torch.randn(B, C, H, W, device=device)
         with torch.autocast(device_type=device.type, dtype=torch.bfloat16):
             y = layer(x)
@@ -33,10 +34,11 @@ class TestPatchEmbed2d:
 class TestPatchEmbed3d:
 
     @pytest.mark.parametrize("pos_enc", ["fourier", "learnable", "none"])
-    def test_forward(self, device, pos_enc):
+    @pytest.mark.parametrize("combine", ["add", "concat"])
+    def test_forward(self, device, pos_enc, combine):
         B, C, D, H, W = 2, 3, 4, 64, 64
         D_model = 64
-        layer = PatchEmbed3d(C, D_model, (4, 4, 4), (D, H, W), pos_enc=pos_enc).to(device)
+        layer = PatchEmbed3d(C, D_model, (4, 4, 4), (D, H, W), pos_enc=pos_enc, combine=combine).to(device)
         x = torch.randn(B, C, D, H, W, device=device)
         with torch.autocast(device_type=device.type, dtype=torch.bfloat16):
             y = layer(x)

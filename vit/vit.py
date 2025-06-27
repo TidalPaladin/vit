@@ -8,7 +8,7 @@ import yaml
 from torch import Tensor
 
 from .head import HeadConfig
-from .patch_embed import PatchEmbed2d, PatchEmbed3d
+from .patch_embed import Combination, PatchEmbed2d, PatchEmbed3d
 from .pos_enc import PositionEncoder
 from .tokens import apply_mask, create_mask
 from .transformer import CrossAttentionTransformer, TransformerDecoderLayer, TransformerEncoderLayer
@@ -50,6 +50,7 @@ class ViTConfig:
     num_register_tokens: int = 0
     pos_enc: PositionEncoder = "fourier"
     layer_scale: float | None = None
+    combine: Combination = "add"
 
     # Trainable blocks
     mlp_requires_grad: bool = True

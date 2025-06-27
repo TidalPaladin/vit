@@ -1,10 +1,33 @@
-from typing import Sequence, Tuple
+from typing import Literal, Sequence, Tuple, cast
 
 import torch
 import torch.nn as nn
 from torch import Tensor
 
 from .pos_enc import PositionEncoder, create_position_encoder
+
+
+Combination = Literal["add", "concat"]
+
+
+def get_hidden_size(hidden_size: int, combine: Combination, pos_enc: PositionEncoder) -> int:
+    if pos_enc == "none":
+        return hidden_size
+    elif combine == "add":
+        return hidden_size
+    elif combine == "concat":
+        return hidden_size // 2
+    else:
+        raise ValueError(f"Invalid combination: {combine}")
+
+
+def combine(x: Tensor, pos: Tensor, combine: Combination) -> Tensor:
+    if combine == "add":
+        return x + pos
+    elif combine == "concat":
+        return torch.cat([x, pos.expand_as(x)], dim=-1)
+    else:
+        raise ValueError(f"Invalid combination: {combine}")
 
 
 class PatchEmbed2d(nn.Module):
@@ -16,10 +39,13 @@ class PatchEmbed2d(nn.Module):
         patch_size: Sequence[int],
         img_size: Sequence[int],
         pos_enc: PositionEncoder = "fourier",
+        combine: Combination = "add",
     ):
         super().__init__()
-        self.patch = nn.Conv2d(in_channels, hidden_size, tuple(patch_size), stride=tuple(patch_size))
-        self.pos_enc = create_position_encoder(pos_enc, hidden_size, self.tokenized_size(tuple(img_size)))
+        self.combine = combine
+        _hidden_size = get_hidden_size(hidden_size, combine, pos_enc)
+        self.patch = nn.Conv2d(in_channels, _hidden_size, tuple(patch_size), stride=tuple(patch_size))
+        self.pos_enc = create_position_encoder(pos_enc, _hidden_size, self.tokenized_size(tuple(img_size)))
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
@@ -44,7 +70,7 @@ class PatchEmbed2d(nn.Module):
         y = self.patch(x).flatten(2).transpose(1, 2)
         if self.pos_enc is not None:
             pos = self.pos_enc(self.tokenized_size(x.shape[2:]))
-            return y + pos
+            return combine(y, pos, cast(Combination, self.combine))
         else:
             return y
 
@@ -58,10 +84,13 @@ class PatchEmbed3d(nn.Module):
         patch_size: Sequence[int],
         img_size: Sequence[int],
         pos_enc: PositionEncoder = "fourier",
+        combine: Combination = "add",
     ):
         super().__init__()
-        self.patch = nn.Conv3d(in_channels, hidden_size, tuple(patch_size), stride=tuple(patch_size))
-        self.pos_enc = create_position_encoder(pos_enc, hidden_size, self.tokenized_size(tuple(img_size)))
+        self.combine = combine
+        _hidden_size = get_hidden_size(hidden_size, combine, pos_enc)
+        self.patch = nn.Conv3d(in_channels, _hidden_size, tuple(patch_size), stride=tuple(patch_size))
+        self.pos_enc = create_position_encoder(pos_enc, _hidden_size, self.tokenized_size(tuple(img_size)))
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
@@ -86,6 +115,6 @@ class PatchEmbed3d(nn.Module):
         y = self.patch(x).flatten(2).transpose(1, 2)
         if self.pos_enc is not None:
             pos = self.pos_enc(self.tokenized_size(x.shape[2:]))
-            return y + pos
+            return combine(y, pos, cast(Combination, self.combine))
         else:
             return y
