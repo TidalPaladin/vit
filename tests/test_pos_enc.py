@@ -47,7 +47,7 @@ class TestLearnablePosition:
     def test_deterministic(self, device):
         D = 16
         torch.random.manual_seed(0)
-        layer = LearnablePosition(D, (8, 8)).to(device)
+        layer = LearnablePosition(D, (8, 8), dropout=0.1).to(device)
         layer.eval()
         out1 = layer((8, 8))
         out2 = layer((8, 8))

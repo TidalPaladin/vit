@@ -88,7 +88,7 @@ def learnable_position(
 
 class LearnablePosition(nn.Module):
 
-    def __init__(self, hidden_size: int, spatial_size: Sequence[int], fourier_init: bool = True, dropout: float = 0.1):
+    def __init__(self, hidden_size: int, spatial_size: Sequence[int], fourier_init: bool = True, dropout: float = 0.0):
         super().__init__()
         total_size = math.prod(spatial_size)
         self.spatial_size = spatial_size
