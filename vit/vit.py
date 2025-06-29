@@ -222,8 +222,9 @@ class ViT(nn.Module):
         for name, head in self.heads.items():
             stop_gradient = self.config.heads[name].stop_gradient
             x_head = result[self.config.heads[name].key]
-            with torch.set_grad_enabled(not stop_gradient):
-                head_outputs[name] = head(x_head)
+            if stop_gradient:
+                x_head = x_head.detach()
+            head_outputs[name] = head(x_head)
         return head_outputs
 
     def forward(self, x: Tensor, mask: Tensor | None = None) -> Dict[str, Tensor]:

@@ -118,12 +118,20 @@ class TestViT:
             assert_all_requires_grad(block.mlp)
             assert_none_requires_grad(block.self_attention)
 
-    def test_with_head(self, device, config):
+    @pytest.mark.parametrize("stop_gradient", [True, False])
+    def test_with_head(self, device, config, stop_gradient):
         config = replace(
             config,
-            heads={"cls": HeadConfig(key="[CLS]", out_dim=128, stop_gradient=False)},
+            heads={"cls": HeadConfig(key="[CLS]", out_dim=128, stop_gradient=stop_gradient)},
         )
         x = torch.randn(2, 3, *config.img_size, device=device)
         model = ViT(config).to(device)
         out = model(x)
         assert out["cls"].shape == (2, 128)
+
+        out["cls"].sum().backward()
+        for param in model.heads.parameters():
+            assert param.grad is not None, f"{param} has no gradient"
+        model.heads = None # type: ignore
+        for param in model.parameters():
+            assert (param.grad is None) == stop_gradient, f"{param} has gradient"
