@@ -121,10 +121,9 @@ class TestViT:
     def test_with_head(self, device, config):
         config = replace(
             config,
-            heads={"cls": HeadConfig(head_type="linear", pool_type="avg", out_dim=128, stop_gradient=False)},
+            heads={"cls": HeadConfig(key="[CLS]", out_dim=128, stop_gradient=False)},
         )
         x = torch.randn(2, 3, *config.img_size, device=device)
         model = ViT(config).to(device)
         out = model(x)
-        pred = model.heads["cls"](out)
-        assert pred.shape == (2, 128)
+        assert out["cls"].shape == (2, 128)

@@ -217,6 +217,15 @@ class ViT(nn.Module):
 
         return mask
 
+    def _forward_heads(self, result: Dict[str, Tensor]) -> Dict[str, Tensor]:
+        head_outputs: Dict[str, Tensor] = {}
+        for name, head in self.heads.items():
+            stop_gradient = self.config.heads[name].stop_gradient
+            x_head = result[self.config.heads[name].key]
+            with torch.set_grad_enabled(not stop_gradient):
+                head_outputs[name] = head(x_head)
+        return head_outputs
+
     def forward(self, x: Tensor, mask: Tensor | None = None) -> Dict[str, Tensor]:
         x = self.stem(x)
         if mask is not None:
@@ -229,7 +238,10 @@ class ViT(nn.Module):
             x = block(x)
 
         x_norm = self.output_norm(x)
-        return _dense_result_to_dict(self.special_tokens, x_norm, x)
+        result = _dense_result_to_dict(self.special_tokens, x_norm, x)
+        head_outputs = self._forward_heads(result)
+        result.update(head_outputs)
+        return result
 
     def mlp_requires_grad_(self, requires_grad: bool = True) -> None:
         for block in self.blocks:
