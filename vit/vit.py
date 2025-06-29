@@ -47,9 +47,12 @@ class ViTConfig:
     bias: bool = True
     activation: str = "srelu"
     drop_path_rate: float = 0.0
-    num_register_tokens: int = 0
     pos_enc: PositionEncoder = "fourier"
     layer_scale: float | None = None
+
+    # Special tokens
+    special_tokens: Sequence[str] = field(default_factory=lambda: ["[CLS]"])
+    num_register_tokens: int = 0
 
     # Trainable blocks
     mlp_requires_grad: bool = True
@@ -81,6 +84,23 @@ class ViTConfig:
         return yaml.dump(self.__dict__)
 
 
+@torch.compile(fullgraph=True, dynamic=False)
+def _prepend_special_tokens(special_tokens: nn.ParameterDict, x: Tensor) -> Tensor:
+    B, _, D = x.shape
+    _special_tokens = torch.stack([special_tokens[token] for token in special_tokens.keys()], dim=0)
+    return torch.cat([_special_tokens.view(1, len(special_tokens), D).expand(B, -1, -1), x], dim=1)
+
+
+@torch.compile(fullgraph=True, dynamic=False)
+def _dense_result_to_dict(special_tokens: nn.ParameterDict, x: Tensor, x_pre_norm: Tensor) -> Dict[str, Tensor]:
+    result: Dict[str, Tensor] = {}
+    for i, k in enumerate(special_tokens.keys()):
+        result[k] = x[..., i, :].contiguous()
+    result["features"] = x[..., len(special_tokens) :, :].contiguous()
+    result["pre_norm"] = x_pre_norm
+    return result
+
+
 class ViT(nn.Module):
 
     def __init__(self, config: ViTConfig):
@@ -97,12 +117,14 @@ class ViT(nn.Module):
             pos_enc=config.pos_enc,
         )
 
-        # Register tokens
-        if config.num_register_tokens > 0:
-            self.register_tokens = nn.Parameter(torch.empty(config.num_register_tokens, config.hidden_size))
-            nn.init.trunc_normal_(self.register_tokens, std=0.02)
-        else:
-            self.register_tokens = None
+        # Special tokens
+        self.special_tokens = nn.ParameterDict()
+        for token in config.special_tokens:
+            self.special_tokens[token] = nn.Parameter(torch.empty(config.hidden_size))
+            nn.init.normal_(self.special_tokens[token], std=1e-6)
+        for i in range(config.num_register_tokens):
+            self.special_tokens[f"[REG_{i}]"] = nn.Parameter(torch.empty(config.hidden_size))
+            nn.init.normal_(self.special_tokens[f"[REG_{i}]"], std=1e-6)
 
         self.blocks = nn.ModuleList([self.create_encoder_layer() for _ in range(config.depth)])
         self.output_norm = nn.RMSNorm(config.hidden_size)
@@ -195,28 +217,19 @@ class ViT(nn.Module):
 
         return mask
 
-    def forward(self, x: Tensor, mask: Tensor | None = None, return_register_tokens: bool = False) -> Tensor:
+    def forward(self, x: Tensor, mask: Tensor | None = None) -> Dict[str, Tensor]:
         x = self.stem(x)
         if mask is not None:
             x = apply_mask(mask, x)
 
-        B = x.shape[0]
-        x = (
-            torch.cat([self.register_tokens.unsqueeze(0).expand(B, -1, -1), x], dim=1)
-            if self.register_tokens is not None
-            else x
-        )
+        x.shape[0]
+        x = _prepend_special_tokens(self.special_tokens, x)
         for block in self.blocks:
             assert isinstance(block, TransformerEncoderLayer)
             x = block(x)
 
-        if self.output_norm is not None:
-            x = self.output_norm(x)
-
-        if return_register_tokens:
-            return x
-        else:
-            return x[..., self.config.num_register_tokens :, :].contiguous()
+        x_norm = self.output_norm(x)
+        return _dense_result_to_dict(self.special_tokens, x_norm, x)
 
     def mlp_requires_grad_(self, requires_grad: bool = True) -> None:
         for block in self.blocks:

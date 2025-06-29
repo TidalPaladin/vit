@@ -61,21 +61,10 @@ class TestViT:
         with torch.autocast(device_type=device.type, dtype=dtype, enabled=True):
             out = model(x)
         L = math.prod(model.stem.tokenized_size(config.img_size))
-        assert out.shape == (2, L, 128)
-
-    @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
-    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_forward_return_register_tokens(self, device, config, num_register_tokens, dtype):
-        config = replace(
-            config,
-            num_register_tokens=num_register_tokens,
-        )
-        x = torch.randn(2, 3, *config.img_size, device=device)
-        model = ViT(config).to(device)
-        with torch.autocast(device_type=device.type, dtype=dtype, enabled=True):
-            out = model(x, return_register_tokens=True)
-        L = math.prod(model.stem.tokenized_size(config.img_size))
-        assert out.shape == (2, L + num_register_tokens, 128)
+        assert out["features"].shape == (2, L, 128)
+        assert out["[CLS]"].shape == (2, 128)
+        for i in range(num_register_tokens):
+            assert out[f"[REG_{i}]"].shape == (2, 128)
 
     @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
     def test_forward_masked(self, device, config, num_register_tokens):
@@ -88,7 +77,10 @@ class TestViT:
         mask = model.create_mask(x, 0.5, 1)
         out = model(x, mask)
         L = math.prod(model.stem.tokenized_size(config.img_size))
-        assert out.shape == (2, L // 2, 128)
+        assert out["features"].shape == (2, L // 2, 128)
+        assert out["[CLS]"].shape == (2, 128)
+        for i in range(num_register_tokens):
+            assert out[f"[REG_{i}]"].shape == (2, 128)
 
     @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
@@ -101,7 +93,7 @@ class TestViT:
         model = ViT(config).to(device)
         with torch.autocast(device_type=device.type, dtype=dtype, enabled=True):
             out = model(x)
-        out.sum().backward()
+        sum(t.sum() for t in out.values()).backward()  # type: ignore
         for name, param in model.named_parameters():
             assert param.grad is not None, f"{name} has no gradient"
             assert not param.grad.isnan().any(), f"{name} has nan gradient"
