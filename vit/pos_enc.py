@@ -1,12 +1,10 @@
 import math
-from typing import Callable, Literal, Sequence, Union
+from typing import Literal, Sequence, Union
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
-
-from .helpers import get_activation
 
 
 PositionEncoder = Literal["fourier", "learnable", "none"]
@@ -20,6 +18,7 @@ def create_position_encoder(
 ) -> Union["LearnablePosition", "FourierPosition", None]:
     match pos_enc:
         case "learnable":
+            kwargs.setdefault("dropout", 0.1)
             return LearnablePosition(hidden_size, spatial_size, **kwargs)
         case "fourier":
             return FourierPosition(hidden_size, spatial_size, **kwargs)
@@ -123,42 +122,28 @@ def fourier_position(
     w_fourier: Tensor,
     w_fc1: Tensor,
     b_fc1: Tensor | None,
-    w_fc2: Tensor,
-    b_fc2: Tensor | None,
-    activation: Callable[[Tensor], Tensor],
-    dropout: float,
-    training: bool,
 ) -> Tensor:
-    grid = create_grid(dims, device=w_fourier.device, normalize=True)
-    features = grid @ w_fourier
-    features = torch.cat([features.sin(), features.cos()], dim=-1)
-    features = features / math.sqrt(w_fourier.shape[-1])
-
-    y = F.linear(features, w_fc1, b_fc1)
-    y = activation(y)
-    y = F.dropout(y, p=dropout, training=training)
-    y = F.linear(y, w_fc2, b_fc2)
-    return y
+    with torch.autocast(device_type=w_fourier.device.type, enabled=False):
+        grid = create_grid(dims, device=w_fourier.device, normalize=True)
+        features = grid @ w_fourier
+        features = torch.cat([features.sin(), features.cos()], dim=-1)
+        features = features / math.sqrt(w_fourier.shape[-1])
+    return F.linear(features, w_fc1, b_fc1)
 
 
 class FourierPosition(nn.Module):
 
-    def __init__(self, hidden_size: int, spatial_size: Sequence[int], activation: str = "gelu", dropout: float = 0.1):
+    def __init__(self, hidden_size: int, spatial_size: Sequence[int]):
         super().__init__()
         self.spatial_size = spatial_size
         self.w_fourier = nn.Parameter(torch.empty(len(spatial_size), hidden_size // 2))
-        self.w_fc1 = nn.Linear(hidden_size, 4 * hidden_size)
-        self.w_fc2 = nn.Linear(4 * hidden_size, hidden_size)
-        self.activation = get_activation(activation)
-        self.dropout = nn.Dropout(dropout)
+        self.w_fc1 = nn.Linear(hidden_size, hidden_size)
         self.reset_parameters()
 
     def reset_parameters(self, std: float = 1.0) -> None:
+        self.w_fc1.reset_parameters()
         nn.init.normal_(self.w_fourier, std=std)
-        nn.init.trunc_normal_(self.w_fc1.weight, std=0.02)
-        nn.init.trunc_normal_(self.w_fc2.weight, std=0.02)
         nn.init.zeros_(self.w_fc1.bias)
-        nn.init.zeros_(self.w_fc2.bias)
 
     def forward(self, dims: Sequence[int] | None) -> Tensor:
         dims = dims or self.spatial_size
@@ -167,9 +152,4 @@ class FourierPosition(nn.Module):
             self.w_fourier,
             self.w_fc1.weight,
             self.w_fc1.bias,
-            self.w_fc2.weight,
-            self.w_fc2.bias,
-            self.activation,
-            self.dropout.p,
-            self.training,
         )
