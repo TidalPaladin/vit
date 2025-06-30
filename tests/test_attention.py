@@ -43,6 +43,16 @@ class TestSelfAttention:
         y4 = layer(x)
         assert not torch.allclose(y3, y4)
 
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+    def test_forward_weights(self, dtype, device):
+        B, L, D = 16, 128, 128
+        H = D // 16
+        multihead_attention = SelfAttention(D, H).to(device)
+        x = torch.randn(B, L, D, dtype=dtype, device=device)
+        with torch.autocast(device_type=device.type, dtype=dtype):
+            y = multihead_attention.forward_weights(x)
+        assert y.shape == (B, H, L, L)
+
 
 class TestCrossAttention:
 
@@ -85,6 +95,17 @@ class TestCrossAttention:
         y4 = layer(x, kv)
         assert not torch.allclose(y3, y4)
 
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+    def test_forward_weights(self, dtype, device):
+        B, L, D = 16, 128, 128
+        H = D // 16
+        layer = CrossAttention(D, H).to(device)
+        x = torch.randn(B, L, D, dtype=dtype, device=device)
+        kv = torch.randn(B, L // 2, D, dtype=dtype, device=device)
+        with torch.autocast(device_type=device.type, dtype=dtype):
+            y = layer.forward_weights(x, kv)
+        assert y.shape == (B, H, L, L // 2)
+
 
 class TestAttentivePool:
 
@@ -108,3 +129,13 @@ class TestAttentivePool:
         for param in layer.parameters():
             assert param.grad is not None
             assert not param.grad.isnan().any()
+
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+    def test_forward_weights(self, dtype, device):
+        B, L, D = 16, 128, 128
+        H = D // 16
+        layer = AttentivePool(D, H).to(device)
+        x = torch.randn(B, L, D, dtype=dtype, device=device)
+        with torch.autocast(device_type=device.type, dtype=dtype):
+            y = layer.forward_weights(x)
+        assert y.shape == (B, L, H)

@@ -109,6 +109,12 @@ def attention_q_kv_packed(
 
 
 @torch.compile(fullgraph=True)
+def attentive_pool_weights(x: Tensor, w: Tensor, b: Tensor | None) -> Tensor:
+    weights = F.linear(x, w, b)  # B, S, H
+    return F.softmax(weights, dim=-2)
+
+
+@torch.compile(fullgraph=True)
 def attentive_pool(
     # fmt: off
     x: Tensor,
@@ -118,12 +124,42 @@ def attentive_pool(
     # fmt: on
 ) -> Tensor:
     B, S, D = x.shape
-    weights = F.linear(x, w, b)  # B, S, H
-    weights = F.softmax(weights, dim=-2)
+    weights = attentive_pool_weights(x, w, b)
     weights = weights.unsqueeze(-1)  # B, S, H, 1
     v = F.linear(x, w_v, b_v).view(B, S, -1, head_dim)  # B, S, D
     v = (v * weights).sum(dim=1)
     return v.view(B, D)
+
+
+@torch.no_grad()
+@torch.compile(fullgraph=True)
+def attention_weights_qkv_packed(
+    # fmt: off
+    x: Tensor,
+    w_in: Tensor, b_in: Tensor | None,
+    w_norm: Tensor,
+    head_dim: int,
+    eps: float,
+    # fmt: on
+) -> Tensor:
+    q, k, _ = project_qkv_packed(x, w_in, b_in, w_norm, head_dim, eps)
+    return (q @ k.mT).softmax(dim=-1)
+
+
+@torch.no_grad()
+@torch.compile(fullgraph=True)
+def attention_weights_q_kv_packed(
+    # fmt: off
+    q: Tensor, kv: Tensor,
+    w_q: Tensor, b_q: Tensor | None,
+    w_kv: Tensor, b_kv: Tensor | None,
+    w_norm: Tensor,
+    head_dim: int,
+    eps: float,
+    # fmt: on
+) -> Tensor:
+    q, k, _ = project_q_kv_packed(q, kv, w_q, b_q, w_kv, b_kv, w_norm, head_dim, eps)
+    return (q @ k.mT).softmax(dim=-1)
 
 
 class SelfAttention(nn.Module):
@@ -166,6 +202,17 @@ class SelfAttention(nn.Module):
             self.attention_dropout.p,
             self.dropout.p,
             self.training,
+            # fmt: on
+        )
+
+    def forward_weights(self, x: Tensor) -> Tensor:
+        return attention_weights_qkv_packed(
+            # fmt: off
+            x,
+            self.qkv_proj.weight, self.qkv_proj.bias,
+            self.norm.weight,
+            self._head_dim,
+            self.norm.eps or 1e-5,
             # fmt: on
         )
 
@@ -217,6 +264,18 @@ class CrossAttention(nn.Module):
             # fmt: on
         )
 
+    def forward_weights(self, q: Tensor, kv: Tensor) -> Tensor:
+        return attention_weights_q_kv_packed(
+            # fmt: off
+            q, kv,
+            self.q_proj.weight, self.q_proj.bias,
+            self.kv_proj.weight, self.kv_proj.bias,
+            self.norm.weight,
+            self._head_dim,
+            self.norm.eps or 1e-5,
+            # fmt: on
+        )
+
 
 class AttentivePool(nn.Module):
     attention_weights: Tensor | None = None
@@ -248,3 +307,6 @@ class AttentivePool(nn.Module):
             self._head_dim,
             # fmt: on
         )
+
+    def forward_weights(self, x: Tensor) -> Tensor:
+        return attentive_pool_weights(x, self.weight.weight, self.weight.bias)
