@@ -8,18 +8,20 @@ from vit.attention import AttentivePool, CrossAttention, SelfAttention
 class TestSelfAttention:
 
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_forward(self, dtype, device):
+    @pytest.mark.parametrize("qknorm", [True, False])
+    def test_forward(self, dtype, device, qknorm):
         B, L, D = 16, 128, 128
-        multihead_attention = SelfAttention(D, D // 16).to(device)
+        multihead_attention = SelfAttention(D, D // 16, qknorm=qknorm).to(device)
         x = torch.randn(B, L, D, dtype=dtype, device=device)
         with torch.autocast(device_type=device.type, dtype=dtype):
             y = multihead_attention(x)
         assert y.shape == (B, L, D)
 
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_backward(self, dtype, device):
+    @pytest.mark.parametrize("qknorm", [True, False])
+    def test_backward(self, dtype, device, qknorm):
         B, L, D = 16, 128, 128
-        multihead_attention = SelfAttention(D, D // 16).to(device)
+        multihead_attention = SelfAttention(D, D // 16, qknorm=qknorm).to(device)
         x = torch.randn(B, L, D, dtype=dtype, device=device)
         with torch.autocast(device_type=device.type, dtype=dtype):
             y = multihead_attention(x)
@@ -57,9 +59,10 @@ class TestSelfAttention:
 class TestCrossAttention:
 
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_forward(self, dtype, device):
+    @pytest.mark.parametrize("qknorm", [True, False])
+    def test_forward(self, dtype, device, qknorm):
         B, L, D = 16, 128, 128
-        multihead_attention = CrossAttention(D, D // 16).to(device)
+        multihead_attention = CrossAttention(D, D // 16, qknorm=qknorm).to(device)
         x = torch.randn(B, L, D, dtype=dtype, device=device)
         kv = torch.randn(B, L // 2, D, dtype=dtype, device=device)
         with torch.autocast(device_type=device.type, dtype=dtype):
@@ -67,9 +70,10 @@ class TestCrossAttention:
         assert y.shape == (B, L, D)
 
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_backward(self, dtype, device):
+    @pytest.mark.parametrize("qknorm", [True, False])
+    def test_backward(self, dtype, device, qknorm):
         B, L, D = 16, 128, 128
-        multihead_attention = CrossAttention(D, D // 16).to(device)
+        multihead_attention = CrossAttention(D, D // 16, qknorm=qknorm).to(device)
         x = torch.randn(B, L, D, dtype=dtype, device=device)
         kv = torch.randn(B, L // 2, D, dtype=dtype, device=device)
         with torch.autocast(device_type=device.type, dtype=dtype):
@@ -96,10 +100,11 @@ class TestCrossAttention:
         assert not torch.allclose(y3, y4)
 
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_forward_weights(self, dtype, device):
+    @pytest.mark.parametrize("qknorm", [True, False])
+    def test_forward_weights(self, dtype, device, qknorm):
         B, L, D = 16, 128, 128
         H = D // 16
-        layer = CrossAttention(D, H).to(device)
+        layer = CrossAttention(D, H, qknorm=qknorm).to(device)
         x = torch.randn(B, L, D, dtype=dtype, device=device)
         kv = torch.randn(B, L // 2, D, dtype=dtype, device=device)
         with torch.autocast(device_type=device.type, dtype=dtype):

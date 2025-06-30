@@ -25,6 +25,7 @@ def project_qkv_packed(
     w_norm: Tensor,
     head_dim: int,
     eps: float,
+    qknorm: bool = False,
     # fmt: on
 ) -> Tuple[Tensor, Tensor, Tensor]:
     x = F.rms_norm(x, x.shape[-1:], w_norm, eps=eps)
@@ -32,6 +33,9 @@ def project_qkv_packed(
     q = _unfold_head_and_permute(q, head_dim)
     k = _unfold_head_and_permute(k, head_dim)
     v = _unfold_head_and_permute(v, head_dim)
+    if qknorm:
+        q = F.rms_norm(q, q.shape[-1:], eps=eps)
+        k = F.rms_norm(k, k.shape[-1:], eps=eps)
     return q, k, v
 
 
@@ -44,6 +48,7 @@ def project_q_kv_packed(
     w_norm: Tensor,
     head_dim: int,
     eps: float,
+    qknorm: bool = False,
     # fmt: on
 ) -> Tuple[Tensor, Tensor, Tensor]:
     q = F.rms_norm(q, q.shape[-1:], w_norm, eps=eps)
@@ -52,6 +57,9 @@ def project_q_kv_packed(
     q = _unfold_head_and_permute(q, head_dim)
     k = _unfold_head_and_permute(k, head_dim)
     v = _unfold_head_and_permute(v, head_dim)
+    if qknorm:
+        q = F.rms_norm(q, q.shape[-1:], eps=eps)
+        k = F.rms_norm(k, k.shape[-1:], eps=eps)
     return q, k, v
 
 
@@ -68,9 +76,10 @@ def attention_qkv_packed(
     attention_dropout: float,
     dropout: float,
     training: bool,
+    qknorm: bool = False,
     # fmt: on
 ) -> Tensor:
-    q, k, v = project_qkv_packed(x, w_in, b_in, w_norm, head_dim, eps)
+    q, k, v = project_qkv_packed(x, w_in, b_in, w_norm, head_dim, eps, qknorm)
     attention_dropout = 0.0 if not training else attention_dropout
     o = F.scaled_dot_product_attention(
         q, k, v, attn_mask=attn_mask, dropout_p=attention_dropout, is_causal=False, enable_gqa=True
@@ -95,9 +104,10 @@ def attention_q_kv_packed(
     attention_dropout: float,
     dropout: float,
     training: bool,
+    qknorm: bool = False,
     # fmt: on
 ) -> Tensor:
-    q, k, v = project_q_kv_packed(q, kv, w_q, b_q, w_kv, b_kv, w_norm, head_dim, eps)
+    q, k, v = project_q_kv_packed(q, kv, w_q, b_q, w_kv, b_kv, w_norm, head_dim, eps, qknorm)
     attention_dropout = 0.0 if not training else attention_dropout
     o = F.scaled_dot_product_attention(
         q, k, v, attn_mask=attn_mask, dropout_p=attention_dropout, is_causal=False, enable_gqa=True
@@ -140,9 +150,10 @@ def attention_weights_qkv_packed(
     w_norm: Tensor,
     head_dim: int,
     eps: float,
+    qknorm: bool = False,
     # fmt: on
 ) -> Tensor:
-    q, k, _ = project_qkv_packed(x, w_in, b_in, w_norm, head_dim, eps)
+    q, k, _ = project_qkv_packed(x, w_in, b_in, w_norm, head_dim, eps, qknorm)
     return (q @ k.mT).softmax(dim=-1)
 
 
@@ -156,9 +167,10 @@ def attention_weights_q_kv_packed(
     w_norm: Tensor,
     head_dim: int,
     eps: float,
+    qknorm: bool = False,
     # fmt: on
 ) -> Tensor:
-    q, k, _ = project_q_kv_packed(q, kv, w_q, b_q, w_kv, b_kv, w_norm, head_dim, eps)
+    q, k, _ = project_q_kv_packed(q, kv, w_q, b_q, w_kv, b_kv, w_norm, head_dim, eps, qknorm)
     return (q @ k.mT).softmax(dim=-1)
 
 
@@ -173,6 +185,7 @@ class SelfAttention(nn.Module):
         attention_dropout: float = 0.1,
         bias: bool = True,
         eps: float = 1e-5,
+        qknorm: bool = False,
     ):
         super().__init__()
         self.norm = nn.RMSNorm(hidden_size, eps=eps)
@@ -181,6 +194,7 @@ class SelfAttention(nn.Module):
         self.dropout = nn.Dropout(hidden_dropout)
         self.attention_dropout = nn.Dropout(attention_dropout)
         self._head_dim = hidden_size // num_attention_heads
+        self.qknorm = qknorm
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
@@ -202,6 +216,7 @@ class SelfAttention(nn.Module):
             self.attention_dropout.p,
             self.dropout.p,
             self.training,
+            qknorm=self.qknorm,
             # fmt: on
         )
 
@@ -228,6 +243,7 @@ class CrossAttention(nn.Module):
         attention_dropout: float = 0.1,
         bias: bool = True,
         eps: float = 1e-5,
+        qknorm: bool = False,
     ):
         super().__init__()
         self.norm = nn.RMSNorm(hidden_size, eps=eps)
@@ -237,6 +253,7 @@ class CrossAttention(nn.Module):
         self.dropout = nn.Dropout(hidden_dropout)
         self.attention_dropout = nn.Dropout(attention_dropout)
         self._head_dim = hidden_size // num_attention_heads
+        self.qknorm = qknorm
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
@@ -261,6 +278,7 @@ class CrossAttention(nn.Module):
             self.attention_dropout.p,
             self.dropout.p,
             self.training,
+            qknorm=self.qknorm,
             # fmt: on
         )
 
@@ -273,6 +291,7 @@ class CrossAttention(nn.Module):
             self.norm.weight,
             self._head_dim,
             self.norm.eps or 1e-5,
+            qknorm=self.qknorm,
             # fmt: on
         )
 

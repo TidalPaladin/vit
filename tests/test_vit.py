@@ -51,10 +51,12 @@ class TestViT:
 
     @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_forward(self, device, config, num_register_tokens, dtype):
+    @pytest.mark.parametrize("qknorm", [True, False])
+    def test_forward(self, device, config, num_register_tokens, dtype, qknorm):
         config = replace(
             config,
             num_register_tokens=num_register_tokens,
+            qknorm=qknorm,
         )
         x = torch.randn(2, 3, *config.img_size, device=device)
         model = ViT(config).to(device)

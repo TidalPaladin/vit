@@ -50,6 +50,7 @@ class ViTConfig:
     num_register_tokens: int = 0
     pos_enc: PositionEncoder = "fourier"
     layer_scale: float | None = None
+    qknorm: bool = False
 
     # Trainable blocks
     mlp_requires_grad: bool = True

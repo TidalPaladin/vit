@@ -22,6 +22,7 @@ class TransformerEncoderLayer(nn.Module):
         drop_path_rate: float = 0.0,
         eps: float = 1e-5,
         layer_scale: float | None = None,
+        qknorm: bool = False,
     ):
         super().__init__()
         self.drop_path_rate = drop_path_rate
@@ -32,6 +33,7 @@ class TransformerEncoderLayer(nn.Module):
             attention_dropout,
             bias,
             eps,
+            qknorm=qknorm,
         )
         self.mlp = NormMLP(hidden_size, ffn_hidden_size, bias, activation, eps, hidden_dropout)
         self.layer_scale_attn = (
@@ -70,6 +72,7 @@ class TransformerDecoderLayer(nn.Module):
         drop_path_rate: float = 0.0,
         eps: float = 1e-5,
         layer_scale: float | None = None,
+        qknorm: bool = False,
     ):
         super().__init__()
         self.drop_path_rate = drop_path_rate
@@ -80,6 +83,7 @@ class TransformerDecoderLayer(nn.Module):
             attention_dropout,
             bias,
             eps,
+            qknorm=qknorm,
         )
         self.cross_attention = CrossAttention(
             hidden_size,
@@ -88,6 +92,7 @@ class TransformerDecoderLayer(nn.Module):
             attention_dropout,
             bias,
             eps,
+            qknorm=qknorm,
         )
         self.mlp = NormMLP(hidden_size, ffn_hidden_size, bias, activation, eps, hidden_dropout)
         self.layer_scale_attn = (
@@ -132,6 +137,7 @@ class CrossAttentionTransformer(nn.Module):
         drop_path_rate: float = 0.0,
         eps: float = 1e-5,
         layer_scale: float | None = None,
+        qknorm: bool = False,
     ):
         super().__init__()
         self.drop_path_rate = drop_path_rate
@@ -142,6 +148,7 @@ class CrossAttentionTransformer(nn.Module):
             attention_dropout,
             bias,
             eps,
+            qknorm=qknorm,
         )
         self.mlp = NormMLP(hidden_size, ffn_hidden_size, bias, activation, eps, hidden_dropout)
         self.layer_scale_cross = (
