@@ -130,6 +130,7 @@ class ViT(nn.Module):
             self.config.activation,
             self.config.drop_path_rate,
             layer_scale=self.config.layer_scale,
+            qknorm=self.config.qknorm,
         )
 
     def create_decoder_layer(self) -> TransformerDecoderLayer:
@@ -143,6 +144,7 @@ class ViT(nn.Module):
             self.config.activation,
             self.config.drop_path_rate,
             layer_scale=self.config.layer_scale,
+            qknorm=self.config.qknorm,
         )
 
     def create_cross_attention_layer(self) -> CrossAttentionTransformer:
@@ -156,6 +158,7 @@ class ViT(nn.Module):
             self.config.activation,
             self.config.drop_path_rate,
             layer_scale=self.config.layer_scale,
+            qknorm=self.config.qknorm,
         )
 
     def create_mask(
