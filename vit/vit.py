@@ -195,28 +195,54 @@ class ViT(nn.Module):
 
         return mask
 
-    def forward(self, x: Tensor, mask: Tensor | None = None, return_register_tokens: bool = False) -> Tensor:
-        x = self.stem(x)
-        if mask is not None:
-            x = apply_mask(mask, x)
-
+    @torch.compile(fullgraph=True)
+    def _apply_register_tokens(self, x: Tensor) -> Tensor:
+        if self.register_tokens is None:
+            return x
         B = x.shape[0]
-        x = (
-            torch.cat([self.register_tokens.unsqueeze(0).expand(B, -1, -1), x], dim=1)
-            if self.register_tokens is not None
-            else x
-        )
+        register_tokens = self.register_tokens.unsqueeze(0).expand(B, -1, -1)
+        return torch.cat([register_tokens, x], dim=1)
+
+    def _drop_register_tokens(self, x: Tensor) -> Tensor:
+        return x[..., self.config.num_register_tokens :, :]
+
+    def forward(self, x: Tensor, mask: Tensor | None = None, return_register_tokens: bool = False) -> Tensor:
+        # Prepare transformer input
+        x = self.stem(x)
+        x = apply_mask(mask, x) if mask is not None else x
+        x = self._apply_register_tokens(x)
+
+        # Apply transformer
         for block in self.blocks:
             assert isinstance(block, TransformerEncoderLayer)
             x = block(x)
 
-        if self.output_norm is not None:
-            x = self.output_norm(x)
+        # Prepare output
+        x = self.output_norm(x)
+        return self._drop_register_tokens(x) if not return_register_tokens else x
 
-        if return_register_tokens:
-            return x
-        else:
-            return x[..., self.config.num_register_tokens :, :].contiguous()
+    @torch.no_grad()
+    def _reshape_attention_weights(self, w: Tensor, tokenized_size: Sequence[int]) -> Tensor:
+        B, H, Lq, Lk = w.shape
+        assert Lq == Lk, f"Query and key lengths must match, got {Lq} and {Lk}"
+        w = w[..., self.config.num_register_tokens :].view(B, H, Lq, *tokenized_size)
+        return w.contiguous()
+
+    def forward_attention_weights(self, x: Tensor) -> Dict[str, Tensor]:
+        # Prepare transformer input
+        tokenized_size = self.stem.tokenized_size(x.shape[2:])
+        x = self.stem(x)
+        x = self._apply_register_tokens(x)
+
+        # Apply transformer
+        weights: Dict[str, Tensor] = {}
+        for i, block in enumerate(self.blocks):
+            assert isinstance(block, TransformerEncoderLayer)
+            w_i = block.self_attention.forward_weights(x)
+            weights[f"layer_{i}"] = self._reshape_attention_weights(w_i, tokenized_size)
+            x = block(x)
+
+        return weights
 
     def mlp_requires_grad_(self, requires_grad: bool = True) -> None:
         for block in self.blocks:

@@ -136,3 +136,25 @@ class TestViT:
         out = model(x)
         pred = model.heads["cls"](out)
         assert pred.shape == (2, 128)
+
+    @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+    def test_forward_attention_weights(self, device, config, num_register_tokens, dtype):
+        torch.random.manual_seed(0)
+        config = replace(
+            config,
+            num_register_tokens=num_register_tokens,
+        )
+        B = 2
+        H = config.num_attention_heads
+        x = torch.randn(B, 3, *config.img_size, device=device)
+        model = ViT(config).to(device)
+        size = model.stem.tokenized_size(config.img_size)
+        L = math.prod(size)
+        with torch.autocast(device_type=device.type, dtype=dtype, enabled=True):
+            weights = model.forward_attention_weights(x)
+
+        for name, weight in weights.items():
+            assert (weight >= 0).all(), f"{name} has negative weights"
+            assert (weight <= 1).all(), f"{name} has weights greater than 1"
+            assert weight.shape == (B, H, L + num_register_tokens, *size)
