@@ -37,6 +37,7 @@ class HeadConfig:
     pool_type: Literal["avg", "max", "attentive", "none"] = "avg"
     out_dim: int | None = None
     stop_gradient: bool = False
+    num_attention_heads: int | None = None
 
     def instantiate(self, backbone_config: ViTConfig) -> Union["Head", "MLPHead"]:
         match self.head_type:
@@ -45,7 +46,7 @@ class HeadConfig:
                     backbone_config.hidden_size,
                     self.pool_type,
                     self.out_dim,
-                    backbone_config.num_attention_heads,
+                    self.num_attention_heads or backbone_config.num_attention_heads,
                     self.stop_gradient,
                 )
             case "mlp":
@@ -55,7 +56,7 @@ class HeadConfig:
                     backbone_config.activation,
                     self.pool_type,
                     self.out_dim,
-                    backbone_config.num_attention_heads,
+                    self.num_attention_heads or backbone_config.num_attention_heads,
                     self.stop_gradient,
                     backbone_config.hidden_dropout,
                 )
