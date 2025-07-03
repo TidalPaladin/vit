@@ -164,10 +164,14 @@ class TestViT:
     @pytest.mark.parametrize(
         "feature_frac,feedforward_frac,heads_frac", [(1.0, 1.0, 1.0), (0.5, 1.0, 1.0), (1.0, 0.5, 1.0), (1.0, 1.0, 0.5)]
     )
-    def test_matryoshka_vit(self, device, config, num_register_tokens, feature_frac, feedforward_frac, heads_frac):
+    @pytest.mark.parametrize("layer_scale", [None, 0.1])
+    def test_matryoshka_vit(
+        self, device, config, num_register_tokens, feature_frac, feedforward_frac, heads_frac, layer_scale
+    ):
         config = replace(
             config,
             num_register_tokens=num_register_tokens,
+            layer_scale=layer_scale,
         )
         x = torch.randn(2, 3, *config.img_size, device=device)
         matryoshka = MatryoshkaConfig(

@@ -5,8 +5,17 @@ from torch import Tensor
 from .attention import CrossAttention, SelfAttention
 from .drop_path import drop_path
 from .fused import NormMLP
-from .layer_scale import LayerScale
-from .matryoshka import MatryoshkaConfig, unslice_matryoshka
+from .layer_scale import LayerScale, layer_scale
+from .matryoshka import MatryoshkaConfig, slice_matryoshka, unslice_matryoshka
+
+
+def _maybe_layer_scale(x: Tensor, layer: LayerScale | nn.Identity, matryoshka: MatryoshkaConfig) -> Tensor:
+    if isinstance(layer, LayerScale):
+        # Assume x is pre-sliced, only need to slice gamma
+        gamma = slice_matryoshka(layer.gamma, matryoshka.feature_frac)
+        return layer_scale(x, gamma, layer.inplace)
+    else:
+        return x
 
 
 class TransformerEncoderLayer(nn.Module):
@@ -49,10 +58,10 @@ class TransformerEncoderLayer(nn.Module):
 
     @torch.compile
     def forward(self, x: Tensor, matryoshka: MatryoshkaConfig = MatryoshkaConfig()) -> Tensor:
-        o = self.layer_scale_attn(self.self_attention(x, matryoshka))
+        o = _maybe_layer_scale(self.self_attention(x, matryoshka=matryoshka), self.layer_scale_attn, matryoshka)
         x = x + unslice_matryoshka(drop_path(o, self.drop_path_rate, self.training), x.shape[-1])
 
-        o = self.layer_scale_mlp(self.layer_scale_mlp(self.mlp(x)))
+        o = _maybe_layer_scale(self.mlp(x, matryoshka=matryoshka), self.layer_scale_mlp, matryoshka)
         x = x + unslice_matryoshka(drop_path(o, self.drop_path_rate, self.training), x.shape[-1])
         return x
 
@@ -108,13 +117,13 @@ class TransformerDecoderLayer(nn.Module):
         self.mlp.reset_parameters()
 
     def forward(self, x: Tensor, kv: Tensor, matryoshka: MatryoshkaConfig = MatryoshkaConfig()) -> Tensor:
-        o = self.layer_scale_attn(self.self_attention(x, matryoshka))
+        o = _maybe_layer_scale(self.self_attention(x, matryoshka=matryoshka), self.layer_scale_attn, matryoshka)
         x = x + unslice_matryoshka(drop_path(o, self.drop_path_rate, self.training), x.shape[-1])
 
-        o = self.layer_scale_cross(self.cross_attention(x, kv))
+        o = _maybe_layer_scale(self.cross_attention(x, kv, matryoshka=matryoshka), self.layer_scale_cross, matryoshka)
         x = x + unslice_matryoshka(drop_path(o, self.drop_path_rate, self.training), x.shape[-1])
 
-        o = self.layer_scale_mlp(self.mlp(x))
+        o = _maybe_layer_scale(self.mlp(x, matryoshka=matryoshka), self.layer_scale_mlp, matryoshka)
         x = x + unslice_matryoshka(drop_path(o, self.drop_path_rate, self.training), x.shape[-1])
         return x
 
@@ -158,9 +167,9 @@ class CrossAttentionTransformer(nn.Module):
         self.mlp.reset_parameters()
 
     def forward(self, x: Tensor, kv: Tensor, matryoshka: MatryoshkaConfig = MatryoshkaConfig()) -> Tensor:
-        o = self.layer_scale_cross(self.cross_attention(x, kv, matryoshka))
+        o = _maybe_layer_scale(self.cross_attention(x, kv, matryoshka=matryoshka), self.layer_scale_cross, matryoshka)
         x = x + unslice_matryoshka(drop_path(o, self.drop_path_rate, self.training), x.shape[-1])
 
-        o = self.layer_scale_mlp(self.mlp(x))
+        o = _maybe_layer_scale(self.mlp(x, matryoshka=matryoshka), self.layer_scale_mlp, matryoshka)
         x = x + unslice_matryoshka(drop_path(o, self.drop_path_rate, self.training), x.shape[-1])
         return x
