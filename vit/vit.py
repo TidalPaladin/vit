@@ -281,7 +281,7 @@ class ViT(nn.Module):
             out.sum().backward()
             for p in self.parameters():
                 if p.grad is not None:
-                    params[name] += p.grad.nonzero().numel()
+                    params[name] += (p.grad != 0).sum().item()
                     p.grad = None
         return params
 
