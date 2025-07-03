@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from vit.fused import NormMLP, norm_mlp
-from vit.matryoshka import add_sliced_features, slice_matryoshka, slice_matryoshka_weight
+from vit.matryoshka import slice_matryoshka, slice_matryoshka_weight, unslice_matryoshka
 
 
 class TestMatryoshka:
@@ -86,7 +86,7 @@ class TestMatryoshka:
         assert y_sliced.shape == (B, L, int(D_hidden * frac))
 
         # Residual
-        out = add_sliced_features(y_sliced, x)
+        out = unslice_matryoshka(y_sliced, D_hidden)
         assert out.shape == x.shape
 
     @pytest.mark.parametrize("frac", [1.0, 0.5, 0.25])
@@ -116,7 +116,7 @@ class TestMatryoshka:
             layer.dropout.p,
             layer.training,
         )
-        out = add_sliced_features(y_sliced, x)
+        out = unslice_matryoshka(y_sliced, D_hidden)
         out.sum().backward()
         for name, param in layer.named_parameters():
             assert param.grad is not None, f"Parameter {name} has no gradient"
