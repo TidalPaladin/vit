@@ -182,3 +182,20 @@ class TestViT:
         L = math.prod(model.stem.tokenized_size(config.img_size))
         D_out = int(model.config.hidden_size * feature_frac)
         assert out.shape == (2, L, D_out)
+
+    def test_matryoshka_parameters(self, device, config):
+        torch.random.manual_seed(0)
+        config = replace(
+            config,
+            matryoshka_configs={
+                "a": MatryoshkaConfig(feature_frac=0.75, feedforward_frac=0.75, heads_frac=0.75),
+                "b": MatryoshkaConfig(feature_frac=0.5, feedforward_frac=0.5, heads_frac=0.5),
+                "c": MatryoshkaConfig(feature_frac=0.5, feedforward_frac=0.5, heads_frac=0.5, depth_stride=2),
+                "full": MatryoshkaConfig(),
+            },
+        )
+        model = ViT(config).to(device)
+        params = model.matryoshka_parameters()
+        assert params["full"] > params["a"]
+        assert params["a"] > params["b"]
+        assert params["b"] > params["c"]

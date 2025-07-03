@@ -230,7 +230,7 @@ class ViT(nn.Module):
         for i, block in enumerate(self.blocks):
             assert isinstance(block, TransformerEncoderLayer)
             if i % matryoshka.depth_stride == 0:
-                x = block(x, matryoshka)
+                x = block(x, matryoshka=matryoshka)
 
         # Prepare output
         x = slice_matryoshka(x, matryoshka.feature_frac)
@@ -270,6 +270,18 @@ class ViT(nn.Module):
         for block in self.blocks:
             layer = cast(nn.Module, block.self_attention)
             layer.requires_grad_(requires_grad)
+
+    def matryoshka_parameters(self) -> Dict[str, int]:
+        params: Dict[str, int] = {name: 0 for name in self.config.matryoshka_configs.keys()}
+        x = torch.randn(1, self.config.in_channels, *self.config.img_size, device=self.output_norm.weight.device)
+        for name, config in self.config.matryoshka_configs.items():
+            out = self(x, matryoshka=config)
+            out.sum().backward()
+            for p in self.parameters():
+                if p.grad is not None:
+                    params[name] += p.grad.nonzero().numel()
+                    p.grad = None
+        return params
 
 
 register_constructors()
