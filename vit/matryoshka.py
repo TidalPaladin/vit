@@ -9,6 +9,8 @@ from torch import Tensor
 
 @torch.compile(fullgraph=True, dynamic=False)
 def slice_matryoshka(x: Tensor, frac: float = 1.0) -> Tensor:
+    if frac == 1.0:
+        return x
     D = x.shape[-1]
     D_sliced = int(D * frac)
     return x[..., :D_sliced]
@@ -16,6 +18,8 @@ def slice_matryoshka(x: Tensor, frac: float = 1.0) -> Tensor:
 
 @torch.compile(fullgraph=True, dynamic=False)
 def slice_matryoshka_weight(w: Tensor, input_frac: float = 1.0, output_frac: float = 1.0) -> Tensor:
+    if input_frac == 1.0 and output_frac == 1.0:
+        return w
     D_out, D_in = w.shape
     D_in_sliced = int(D_in * input_frac)
     D_out_sliced = int(D_out * output_frac)
@@ -24,6 +28,8 @@ def slice_matryoshka_weight(w: Tensor, input_frac: float = 1.0, output_frac: flo
 
 @torch.compile(fullgraph=True, dynamic=False)
 def slice_matryoshka_heads(x: Tensor, frac: float = 1.0) -> Tensor:
+    if frac == 1.0:
+        return x
     _, H, _, _ = x.shape
     H_sliced = int(H * frac)
     return x[..., :H_sliced, :, :]
