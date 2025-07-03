@@ -217,6 +217,7 @@ class ViT(nn.Module):
         mask: Tensor | None = None,
         return_register_tokens: bool = False,
         matryoshka: str | MatryoshkaConfig = MatryoshkaConfig(),
+        output_norm: bool = True,
     ) -> Tensor:
         if isinstance(matryoshka, str):
             matryoshka = self.config.matryoshka_configs[matryoshka]
@@ -234,8 +235,9 @@ class ViT(nn.Module):
 
         # Prepare output
         x = slice_matryoshka(x, matryoshka.feature_frac)
-        w_norm = slice_matryoshka(self.output_norm.weight, matryoshka.feature_frac)
-        x = F.rms_norm(x, x.shape[-1:], weight=w_norm, eps=self.output_norm.eps)
+        if output_norm:
+            w_norm = slice_matryoshka(self.output_norm.weight, matryoshka.feature_frac)
+            x = F.rms_norm(x, x.shape[-1:], weight=w_norm, eps=self.output_norm.eps)
         return self._drop_register_tokens(x) if not return_register_tokens else x
 
     @torch.no_grad()
