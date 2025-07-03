@@ -3,6 +3,7 @@ import torch
 from torch.testing import assert_close
 
 from vit.fused import NormLinear, NormMLP
+from vit.matryoshka import MatryoshkaConfig
 
 
 class TestNormLinear:
@@ -63,3 +64,17 @@ class TestNormMLP:
         for param in layer_norm_mlp.parameters():
             assert param.grad is not None
             assert not param.grad.isnan().any()
+
+    @pytest.mark.parametrize("bias", [False, True])
+    @pytest.mark.parametrize("activation", ["srelu", "swiglu"])
+    @pytest.mark.parametrize("feature_frac", [1.0, 0.5, 0.25])
+    @pytest.mark.parametrize("feedforward_frac", [1.0, 0.5, 0.25])
+    def test_forward_matryoshka(self, device, bias, activation, feature_frac, feedforward_frac):
+        B, D_hidden, D_feedforward = 2, 32, 64
+        layer_norm_mlp = NormMLP(D_hidden, D_feedforward, activation=activation, bias=bias).to(device)
+        x = torch.randn(B, D_hidden, device=device)
+        matryoshka = MatryoshkaConfig(feature_frac=feature_frac, feedforward_frac=feedforward_frac, heads_frac=1.0)
+        with torch.autocast(device_type=device.type, dtype=torch.float32, enabled=True):
+            y = layer_norm_mlp(x, matryoshka)
+        D_out = int(D_hidden * feature_frac)
+        assert y.shape == (B, D_out)

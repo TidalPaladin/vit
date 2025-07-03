@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from .helpers import get_activation
+from .matryoshka import MatryoshkaConfig, slice_matryoshka, slice_matryoshka_weight
 
 
 @torch.compile(fullgraph=True)
@@ -131,15 +132,28 @@ class NormMLP(nn.Module):
             self.fc_lu.reset_parameters()
             nn.init.trunc_normal_(self.fc_lu.weight, std=0.02)
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Tensor, matryoshka: MatryoshkaConfig = MatryoshkaConfig.default()) -> Tensor:
+        x = slice_matryoshka(x, matryoshka.feature_frac)
+        fc1_weight = slice_matryoshka_weight(self.fc1.weight, matryoshka.feature_frac, matryoshka.feedforward_frac)
+        fc1_bias = slice_matryoshka(self.fc1.bias, matryoshka.feedforward_frac) if self.fc1.bias is not None else None
+        fc2_weight = slice_matryoshka_weight(self.fc2.weight, matryoshka.feedforward_frac, matryoshka.feature_frac)
+        fc2_bias = slice_matryoshka(self.fc2.bias, matryoshka.feature_frac) if self.fc2.bias is not None else None
+        norm_weight = slice_matryoshka(self.norm.weight, matryoshka.feature_frac)
+
         if self.fc_lu is not None:
+            fc_lu_weight = slice_matryoshka_weight(
+                self.fc_lu.weight, matryoshka.feature_frac, matryoshka.feedforward_frac
+            )
+            fc_lu_bias = (
+                slice_matryoshka(self.fc_lu.bias, matryoshka.feedforward_frac) if self.fc_lu.bias is not None else None
+            )
             return norm_mlp_glu(
                 # fmt: off
                 x,
-                self.fc1.weight, self.fc1.bias,
-                self.fc_lu.weight, self.fc_lu.bias,
-                self.fc2.weight, self.fc2.bias,
-                self.norm.weight,
+                fc1_weight, fc1_bias,
+                fc_lu_weight, fc_lu_bias,
+                fc2_weight, fc2_bias,
+                norm_weight,
                 self.activation,
                 self.norm.eps or 1e-5,
                 self.dropout.p,
@@ -150,9 +164,9 @@ class NormMLP(nn.Module):
             return norm_mlp(
                 # fmt: off
                 x,
-                self.fc1.weight, self.fc1.bias,
-                self.fc2.weight, self.fc2.bias,
-                self.norm.weight,
+                fc1_weight, fc1_bias,
+                fc2_weight, fc2_bias,
+                norm_weight,
                 self.activation,
                 self.norm.eps or 1e-5,
                 self.dropout.p,

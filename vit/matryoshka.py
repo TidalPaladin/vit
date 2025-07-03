@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Self, Type
 
 import torch
 from torch import Tensor
@@ -37,19 +38,18 @@ def unslice_matryoshka(x: Tensor, size: int) -> Tensor:
 
 @dataclass
 class MatryoshkaConfig:
-    feature_frac: float | None = None
-    feedforward_frac: float | None = None
-    heads_frac: float | None = None
+    feature_frac: float
+    feedforward_frac: float
+    heads_frac: float
 
     def __post_init__(self):
-        if self.feature_frac is not None and not 0 < self.feature_frac <= 1:
-            raise ValueError("feature_frac must be between 0 and 1")
-        if self.feedforward_frac is not None and not 0 < self.feedforward_frac <= 1:
-            raise ValueError("feedforward_frac must be between 0 and 1")
-        if self.heads_frac is not None and not 0 < self.heads_frac <= 1:
-            raise ValueError("heads_frac must be between 0 and 1")
+        if not 0 < self.feature_frac <= 1:
+            raise ValueError("feature_frac must be between 0 and 1")  # pragma: no cover
+        if not 0 < self.feedforward_frac <= 1:
+            raise ValueError("feedforward_frac must be between 0 and 1")  # pragma: no cover
+        if not 0 < self.heads_frac <= 1:
+            raise ValueError("heads_frac must be between 0 and 1")  # pragma: no cover
 
-    def __call__(self, x: Tensor) -> Tensor:
-        if self.feature_frac is not None:
-            x = slice_matryoshka(x, self.feature_frac)
-        return x
+    @classmethod
+    def default(cls: Type[Self]) -> Self:
+        return cls(feature_frac=1.0, feedforward_frac=1.0, heads_frac=1.0)
