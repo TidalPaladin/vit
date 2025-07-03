@@ -6,6 +6,7 @@ from .attention import CrossAttention, SelfAttention
 from .drop_path import drop_path
 from .fused import NormMLP
 from .layer_scale import LayerScale
+from .matryoshka import MatryoshkaConfig, unslice_matryoshka
 
 
 class TransformerEncoderLayer(nn.Module):
@@ -47,12 +48,12 @@ class TransformerEncoderLayer(nn.Module):
         self.mlp.reset_parameters()
 
     @torch.compile
-    def forward(self, x: Tensor) -> Tensor:
-        o = self.layer_scale_attn(self.self_attention(x))
-        x = x + drop_path(o, self.drop_path_rate, self.training)
+    def forward(self, x: Tensor, matryoshka: MatryoshkaConfig = MatryoshkaConfig()) -> Tensor:
+        o = self.layer_scale_attn(self.self_attention(x, matryoshka))
+        x = x + unslice_matryoshka(drop_path(o, self.drop_path_rate, self.training), x.shape[-1])
 
         o = self.layer_scale_mlp(self.layer_scale_mlp(self.mlp(x)))
-        x = x + drop_path(o, self.drop_path_rate, self.training)
+        x = x + unslice_matryoshka(drop_path(o, self.drop_path_rate, self.training), x.shape[-1])
         return x
 
 
@@ -106,15 +107,15 @@ class TransformerDecoderLayer(nn.Module):
         self.cross_attention.reset_parameters()
         self.mlp.reset_parameters()
 
-    def forward(self, x: Tensor, kv: Tensor) -> Tensor:
-        o = self.layer_scale_attn(self.self_attention(x))
-        x = x + drop_path(o, self.drop_path_rate, self.training)
+    def forward(self, x: Tensor, kv: Tensor, matryoshka: MatryoshkaConfig = MatryoshkaConfig()) -> Tensor:
+        o = self.layer_scale_attn(self.self_attention(x, matryoshka))
+        x = x + unslice_matryoshka(drop_path(o, self.drop_path_rate, self.training), x.shape[-1])
 
         o = self.layer_scale_cross(self.cross_attention(x, kv))
-        x = x + drop_path(o, self.drop_path_rate, self.training)
+        x = x + unslice_matryoshka(drop_path(o, self.drop_path_rate, self.training), x.shape[-1])
 
         o = self.layer_scale_mlp(self.mlp(x))
-        x = x + drop_path(o, self.drop_path_rate, self.training)
+        x = x + unslice_matryoshka(drop_path(o, self.drop_path_rate, self.training), x.shape[-1])
         return x
 
 
@@ -156,10 +157,10 @@ class CrossAttentionTransformer(nn.Module):
         self.cross_attention.reset_parameters()
         self.mlp.reset_parameters()
 
-    def forward(self, x: Tensor, kv: Tensor) -> Tensor:
-        o = self.layer_scale_cross(self.cross_attention(x, kv))
-        x = x + drop_path(o, self.drop_path_rate, self.training)
+    def forward(self, x: Tensor, kv: Tensor, matryoshka: MatryoshkaConfig = MatryoshkaConfig()) -> Tensor:
+        o = self.layer_scale_cross(self.cross_attention(x, kv, matryoshka))
+        x = x + unslice_matryoshka(drop_path(o, self.drop_path_rate, self.training), x.shape[-1])
 
         o = self.layer_scale_mlp(self.mlp(x))
-        x = x + drop_path(o, self.drop_path_rate, self.training)
+        x = x + unslice_matryoshka(drop_path(o, self.drop_path_rate, self.training), x.shape[-1])
         return x

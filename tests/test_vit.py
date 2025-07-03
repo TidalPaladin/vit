@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 
 from vit.head import HeadConfig
+from vit.matryoshka import MatryoshkaConfig
 from vit.vit import ViT, ViTConfig
 
 
@@ -158,3 +159,22 @@ class TestViT:
             assert (weight >= 0).all(), f"{name} has negative weights"
             assert (weight <= 1).all(), f"{name} has weights greater than 1"
             assert weight.shape == (B, H, L + num_register_tokens, *size)
+
+    @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
+    @pytest.mark.parametrize(
+        "feature_frac,feedforward_frac,heads_frac", [(1.0, 1.0, 1.0), (0.5, 1.0, 1.0), (1.0, 0.5, 1.0), (1.0, 1.0, 0.5)]
+    )
+    def test_matryoshka_vit(self, device, config, num_register_tokens, feature_frac, feedforward_frac, heads_frac):
+        config = replace(
+            config,
+            num_register_tokens=num_register_tokens,
+        )
+        x = torch.randn(2, 3, *config.img_size, device=device)
+        matryoshka = MatryoshkaConfig(
+            feature_frac=feature_frac, feedforward_frac=feedforward_frac, heads_frac=heads_frac
+        )
+        model = ViT(config).to(device)
+        out = model(x, matryoshka=matryoshka)
+        L = math.prod(model.stem.tokenized_size(config.img_size))
+        D_out = int(model.config.hidden_size * feature_frac)
+        assert out.shape == (2, L, D_out)

@@ -4,10 +4,12 @@ from typing import Any, Dict, Self, Sequence, Type, cast
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import yaml
 from torch import Tensor
 
 from .head import HeadConfig
+from .matryoshka import MatryoshkaConfig, slice_matryoshka
 from .patch_embed import PatchEmbed2d, PatchEmbed3d
 from .pos_enc import PositionEncoder
 from .tokens import apply_mask, create_mask
@@ -206,7 +208,13 @@ class ViT(nn.Module):
     def _drop_register_tokens(self, x: Tensor) -> Tensor:
         return x[..., self.config.num_register_tokens :, :]
 
-    def forward(self, x: Tensor, mask: Tensor | None = None, return_register_tokens: bool = False) -> Tensor:
+    def forward(
+        self,
+        x: Tensor,
+        mask: Tensor | None = None,
+        return_register_tokens: bool = False,
+        matryoshka: MatryoshkaConfig = MatryoshkaConfig(),
+    ) -> Tensor:
         # Prepare transformer input
         x = self.stem(x)
         x = apply_mask(mask, x) if mask is not None else x
@@ -215,10 +223,12 @@ class ViT(nn.Module):
         # Apply transformer
         for block in self.blocks:
             assert isinstance(block, TransformerEncoderLayer)
-            x = block(x)
+            x = block(x, matryoshka)
 
         # Prepare output
-        x = self.output_norm(x)
+        x = slice_matryoshka(x, matryoshka.feature_frac)
+        w_norm = slice_matryoshka(self.output_norm.weight, matryoshka.feature_frac)
+        x = F.rms_norm(x, x.shape[-1:], weight=w_norm, eps=self.output_norm.eps)
         return self._drop_register_tokens(x) if not return_register_tokens else x
 
     @torch.no_grad()
