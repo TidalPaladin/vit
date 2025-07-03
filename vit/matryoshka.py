@@ -1,6 +1,9 @@
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Self, Type
 
 import torch
+import yaml
 from torch import Tensor
 
 
@@ -40,6 +43,7 @@ class MatryoshkaConfig:
     feature_frac: float = 1.0
     feedforward_frac: float = 1.0
     heads_frac: float = 1.0
+    depth_stride: int = 1
 
     def __post_init__(self):
         if not 0 < self.feature_frac <= 1:
@@ -48,3 +52,40 @@ class MatryoshkaConfig:
             raise ValueError("feedforward_frac must be between 0 and 1")  # pragma: no cover
         if not 0 < self.heads_frac <= 1:
             raise ValueError("heads_frac must be between 0 and 1")  # pragma: no cover
+        if not 0 < self.depth_stride:
+            raise ValueError("depth_stride must be positive")  # pragma: no cover
+
+    @classmethod
+    def from_yaml(cls: Type[Self], path: str | Path) -> Self:
+        if isinstance(path, Path):
+            if not path.is_file():
+                raise FileNotFoundError(f"File not found: {path}")
+            with open(path, "r") as f:
+                config = yaml.full_load(f)
+            return cls(**config)
+
+        elif isinstance(path, str) and path.endswith(".yaml"):
+            return cls.from_yaml(Path(path))
+
+        else:
+            config = yaml.full_load(path)
+            return cls(**config)
+
+    def to_yaml(self) -> str:
+        return yaml.dump(self.__dict__)
+
+
+def vit_config_constructor(loader, node):
+    values = loader.construct_mapping(node, deep=True)
+    return MatryoshkaConfig(**values)
+
+
+def register_constructors():
+    tags = [
+        "tag:yaml.org,2002:python/object:vit.matryoshka.MatryoshkaConfig",
+        "tag:yaml.org,2002:python/object:vit.MatryoshkaConfig",
+    ]
+    loaders = [yaml.SafeLoader, yaml.FullLoader, yaml.UnsafeLoader]
+    for tag in tags:
+        for loader in loaders:
+            loader.add_constructor(tag, vit_config_constructor)

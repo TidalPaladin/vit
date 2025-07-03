@@ -60,6 +60,9 @@ class ViTConfig:
     # Heads
     heads: Dict[str, HeadConfig] = field(default_factory=dict)
 
+    # Matryoshka
+    matryoshka_configs: Dict[str, MatryoshkaConfig] = field(default_factory=dict)
+
     def instantiate(self) -> "ViT":
         return ViT(self)
 
@@ -213,17 +216,21 @@ class ViT(nn.Module):
         x: Tensor,
         mask: Tensor | None = None,
         return_register_tokens: bool = False,
-        matryoshka: MatryoshkaConfig = MatryoshkaConfig(),
+        matryoshka: str | MatryoshkaConfig = MatryoshkaConfig(),
     ) -> Tensor:
+        if isinstance(matryoshka, str):
+            matryoshka = self.config.matryoshka_configs[matryoshka]
+
         # Prepare transformer input
         x = self.stem(x)
         x = apply_mask(mask, x) if mask is not None else x
         x = self._apply_register_tokens(x)
 
         # Apply transformer
-        for block in self.blocks:
+        for i, block in enumerate(self.blocks):
             assert isinstance(block, TransformerEncoderLayer)
-            x = block(x, matryoshka)
+            if i % matryoshka.depth_stride == 0:
+                x = block(x, matryoshka)
 
         # Prepare output
         x = slice_matryoshka(x, matryoshka.feature_frac)

@@ -4,10 +4,23 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from vit.fused import NormMLP, norm_mlp
-from vit.matryoshka import slice_matryoshka, slice_matryoshka_weight, unslice_matryoshka
+from vit.matryoshka import MatryoshkaConfig, slice_matryoshka, slice_matryoshka_weight, unslice_matryoshka
 
 
 class TestMatryoshka:
+
+    def test_config_from_yaml_str(self):
+        config = MatryoshkaConfig()
+        config_str = config.to_yaml()
+        config_from_str = MatryoshkaConfig.from_yaml(config_str)
+        assert config == config_from_str
+
+    def test_config_from_yaml_path(self, tmp_path):
+        path = tmp_path / "config.yaml"
+        with open(path, "w") as f:
+            f.write(MatryoshkaConfig().to_yaml())
+        config_from_path = MatryoshkaConfig.from_yaml(path)
+        assert MatryoshkaConfig() == config_from_path
 
     @pytest.mark.parametrize("frac", [1.0, 0.5, 0.25])
     def test_forward_linear(self, device, frac):
