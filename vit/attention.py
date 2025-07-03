@@ -5,6 +5,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
+from .matryoshka import MatryoshkaConfig, slice_matryoshka, slice_matryoshka_weight
+
 
 # torch.compile has difficulty with einops.rearrange, so we use our own implementation
 def _unfold_head_and_permute(x: Tensor, head_dim: int) -> Tensor:
@@ -17,7 +19,7 @@ def _permute_and_fold_head(x: Tensor) -> Tensor:
     return x.transpose(1, 2).reshape(B, S, H * D)
 
 
-@torch.compile(fullgraph=True)
+# @torch.compile(fullgraph=True)
 def project_qkv_packed(
     # fmt: off
     x: Tensor,
@@ -35,7 +37,7 @@ def project_qkv_packed(
     return q, k, v
 
 
-@torch.compile(fullgraph=True)
+# @torch.compile(fullgraph=True)
 def project_q_kv_packed(
     # fmt: off
     q: Tensor, kv: Tensor,
@@ -55,7 +57,7 @@ def project_q_kv_packed(
     return q, k, v
 
 
-@torch.compile(fullgraph=True)
+# @torch.compile(fullgraph=True)
 def attention_qkv_packed(
     # fmt: off
     x: Tensor,
@@ -81,7 +83,7 @@ def attention_qkv_packed(
     return o
 
 
-@torch.compile(fullgraph=True)
+# @torch.compile(fullgraph=True)
 def attention_q_kv_packed(
     # fmt: off
     q: Tensor, kv: Tensor,
@@ -189,14 +191,24 @@ class SelfAttention(nn.Module):
         self.norm.reset_parameters()
         nn.init.trunc_normal_(self.qkv_proj.weight, std=0.02)
 
-    def forward(self, x: Tensor, attn_mask: Tensor | None = None) -> Tensor:
+    def forward(
+        self, x: Tensor, matryoshka: MatryoshkaConfig = MatryoshkaConfig(), attn_mask: Tensor | None = None
+    ) -> Tensor:
+        x = slice_matryoshka(x, matryoshka.feature_frac)
+        w_qkv = slice_matryoshka_weight(self.qkv_proj.weight, matryoshka.feature_frac, matryoshka.heads_frac)
+        b_qkv = slice_matryoshka(self.qkv_proj.bias, matryoshka.heads_frac) if self.qkv_proj.bias is not None else None
+        w_norm = slice_matryoshka(self.norm.weight, matryoshka.feature_frac)
+        w_out = slice_matryoshka_weight(self.out_proj.weight, matryoshka.heads_frac, matryoshka.feature_frac)
+        b_out = (
+            slice_matryoshka(self.out_proj.bias, matryoshka.feature_frac) if self.out_proj.bias is not None else None
+        )
         return attention_qkv_packed(
             # fmt: off
             x,
-            self.qkv_proj.weight, self.qkv_proj.bias,
-            self.norm.weight,
+            w_qkv, b_qkv,
+            w_norm,
             self._head_dim,
-            self.out_proj.weight, self.out_proj.bias,
+            w_out, b_out,
             attn_mask,
             self.norm.eps or 1e-5,
             self.attention_dropout.p,
@@ -247,15 +259,29 @@ class CrossAttention(nn.Module):
         nn.init.trunc_normal_(self.q_proj.weight, std=0.02)
         nn.init.trunc_normal_(self.kv_proj.weight, std=0.02)
 
-    def forward(self, q: Tensor, kv: Tensor, attn_mask: Tensor | None = None) -> Tensor:
+    def forward(
+        self, q: Tensor, kv: Tensor, matryoshka: MatryoshkaConfig = MatryoshkaConfig(), attn_mask: Tensor | None = None
+    ) -> Tensor:
+        q = slice_matryoshka(q, matryoshka.feature_frac)
+        kv = slice_matryoshka(kv, matryoshka.feature_frac)
+        w_q = slice_matryoshka_weight(self.q_proj.weight, matryoshka.feature_frac, matryoshka.heads_frac)
+        b_q = slice_matryoshka(self.q_proj.bias, matryoshka.heads_frac) if self.q_proj.bias is not None else None
+        w_kv = slice_matryoshka_weight(self.kv_proj.weight, matryoshka.feature_frac, matryoshka.heads_frac)
+        b_kv = slice_matryoshka(self.kv_proj.bias, matryoshka.heads_frac) if self.kv_proj.bias is not None else None
+        w_norm = slice_matryoshka(self.norm.weight, matryoshka.feature_frac)
+        w_out = slice_matryoshka_weight(self.out_proj.weight, matryoshka.heads_frac, matryoshka.feature_frac)
+        b_out = (
+            slice_matryoshka(self.out_proj.bias, matryoshka.feature_frac) if self.out_proj.bias is not None else None
+        )
+
         return attention_q_kv_packed(
             # fmt: off
             q, kv,
-            self.q_proj.weight, self.q_proj.bias,
-            self.kv_proj.weight, self.kv_proj.bias,
-            self.norm.weight,
+            w_q, b_q,
+            w_kv, b_kv,
+            w_norm,
             self._head_dim,
-            self.out_proj.weight, self.out_proj.bias,
+            w_out, b_out,
             attn_mask,
             self.norm.eps or 1e-5,
             self.attention_dropout.p,

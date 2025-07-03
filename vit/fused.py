@@ -132,7 +132,7 @@ class NormMLP(nn.Module):
             self.fc_lu.reset_parameters()
             nn.init.trunc_normal_(self.fc_lu.weight, std=0.02)
 
-    def forward(self, x: Tensor, matryoshka: MatryoshkaConfig = MatryoshkaConfig.default()) -> Tensor:
+    def forward(self, x: Tensor, matryoshka: MatryoshkaConfig = MatryoshkaConfig()) -> Tensor:
         x = slice_matryoshka(x, matryoshka.feature_frac)
         fc1_weight = slice_matryoshka_weight(self.fc1.weight, matryoshka.feature_frac, matryoshka.feedforward_frac)
         fc1_bias = slice_matryoshka(self.fc1.bias, matryoshka.feedforward_frac) if self.fc1.bias is not None else None
