@@ -9,9 +9,12 @@ class TestTransformerEncoderLayer:
 
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
     @pytest.mark.parametrize("layer_scale", [None, 1e-5])
-    def test_forward(self, dtype, device, layer_scale):
+    @pytest.mark.parametrize("drop_path_rate", [0.0, 0.1])
+    def test_forward(self, dtype, device, layer_scale, drop_path_rate):
         B, L, D = 16, 128, 128
-        transformer_layer = TransformerEncoderLayer(D, D, D // 16, layer_scale=layer_scale).to(device)
+        transformer_layer = TransformerEncoderLayer(
+            D, D, D // 16, layer_scale=layer_scale, drop_path_rate=drop_path_rate
+        ).to(device)
         x = torch.randn(B, L, D, dtype=dtype, device=device)
         with torch.autocast(device_type=device.type, dtype=dtype):
             y = transformer_layer(x)
@@ -19,9 +22,12 @@ class TestTransformerEncoderLayer:
 
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
     @pytest.mark.parametrize("layer_scale", [None, 1e-5])
-    def test_backward(self, dtype, device, layer_scale):
+    @pytest.mark.parametrize("drop_path_rate", [0.0, 0.1])
+    def test_backward(self, dtype, device, layer_scale, drop_path_rate):
         B, L, D = 16, 128, 128
-        transformer_layer = TransformerEncoderLayer(D, D, D // 16, layer_scale=layer_scale).to(device)
+        transformer_layer = TransformerEncoderLayer(
+            D, D, D // 16, layer_scale=layer_scale, drop_path_rate=drop_path_rate
+        ).to(device)
         x = torch.randn(B, L, D, dtype=dtype, device=device)
         with torch.autocast(device_type=device.type, dtype=dtype):
             y = transformer_layer(x)
@@ -32,7 +38,7 @@ class TestTransformerEncoderLayer:
 
     def test_forward_determinstic(self, device):
         B, L, D = 16, 128, 128
-        layer = TransformerEncoderLayer(D, D, D // 16).to(device)
+        layer = TransformerEncoderLayer(D, D, D // 16, drop_path_rate=0.1).to(device)
         x = torch.randn(B, L, D, device=device)
 
         layer.eval()
@@ -50,9 +56,12 @@ class TestTransformerDecoderLayer:
 
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
     @pytest.mark.parametrize("layer_scale", [None, 1e-5])
-    def test_forward(self, dtype, device, layer_scale):
+    @pytest.mark.parametrize("drop_path_rate", [0.0, 0.1])
+    def test_forward(self, dtype, device, layer_scale, drop_path_rate):
         B, L, D = 16, 128, 128
-        transformer_layer = TransformerDecoderLayer(D, D, D // 16, layer_scale=layer_scale).to(device)
+        transformer_layer = TransformerDecoderLayer(
+            D, D, D // 16, layer_scale=layer_scale, drop_path_rate=drop_path_rate
+        ).to(device)
         x = torch.randn(B, L, D, dtype=dtype, device=device)
         kv = torch.randn(B, L // 2, D, dtype=dtype, device=device)
         with torch.autocast(device_type=device.type, dtype=dtype):
@@ -61,9 +70,12 @@ class TestTransformerDecoderLayer:
 
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
     @pytest.mark.parametrize("layer_scale", [None, 1e-5])
-    def test_backward(self, dtype, device, layer_scale):
+    @pytest.mark.parametrize("drop_path_rate", [0.0, 0.1])
+    def test_backward(self, dtype, device, layer_scale, drop_path_rate):
         B, L, D = 16, 128, 128
-        transformer_layer = TransformerDecoderLayer(D, D, D // 16, layer_scale=layer_scale).to(device)
+        transformer_layer = TransformerDecoderLayer(
+            D, D, D // 16, layer_scale=layer_scale, drop_path_rate=drop_path_rate
+        ).to(device)
         x = torch.randn(B, L, D, dtype=dtype, device=device)
         kv = torch.randn(B, L // 2, D, dtype=dtype, device=device)
         with torch.autocast(device_type=device.type, dtype=dtype):
@@ -75,7 +87,7 @@ class TestTransformerDecoderLayer:
 
     def test_forward_determinstic(self, device):
         B, L, D = 16, 128, 128
-        layer = TransformerDecoderLayer(D, D, D // 16).to(device)
+        layer = TransformerDecoderLayer(D, D, D // 16, drop_path_rate=0.1).to(device)
         x = torch.randn(B, L, D, device=device)
         kv = torch.randn(B, L // 2, D, device=device)
 
@@ -94,9 +106,12 @@ class TestCrossAttentionTransformer:
 
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
     @pytest.mark.parametrize("layer_scale", [None, 1e-5])
-    def test_forward(self, dtype, device, layer_scale):
+    @pytest.mark.parametrize("drop_path_rate", [0.0, 0.1])
+    def test_forward(self, dtype, device, layer_scale, drop_path_rate):
         B, L, D = 16, 128, 128
-        transformer_layer = CrossAttentionTransformer(D, D, D // 16, layer_scale=layer_scale).to(device)
+        transformer_layer = CrossAttentionTransformer(
+            D, D, D // 16, layer_scale=layer_scale, drop_path_rate=drop_path_rate
+        ).to(device)
         x = torch.randn(B, L, D, dtype=dtype, device=device)
         kv = torch.randn(B, L // 2, D, dtype=dtype, device=device)
         with torch.autocast(device_type=device.type, dtype=dtype):
@@ -104,9 +119,13 @@ class TestCrossAttentionTransformer:
         assert y.shape == (B, L, D)
 
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_backward(self, dtype, device):
+    @pytest.mark.parametrize("layer_scale", [None, 1e-5])
+    @pytest.mark.parametrize("drop_path_rate", [0.0, 0.1])
+    def test_backward(self, dtype, device, layer_scale, drop_path_rate):
         B, L, D = 16, 128, 128
-        transformer_layer = CrossAttentionTransformer(D, D, D // 16).to(device)
+        transformer_layer = CrossAttentionTransformer(
+            D, D, D // 16, layer_scale=layer_scale, drop_path_rate=drop_path_rate
+        ).to(device)
         x = torch.randn(B, L, D, dtype=dtype, device=device)
         kv = torch.randn(B, L // 2, D, dtype=dtype, device=device)
         with torch.autocast(device_type=device.type, dtype=dtype):
@@ -118,7 +137,7 @@ class TestCrossAttentionTransformer:
 
     def test_forward_determinstic(self, device):
         B, L, D = 16, 128, 128
-        layer = CrossAttentionTransformer(D, D, D // 16).to(device)
+        layer = CrossAttentionTransformer(D, D, D // 16, drop_path_rate=0.1).to(device)
         x = torch.randn(B, L, D, device=device)
         kv = torch.randn(B, L // 2, D, device=device)
 

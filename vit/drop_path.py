@@ -20,10 +20,11 @@ def drop_path(x: Tensor, drop_prob: float, training: bool) -> Tensor:
 
     keep_prob = 1 - drop_prob
     shape = (x.shape[0],) + (1,) * (x.ndim - 1)
-    random_tensor = keep_prob + torch.rand(shape, dtype=x.dtype, device=x.device)
-    random_tensor = random_tensor.floor_()  # binarize
-    output = x.div(keep_prob) * random_tensor
-    return output
+    noise = torch.empty(shape, dtype=x.dtype, device=x.device)
+    noise = noise.bernoulli_(keep_prob)
+    if keep_prob > 0:
+        noise = noise.div_(keep_prob)
+    return x * noise
 
 
 class DropPath(nn.Module):

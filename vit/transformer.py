@@ -47,12 +47,13 @@ class TransformerEncoderLayer(nn.Module):
         self.mlp.reset_parameters()
 
     @torch.compile
-    def forward(self, x: Tensor, ffn_size: int | None = None) -> Tensor:
+    def forward(self, x: Tensor, ffn_size: int | None = None, drop_path_rate: float | None = None) -> Tensor:
+        drop_path_rate = drop_path_rate or self.drop_path_rate
         o = self.layer_scale_attn(self.self_attention(x))
-        x = x + drop_path(o, self.drop_path_rate, self.training)
+        x = x + drop_path(o, drop_path_rate, self.training)
 
         o = self.layer_scale_mlp(self.layer_scale_mlp(self.mlp(x, ffn_size)))
-        x = x + drop_path(o, self.drop_path_rate, self.training)
+        x = x + drop_path(o, drop_path_rate, self.training)
         return x
 
 
@@ -107,15 +108,18 @@ class TransformerDecoderLayer(nn.Module):
         self.mlp.reset_parameters()
 
     @torch.compile
-    def forward(self, x: Tensor, kv: Tensor, ffn_size: int | None = None) -> Tensor:
+    def forward(
+        self, x: Tensor, kv: Tensor, ffn_size: int | None = None, drop_path_rate: float | None = None
+    ) -> Tensor:
+        drop_path_rate = drop_path_rate or self.drop_path_rate
         o = self.layer_scale_attn(self.self_attention(x))
-        x = x + drop_path(o, self.drop_path_rate, self.training)
+        x = x + drop_path(o, drop_path_rate, self.training)
 
         o = self.layer_scale_cross(self.cross_attention(x, kv))
-        x = x + drop_path(o, self.drop_path_rate, self.training)
+        x = x + drop_path(o, drop_path_rate, self.training)
 
         o = self.layer_scale_mlp(self.mlp(x, ffn_size))
-        x = x + drop_path(o, self.drop_path_rate, self.training)
+        x = x + drop_path(o, drop_path_rate, self.training)
         return x
 
 
@@ -158,10 +162,13 @@ class CrossAttentionTransformer(nn.Module):
         self.mlp.reset_parameters()
 
     @torch.compile
-    def forward(self, x: Tensor, kv: Tensor, ffn_size: int | None = None) -> Tensor:
+    def forward(
+        self, x: Tensor, kv: Tensor, ffn_size: int | None = None, drop_path_rate: float | None = None
+    ) -> Tensor:
+        drop_path_rate = drop_path_rate or self.drop_path_rate
         o = self.layer_scale_cross(self.cross_attention(x, kv))
-        x = x + drop_path(o, self.drop_path_rate, self.training)
+        x = x + drop_path(o, drop_path_rate, self.training)
 
         o = self.layer_scale_mlp(self.mlp(x, ffn_size))
-        x = x + drop_path(o, self.drop_path_rate, self.training)
+        x = x + drop_path(o, drop_path_rate, self.training)
         return x
