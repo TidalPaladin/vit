@@ -1,4 +1,5 @@
-from typing import Callable
+from dataclasses import dataclass
+from typing import Callable, Iterator, Tuple
 
 import torch
 import torch.nn as nn
@@ -37,6 +38,40 @@ class NormLinear(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         return norm_linear(x, self.linear.weight, self.linear.bias, self.norm.weight, self.norm.eps or 1e-5)
+
+
+@dataclass
+class _MLPParams:
+    fc1_weight: Tensor
+    fc1_bias: Tensor | None
+    fc2_weight: Tensor
+    fc2_bias: Tensor | None
+    fc_lu_weight: Tensor | None
+    fc_lu_bias: Tensor | None
+
+    @property
+    def ffn_size(self) -> int:
+        return self.fc1_weight.shape[0]
+
+    def matryoshka_slice(self, ffn_size: int) -> "_MLPParams":
+        if ffn_size == self.ffn_size:
+            return self
+        fc1_weight = self.fc1_weight[:ffn_size, :]
+        fc1_bias = self.fc1_bias[:ffn_size] if self.fc1_bias is not None else None
+        fc2_weight = self.fc2_weight[:, :ffn_size]
+        fc2_bias = self.fc2_bias[:ffn_size] if self.fc2_bias is not None else None
+        fc_lu_weight = self.fc_lu_weight[:ffn_size, :] if self.fc_lu_weight is not None else None
+        fc_lu_bias = self.fc_lu_bias[:ffn_size] if self.fc_lu_bias is not None else None
+        return _MLPParams(fc1_weight, fc1_bias, fc2_weight, fc2_bias, fc_lu_weight, fc_lu_bias)
+
+    def named_parameters(self) -> Iterator[Tuple[str, Tensor | None]]:
+        yield "fc1_weight", self.fc1_weight
+        yield "fc1_bias", self.fc1_bias
+        yield "fc2_weight", self.fc2_weight
+        yield "fc2_bias", self.fc2_bias
+        if self.fc_lu_weight is not None:
+            yield "fc_lu_weight", self.fc_lu_weight
+            yield "fc_lu_bias", self.fc_lu_bias
 
 
 @torch.compile(
@@ -131,14 +166,46 @@ class NormMLP(nn.Module):
             self.fc_lu.reset_parameters()
             nn.init.trunc_normal_(self.fc_lu.weight, std=0.02)
 
-    def forward(self, x: Tensor) -> Tensor:
+    @property
+    def ffn_size(self) -> int:
+        return self.fc1.weight.shape[0]
+
+    def _is_registered(self, ffn_size: int) -> bool:
+        return hasattr(self, f"fc1_weight_{ffn_size}")
+
+    def _register_slice(self, ffn_size: int) -> None:
+        params = _MLPParams(
+            self.fc1.weight,
+            self.fc1.bias,
+            self.fc2.weight,
+            self.fc2.bias,
+            self.fc_lu.weight if self.fc_lu is not None else None,
+            self.fc_lu.bias if self.fc_lu is not None else None,
+        )
+        params = params.matryoshka_slice(ffn_size)
+        for name, param in params.named_parameters():
+            self.register_buffer(f"{name}_{ffn_size}", param, persistent=False)
+
+    def forward(self, x: Tensor, ffn_size: int | None = None) -> Tensor:
+        ffn_size = ffn_size or self.ffn_size
+
+        # Register slice if not already registered
+        if not self._is_registered(ffn_size):
+            self._register_slice(ffn_size)
+        fc1_weight = getattr(self, f"fc1_weight_{ffn_size}")
+        fc1_bias = getattr(self, f"fc1_bias_{ffn_size}")
+        fc2_weight = getattr(self, f"fc2_weight_{ffn_size}")
+        fc2_bias = getattr(self, f"fc2_bias_{ffn_size}")
+
         if self.fc_lu is not None:
+            fc_lu_weight = getattr(self, f"fc_lu_weight_{ffn_size}")
+            fc_lu_bias = getattr(self, f"fc_lu_bias_{ffn_size}")
             return norm_mlp_glu(
                 # fmt: off
                 x,
-                self.fc1.weight, self.fc1.bias,
-                self.fc_lu.weight, self.fc_lu.bias,
-                self.fc2.weight, self.fc2.bias,
+                fc1_weight, fc1_bias,
+                fc_lu_weight, fc_lu_bias,
+                fc2_weight, fc2_bias,
                 self.norm.weight,
                 self.activation,
                 self.norm.eps or 1e-5,
@@ -150,8 +217,8 @@ class NormMLP(nn.Module):
             return norm_mlp(
                 # fmt: off
                 x,
-                self.fc1.weight, self.fc1.bias,
-                self.fc2.weight, self.fc2.bias,
+                fc1_weight, fc1_bias,
+                fc2_weight, fc2_bias,
                 self.norm.weight,
                 self.activation,
                 self.norm.eps or 1e-5,

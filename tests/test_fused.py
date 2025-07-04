@@ -63,3 +63,15 @@ class TestNormMLP:
         for param in layer_norm_mlp.parameters():
             assert param.grad is not None
             assert not param.grad.isnan().any()
+
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+    @pytest.mark.parametrize("activation", ["relu", "swiglu"])
+    def test_forward_matryoshka(self, device, dtype, activation):
+        D_hidden, D_feedforward = 10, 20
+        layer_norm_mlp = NormMLP(D_hidden, D_feedforward, activation=activation).to(device)
+        x = torch.randn(D_hidden, device=device, dtype=dtype)
+        with torch.autocast(device_type=device.type, dtype=dtype, enabled=True):
+            y1 = layer_norm_mlp(x)
+            y2 = layer_norm_mlp(x, D_feedforward // 2)
+        assert y1.shape == y2.shape
+        assert not torch.allclose(y1, y2)
