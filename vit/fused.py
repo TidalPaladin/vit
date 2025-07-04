@@ -40,6 +40,11 @@ class NormLinear(nn.Module):
         return norm_linear(x, self.linear.weight, self.linear.bias, self.norm.weight, self.norm.eps or 1e-5)
 
 
+def _check_ffn_size(ffn_size: int, desired_ffn_size: int) -> None:
+    if desired_ffn_size > ffn_size:
+        raise ValueError(f"FFN size {ffn_size} is smaller than desired FFN size {desired_ffn_size}")
+
+
 @dataclass
 class _MLPParams:
     fc1_weight: Tensor
@@ -56,10 +61,11 @@ class _MLPParams:
     def matryoshka_slice(self, ffn_size: int) -> "_MLPParams":
         if ffn_size == self.ffn_size:
             return self
+        _check_ffn_size(self.ffn_size, ffn_size)
         fc1_weight = self.fc1_weight[:ffn_size, :]
         fc1_bias = self.fc1_bias[:ffn_size] if self.fc1_bias is not None else None
         fc2_weight = self.fc2_weight[:, :ffn_size]
-        fc2_bias = self.fc2_bias[:ffn_size] if self.fc2_bias is not None else None
+        fc2_bias = self.fc2_bias if self.fc2_bias is not None else None
         fc_lu_weight = self.fc_lu_weight[:ffn_size, :] if self.fc_lu_weight is not None else None
         fc_lu_bias = self.fc_lu_bias[:ffn_size] if self.fc_lu_bias is not None else None
         return _MLPParams(fc1_weight, fc1_bias, fc2_weight, fc2_bias, fc_lu_weight, fc_lu_bias)

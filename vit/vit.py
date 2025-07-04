@@ -7,7 +7,9 @@ import torch.nn as nn
 import yaml
 from torch import Tensor
 
+from .fused import _check_ffn_size
 from .head import HeadConfig
+from .matryoshka import MatryoshkaConfig
 from .patch_embed import PatchEmbed2d, PatchEmbed3d
 from .pos_enc import PositionEncoder
 from .tokens import apply_mask, create_mask
@@ -57,6 +59,9 @@ class ViTConfig:
 
     # Heads
     heads: Dict[str, HeadConfig] = field(default_factory=dict)
+
+    # Matryoshka
+    matryoshka_configs: Dict[str, MatryoshkaConfig] = field(default_factory=dict)
 
     def instantiate(self) -> "ViT":
         return ViT(self)
@@ -206,16 +211,28 @@ class ViT(nn.Module):
     def _drop_register_tokens(self, x: Tensor) -> Tensor:
         return x[..., self.config.num_register_tokens :, :]
 
-    def forward(self, x: Tensor, mask: Tensor | None = None, return_register_tokens: bool = False) -> Tensor:
+    def forward(
+        self,
+        x: Tensor,
+        mask: Tensor | None = None,
+        return_register_tokens: bool = False,
+        ffn_size: int | None = None,
+        skip_every_n_layers: int | None = None,
+    ) -> Tensor:
+        skip_every_n_layers = skip_every_n_layers or 0
+        ffn_size = ffn_size or self.config.ffn_hidden_size
+        _check_ffn_size(self.config.ffn_hidden_size, ffn_size)
+
         # Prepare transformer input
         x = self.stem(x)
         x = apply_mask(mask, x) if mask is not None else x
         x = self._apply_register_tokens(x)
 
         # Apply transformer
-        for block in self.blocks:
+        for i, block in enumerate(self.blocks):
             assert isinstance(block, TransformerEncoderLayer)
-            x = block(x)
+            if skip_every_n_layers == 0 or (i + 1) % skip_every_n_layers != 0:
+                x = block(x, ffn_size=ffn_size)
 
         # Prepare output
         x = self.output_norm(x)
@@ -253,6 +270,18 @@ class ViT(nn.Module):
         for block in self.blocks:
             layer = cast(nn.Module, block.self_attention)
             layer.requires_grad_(requires_grad)
+
+    def matryoshka_parameters(self) -> Dict[str, int]:
+        params: Dict[str, int] = {name: 0 for name in self.config.matryoshka_configs.keys()}
+        x = torch.randn(1, self.config.in_channels, *self.config.img_size, device=self.output_norm.weight.device)
+        for name, config in self.config.matryoshka_configs.items():
+            out = self(x, ffn_size=config.ffn_size, skip_every_n_layers=config.skip_every_n_layers)
+            out.sum().backward()
+            for p in self.parameters():
+                if p.grad is not None:
+                    params[name] += int((p.grad != 0).sum().item())
+                    p.grad = None
+        return params
 
 
 register_constructors()
