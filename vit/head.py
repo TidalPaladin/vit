@@ -103,6 +103,12 @@ class Head(nn.Module):
             case _:
                 raise ValueError(f"Invalid pool type: {pool_type}")
         self.proj = nn.Linear(hidden_size, out_dim)
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        self.proj.reset_parameters()
+        if isinstance(self.pool, AttentivePool):
+            self.pool.reset_parameters()
 
     def forward(self, x: Tensor) -> Tensor:
         if self.stop_gradient:
@@ -142,6 +148,13 @@ class MLPHead(nn.Module):
                 raise ValueError(f"Invalid pool type: {pool_type}")
         self.neck = NormMLP(hidden_size, ffn_hidden_size, activation=activation, dropout=dropout)
         self.proj = nn.Linear(hidden_size, out_dim)
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        self.proj.reset_parameters()
+        self.neck.reset_parameters()
+        if isinstance(self.pool, AttentivePool):
+            self.pool.reset_parameters()
 
     def forward(self, x: Tensor) -> Tensor:
         if self.stop_gradient:
