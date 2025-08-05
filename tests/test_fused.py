@@ -30,7 +30,7 @@ class TestNormLinear:
 class TestNormMLP:
 
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    @pytest.mark.parametrize("activation", ["relu", "silu", "gelu", "srelu", "reglu", "swiglu", "geglu"])
+    @pytest.mark.parametrize("activation", ["relu", "silu", "gelu", "srelu", "reglu", "swiglu", "geglu", "openswiglu"])
     def test_forward(self, device, dtype, activation):
         layer_norm_mlp = NormMLP(10, 20, activation=activation).to(device)
         x = torch.randn(10, device=device, dtype=dtype)

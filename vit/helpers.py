@@ -17,6 +17,21 @@ class SRelu(nn.Module):
         return srelu(x)
 
 
+# OpenAI SwiGLU variant
+@torch.compile(fullgraph=True)
+def openswiglu(x: Tensor, alpha: float = 1.702) -> Tensor:
+    return torch.sigmoid(alpha * x)
+
+
+class OpenSwiGLU(nn.Module):
+    def __init__(self, alpha: float = 1.702):
+        super().__init__()
+        self.alpha = alpha
+
+    def forward(self, x: Tensor) -> Tensor:
+        return openswiglu(x, self.alpha)
+
+
 def get_activation(activation: str) -> Callable[[Tensor], Tensor]:
     match activation:
         case "relu" | "reglu":
@@ -27,6 +42,8 @@ def get_activation(activation: str) -> Callable[[Tensor], Tensor]:
             return F.gelu
         case "srelu":
             return srelu
+        case "openswiglu":
+            return openswiglu
         case _:
             raise ValueError(f"Activation {activation} not supported")
 
@@ -41,5 +58,7 @@ def get_activation_module(activation: str) -> nn.Module:
             return nn.GELU()
         case "srelu":
             return SRelu()
+        case "openswiglu":
+            return OpenSwiGLU()
         case _:
             raise ValueError(f"Activation {activation} not supported")

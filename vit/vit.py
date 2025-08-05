@@ -50,6 +50,8 @@ class ViTConfig:
     num_register_tokens: int = 0
     pos_enc: PositionEncoder = "fourier"
     layer_scale: float | None = None
+    glu_limit: float | None = None
+    glu_extra_bias: float | None = None
 
     # Trainable blocks
     mlp_requires_grad: bool = True
@@ -129,6 +131,8 @@ class ViT(nn.Module):
             self.config.activation,
             self.config.drop_path_rate,
             layer_scale=self.config.layer_scale,
+            glu_limit=self.config.glu_limit,
+            glu_extra_bias=self.config.glu_extra_bias,
         )
 
     def create_decoder_layer(self) -> TransformerDecoderLayer:
@@ -142,6 +146,8 @@ class ViT(nn.Module):
             self.config.activation,
             self.config.drop_path_rate,
             layer_scale=self.config.layer_scale,
+            glu_limit=self.config.glu_limit,
+            glu_extra_bias=self.config.glu_extra_bias,
         )
 
     def create_cross_attention_layer(self) -> CrossAttentionTransformer:
@@ -155,6 +161,8 @@ class ViT(nn.Module):
             self.config.activation,
             self.config.drop_path_rate,
             layer_scale=self.config.layer_scale,
+            glu_limit=self.config.glu_limit,
+            glu_extra_bias=self.config.glu_extra_bias,
         )
 
     def create_mask(

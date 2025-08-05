@@ -22,6 +22,8 @@ class TransformerEncoderLayer(nn.Module):
         drop_path_rate: float = 0.0,
         eps: float = 1e-5,
         layer_scale: float | None = None,
+        glu_limit: float | None = None,
+        glu_extra_bias: float | None = None,
     ):
         super().__init__()
         self.drop_path_rate = drop_path_rate
@@ -33,7 +35,9 @@ class TransformerEncoderLayer(nn.Module):
             bias,
             eps,
         )
-        self.mlp = NormMLP(hidden_size, ffn_hidden_size, bias, activation, eps, hidden_dropout)
+        self.mlp = NormMLP(
+            hidden_size, ffn_hidden_size, bias, activation, eps, hidden_dropout, glu_limit, glu_extra_bias
+        )
         self.layer_scale_attn = (
             LayerScale(hidden_size, layer_scale, inplace=True) if layer_scale is not None else nn.Identity()
         )
@@ -70,6 +74,8 @@ class TransformerDecoderLayer(nn.Module):
         drop_path_rate: float = 0.0,
         eps: float = 1e-5,
         layer_scale: float | None = None,
+        glu_limit: float | None = None,
+        glu_extra_bias: float | None = None,
     ):
         super().__init__()
         self.drop_path_rate = drop_path_rate
@@ -89,7 +95,9 @@ class TransformerDecoderLayer(nn.Module):
             bias,
             eps,
         )
-        self.mlp = NormMLP(hidden_size, ffn_hidden_size, bias, activation, eps, hidden_dropout)
+        self.mlp = NormMLP(
+            hidden_size, ffn_hidden_size, bias, activation, eps, hidden_dropout, glu_limit, glu_extra_bias
+        )
         self.layer_scale_attn = (
             LayerScale(hidden_size, layer_scale, inplace=True) if layer_scale is not None else nn.Identity()
         )
@@ -132,6 +140,8 @@ class CrossAttentionTransformer(nn.Module):
         drop_path_rate: float = 0.0,
         eps: float = 1e-5,
         layer_scale: float | None = None,
+        glu_limit: float | None = None,
+        glu_extra_bias: float | None = None,
     ):
         super().__init__()
         self.drop_path_rate = drop_path_rate
@@ -143,7 +153,9 @@ class CrossAttentionTransformer(nn.Module):
             bias,
             eps,
         )
-        self.mlp = NormMLP(hidden_size, ffn_hidden_size, bias, activation, eps, hidden_dropout)
+        self.mlp = NormMLP(
+            hidden_size, ffn_hidden_size, bias, activation, eps, hidden_dropout, glu_limit, glu_extra_bias
+        )
         self.layer_scale_cross = (
             LayerScale(hidden_size, layer_scale, inplace=True) if layer_scale is not None else nn.Identity()
         )

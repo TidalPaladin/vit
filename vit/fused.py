@@ -83,19 +83,31 @@ def norm_mlp_glu(
     # fmt: off
     x: Tensor,
     fc1_weight: Tensor, fc1_bias: Tensor | None,
-    fc_lu_weight: Tensor, fc_lu_bias: Tensor | None,
     fc2_weight: Tensor, fc2_bias: Tensor | None,
     norm_weight: Tensor | None,
     activation: Callable[[Tensor], Tensor],
     eps: float,
     dropout: float,
     training: bool,
+    limit: float | None = None,
+    extra_bias: float | None = None,
     # fmt: on
 ) -> Tensor:
     if norm_weight is not None:
         x = F.rms_norm(x, x.shape[-1:], weight=norm_weight, eps=eps)
-    x = activation(F.linear(x, fc1_weight, fc1_bias)) * F.linear(x, fc_lu_weight, fc_lu_bias)
+
+    # FC1 - GLU
+    x = F.linear(x, fc1_weight, fc1_bias)
+    x_linear, x_glu = x.chunk(2, dim=-1)
+    if limit is not None:
+        x_linear = x_linear.clamp(min=-limit, max=limit)
+        x_glu = x_glu.clamp(min=None, max=limit)
+    if extra_bias is not None:
+        x_linear = x_linear + extra_bias
+    x = activation(x_glu) * x_linear
     x = F.dropout(x, p=dropout, training=training)
+
+    # FC2
     x = F.linear(x, fc2_weight, fc2_bias)
     x = F.dropout(x, p=dropout, training=training, inplace=True)
     return x
@@ -111,14 +123,23 @@ class NormMLP(nn.Module):
         activation: str = "gelu",
         eps: float = 1e-5,
         dropout: float = 0.1,
+        limit: float | None = None,
+        extra_bias: float | None = None,
     ):
         super().__init__()
         self.norm = nn.RMSNorm(hidden_size, eps=eps)
         self.fc1 = nn.Linear(hidden_size, ffn_hidden_size, bias=bias)
+        if activation.endswith("glu"):
+            self._is_glu = True
+            self.fc1 = nn.Linear(hidden_size, 2 * ffn_hidden_size, bias=bias)
+        else:
+            self._is_glu = False
+            self.fc1 = nn.Linear(hidden_size, ffn_hidden_size, bias=bias)
         self.fc2 = nn.Linear(ffn_hidden_size, hidden_size, bias=bias)
         self.dropout = nn.Dropout(dropout)
         self.activation = get_activation(activation)
-        self.fc_lu = nn.Linear(hidden_size, ffn_hidden_size, bias=bias) if activation.endswith("glu") else None
+        self.limit = limit
+        self.extra_bias = extra_bias
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
@@ -127,23 +148,21 @@ class NormMLP(nn.Module):
         self.fc2.reset_parameters()
         nn.init.trunc_normal_(self.fc1.weight, std=0.02)
         nn.init.trunc_normal_(self.fc2.weight, std=0.02)
-        if self.fc_lu is not None:
-            self.fc_lu.reset_parameters()
-            nn.init.trunc_normal_(self.fc_lu.weight, std=0.02)
 
     def forward(self, x: Tensor) -> Tensor:
-        if self.fc_lu is not None:
+        if self._is_glu:
             return norm_mlp_glu(
                 # fmt: off
                 x,
                 self.fc1.weight, self.fc1.bias,
-                self.fc_lu.weight, self.fc_lu.bias,
                 self.fc2.weight, self.fc2.bias,
                 self.norm.weight,
                 self.activation,
                 self.norm.eps or 1e-5,
                 self.dropout.p,
                 self.training,
+                self.limit,
+                self.extra_bias,
                 # fmt: on
             )
         else:
