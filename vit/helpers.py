@@ -20,7 +20,7 @@ class SRelu(nn.Module):
 # OpenAI SwiGLU variant
 @torch.compile(fullgraph=True)
 def openswiglu(x: Tensor, alpha: float = 1.702) -> Tensor:
-    return torch.sigmoid(alpha * x)
+    return x * torch.sigmoid(alpha * x)
 
 
 class OpenSwiGLU(nn.Module):
