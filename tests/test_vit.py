@@ -52,16 +52,17 @@ class TestViT:
     @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
     @pytest.mark.parametrize(
-        "glu_limit,glu_extra_bias",
+        "activation,glu_limit,glu_extra_bias",
         [
-            (None, None),
-            (7.0, 1.0),
+            ("srelu", None, None),
+            ("openswiglu", 7.0, 1.0),
         ],
     )
-    def test_forward(self, device, config, num_register_tokens, dtype, glu_limit, glu_extra_bias):
+    def test_forward(self, device, config, num_register_tokens, dtype, activation, glu_limit, glu_extra_bias):
         config = replace(
             config,
             num_register_tokens=num_register_tokens,
+            activation=activation,
             glu_limit=glu_limit,
             glu_extra_bias=glu_extra_bias,
         )
