@@ -262,5 +262,12 @@ class ViT(nn.Module):
             layer = cast(nn.Module, block.self_attention)
             layer.requires_grad_(requires_grad)
 
+    def backbone_requires_grad_(self, requires_grad: bool = True) -> None:
+        self.stem.requires_grad_(requires_grad)
+        self.blocks.requires_grad_(requires_grad)
+        self.output_norm.requires_grad_(requires_grad)
+        if self.register_tokens is not None:
+            self.register_tokens.requires_grad_(requires_grad)
+
 
 register_constructors()
