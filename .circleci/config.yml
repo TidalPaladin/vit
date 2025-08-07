@@ -32,7 +32,6 @@ jobs:
     run_tests:
         docker:
             - image: cimg/python:3.12-node
-        resource_class: xlarge
         steps:
             - checkout
             - restore_cache:
@@ -71,4 +70,5 @@ workflows:
     build_and_test:
         jobs:
             - check_code_quality
-            - run_tests
+            # Tests cannot be run on free tier due to OOM at build/install
+            #- run_tests 
