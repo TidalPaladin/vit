@@ -70,4 +70,5 @@ workflows:
     build_and_test:
         jobs:
             - check_code_quality
-            - run_tests
+            # Tests cannot be run on free tier due to OOM at build/install
+            #- run_tests 
