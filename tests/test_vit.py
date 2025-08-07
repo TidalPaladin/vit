@@ -136,6 +136,12 @@ class TestViT:
             assert_all_requires_grad(block.mlp)
             assert_none_requires_grad(block.self_attention)
 
+    def test_backbone_requires_grad(self, config):
+        model = ViT(config)
+        model.backbone_requires_grad_(False)
+        for name, param in model.named_parameters():
+            assert name.startswith("head") or not param.requires_grad, f"{name} is trainable"
+
     def test_with_head(self, device, config):
         config = replace(
             config,
