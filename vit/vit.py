@@ -52,6 +52,8 @@ class ViTConfig:
     layer_scale: float | None = None
     glu_limit: float | None = None
     glu_extra_bias: float | None = None
+    num_experts: int | None = None
+    moe_layers: Sequence[int] = field(default_factory=list)
 
     # Trainable blocks
     mlp_requires_grad: bool = True
@@ -59,6 +61,10 @@ class ViTConfig:
 
     # Heads
     heads: Dict[str, HeadConfig] = field(default_factory=dict)
+
+    def __post_init__(self):
+        if self.moe_layers and self.num_experts is None:
+            raise ValueError("num_experts must be set if moe_layers is not empty")
 
     def instantiate(self) -> "ViT":
         return ViT(self)
@@ -106,7 +112,14 @@ class ViT(nn.Module):
         else:
             self.register_tokens = None
 
-        self.blocks = nn.ModuleList([self.create_encoder_layer() for _ in range(config.depth)])
+        if config.moe_layers and config.num_experts is None:
+            raise ValueError("num_experts must be set if moe_layers is not empty")
+        self.blocks = nn.ModuleList(
+            [
+                self.create_encoder_layer(num_experts=config.num_experts if i in config.moe_layers else None)
+                for i in range(config.depth)
+            ]
+        )
         self.output_norm = nn.RMSNorm(config.hidden_size)
 
         self.mlp_requires_grad_(self.config.mlp_requires_grad)
@@ -120,7 +133,7 @@ class ViT(nn.Module):
     def config(self) -> ViTConfig:
         return self._config
 
-    def create_encoder_layer(self) -> TransformerEncoderLayer:
+    def create_encoder_layer(self, num_experts: int | None = None) -> TransformerEncoderLayer:
         return TransformerEncoderLayer(
             self.config.hidden_size,
             self.config.ffn_hidden_size,
@@ -133,9 +146,10 @@ class ViT(nn.Module):
             layer_scale=self.config.layer_scale,
             glu_limit=self.config.glu_limit,
             glu_extra_bias=self.config.glu_extra_bias,
+            num_experts=num_experts,
         )
 
-    def create_decoder_layer(self) -> TransformerDecoderLayer:
+    def create_decoder_layer(self, num_experts: int | None = None) -> TransformerDecoderLayer:
         return TransformerDecoderLayer(
             self.config.hidden_size,
             self.config.ffn_hidden_size,
@@ -148,9 +162,10 @@ class ViT(nn.Module):
             layer_scale=self.config.layer_scale,
             glu_limit=self.config.glu_limit,
             glu_extra_bias=self.config.glu_extra_bias,
+            num_experts=num_experts,
         )
 
-    def create_cross_attention_layer(self) -> CrossAttentionTransformer:
+    def create_cross_attention_layer(self, num_experts: int | None = None) -> CrossAttentionTransformer:
         return CrossAttentionTransformer(
             self.config.hidden_size,
             self.config.ffn_hidden_size,
@@ -163,6 +178,7 @@ class ViT(nn.Module):
             layer_scale=self.config.layer_scale,
             glu_limit=self.config.glu_limit,
             glu_extra_bias=self.config.glu_extra_bias,
+            num_experts=num_experts,
         )
 
     def create_mask(
