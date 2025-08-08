@@ -16,14 +16,11 @@ from .helpers import get_activation
         "aggressive_fusion": True,
     },
 )
-def dispatch(slots: Tensor, tokens: Tensor) -> Tensor:
-    # In dispatch queries are slots, keys and values are tokens
-    B, L, D = tokens.shape
-    S, _ = slots.shape
-    slots = slots.view(1, 1, S, D).expand(B, -1, -1, -1)
-    tokens = tokens.view(B, 1, L, D)
-    slots = F.scaled_dot_product_attention(slots, tokens, tokens, scale=1.0)
-    return slots.view(B, S, D)
+def batched_linear(x: Tensor, weight: Tensor, bias: Tensor | None) -> Tensor:
+    y = torch.einsum("...sio,...si->...so", weight, x)
+    if bias is not None:
+        y = y + bias
+    return y
 
 
 @torch.compile(
@@ -34,22 +31,37 @@ def dispatch(slots: Tensor, tokens: Tensor) -> Tensor:
         "aggressive_fusion": True,
     },
 )
-def combine(slots: Tensor, tokens: Tensor, moe_output: Tensor) -> Tensor:
-    # In combine queries are tokens, keys are slots, values are moe output
-    B, L, D = tokens.shape
-    S, _ = slots.shape
-    slots = slots.view(1, 1, S, D).expand(B, -1, -1, -1)
-    tokens = tokens.view(B, 1, L, D)
-    moe_output = moe_output.view(B, 1, S, D)
-    moe_output = F.scaled_dot_product_attention(tokens, slots, moe_output, scale=1.0)
-    return moe_output.view(B, L, D)
+def compute_dispatch_combine_weights(slots: Tensor, tokens: Tensor, scale: Tensor) -> tuple[Tensor, Tensor]:
+    tokens = F.normalize(tokens, dim=-1, eps=1e-5)
+    slots = F.normalize(slots, dim=-1, eps=1e-5) * scale.unsqueeze(-1)
+    logits = torch.einsum("...sd, ...td->...st", slots, tokens)
+    dispatch = logits.softmax(dim=-1)
+    combine = logits.softmax(dim=-2)
+    return dispatch, combine
 
 
-def batched_linear(x: Tensor, weight: Tensor, bias: Tensor | None) -> Tensor:
-    y = torch.einsum("...sio,...si->...so", weight, x)
-    if bias is not None:
-        y = y + bias
-    return y
+@torch.compile(
+    fullgraph=True,
+    options={
+        "layout_optimization": True,
+        "epilogue_fusion": True,
+        "aggressive_fusion": True,
+    },
+)
+def dispatch(tokens: Tensor, dispatch_weights: Tensor) -> Tensor:
+    return torch.einsum("...td, ...st->...sd", tokens, dispatch_weights)
+
+
+@torch.compile(
+    fullgraph=True,
+    options={
+        "layout_optimization": True,
+        "epilogue_fusion": True,
+        "aggressive_fusion": True,
+    },
+)
+def combine(moe_output: Tensor, combine_weights: Tensor) -> Tensor:
+    return torch.einsum("...sd, ...st->...td", moe_output, combine_weights)
 
 
 @torch.compile(
@@ -63,7 +75,7 @@ def batched_linear(x: Tensor, weight: Tensor, bias: Tensor | None) -> Tensor:
 )
 def norm_mlp_softmoe(
     # fmt: off
-    x: Tensor, slots: Tensor,
+    x: Tensor, slots: Tensor, scale: Tensor,
     fc1_weight: Tensor, fc1_bias: Tensor | None,
     fc2_weight: Tensor, fc2_bias: Tensor | None,
     norm_weight: Tensor | None,
@@ -76,13 +88,15 @@ def norm_mlp_softmoe(
     if norm_weight is not None:
         x = F.rms_norm(x, x.shape[-1:], weight=norm_weight, eps=eps)
 
-    y = dispatch(slots, x)
+    dispatch_weights, combine_weights = compute_dispatch_combine_weights(slots, x, scale)
+    y = torch.einsum("...td, ...st->...sd", x, dispatch_weights)
     y = batched_linear(y, fc1_weight, fc1_bias)
     y = activation(y)
     y = F.dropout(y, p=dropout, training=training)
     y = batched_linear(y, fc2_weight, fc2_bias)
     y = F.dropout(y, p=dropout, training=training, inplace=True)
-    return combine(slots, x, y)
+    y = torch.einsum("...sd, ...st->...td", y, combine_weights)
+    return y
 
 
 @torch.compile(
@@ -96,7 +110,7 @@ def norm_mlp_softmoe(
 )
 def norm_mlp_softmoe_glu(
     # fmt: off
-    x: Tensor, slots: Tensor,
+    x: Tensor, slots: Tensor, scale: Tensor,
     fc1_weight: Tensor, fc1_bias: Tensor | None,
     fc2_weight: Tensor, fc2_bias: Tensor | None,
     norm_weight: Tensor | None,
@@ -111,8 +125,10 @@ def norm_mlp_softmoe_glu(
     if norm_weight is not None:
         x = F.rms_norm(x, x.shape[-1:], weight=norm_weight, eps=eps)
 
+    dispatch_weights, combine_weights = compute_dispatch_combine_weights(slots, x, scale)
+    y = torch.einsum("...td, ...st->...sd", x, dispatch_weights)
+
     # FC1 - GLU
-    y = dispatch(slots, x)
     y = batched_linear(y, fc1_weight, fc1_bias)
     y_linear, y_glu = y.chunk(2, dim=-1)
     if limit is not None:
@@ -126,7 +142,9 @@ def norm_mlp_softmoe_glu(
     # FC2
     y = batched_linear(y, fc2_weight, fc2_bias)
     y = F.dropout(y, p=dropout, training=training, inplace=True)
-    return combine(slots, x, y)
+
+    y = torch.einsum("...sd, ...st->...td", y, combine_weights)
+    return y
 
 
 class SoftMoE(nn.Module):
@@ -157,6 +175,7 @@ class SoftMoE(nn.Module):
         self.fc2_weight = nn.Parameter(torch.randn(num_slots, ffn_hidden_size, hidden_size))
         self.fc2_bias = nn.Parameter(torch.zeros(num_slots, hidden_size)) if bias else None
         self.slots = nn.Parameter(torch.empty(num_slots, hidden_size))
+        self.scale = nn.Parameter(torch.empty(num_slots))
 
         self.dropout = nn.Dropout(dropout)
         self.activation = get_activation(activation)
@@ -167,6 +186,7 @@ class SoftMoE(nn.Module):
     def reset_parameters(self) -> None:
         self.norm.reset_parameters()
         nn.init.normal_(self.slots, std=0.02)
+        nn.init.ones_(self.scale)
         nn.init.trunc_normal_(self.fc1_weight, std=0.02)
         nn.init.trunc_normal_(self.fc2_weight, std=0.02)
         if self.fc1_bias is not None:
@@ -178,7 +198,7 @@ class SoftMoE(nn.Module):
         if self._is_glu:
             return norm_mlp_softmoe_glu(
                 # fmt: off
-                x, self.slots,
+                x, self.slots, self.scale,
                 self.fc1_weight, self.fc1_bias,
                 self.fc2_weight, self.fc2_bias,
                 self.norm.weight,
@@ -193,7 +213,7 @@ class SoftMoE(nn.Module):
         else:
             return norm_mlp_softmoe(
                 # fmt: off
-                x, self.slots,
+                x, self.slots, self.scale,
                 self.fc1_weight, self.fc1_bias,
                 self.fc2_weight, self.fc2_bias,
                 self.norm.weight,

@@ -5,7 +5,7 @@ from torch.testing import assert_close
 from vit.soft_moe import SoftMoE
 
 
-class TestNormMLP:
+class TestSoftMoE:
 
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
     @pytest.mark.parametrize("activation", ["srelu", "openswiglu"])
