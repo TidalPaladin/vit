@@ -58,13 +58,18 @@ class TestViT:
             ("openswiglu", 7.0, 1.0),
         ],
     )
-    def test_forward(self, device, config, num_register_tokens, dtype, activation, glu_limit, glu_extra_bias):
+    @pytest.mark.parametrize("num_experts,moe_layers", [(None, []), (4, [0, 2])])
+    def test_forward(
+        self, device, config, num_register_tokens, dtype, activation, glu_limit, glu_extra_bias, num_experts, moe_layers
+    ):
         config = replace(
             config,
             num_register_tokens=num_register_tokens,
             activation=activation,
             glu_limit=glu_limit,
             glu_extra_bias=glu_extra_bias,
+            num_experts=num_experts,
+            moe_layers=moe_layers,
         )
         x = torch.randn(2, 3, *config.img_size, device=device)
         model = ViT(config).to(device)

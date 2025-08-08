@@ -6,6 +6,7 @@ from .attention import CrossAttention, SelfAttention
 from .drop_path import drop_path
 from .fused import NormMLP
 from .layer_scale import LayerScale
+from .soft_moe import SoftMoE
 
 
 class TransformerEncoderLayer(nn.Module):
@@ -24,6 +25,7 @@ class TransformerEncoderLayer(nn.Module):
         layer_scale: float | None = None,
         glu_limit: float | None = None,
         glu_extra_bias: float | None = None,
+        num_experts: int | None = None,
     ):
         super().__init__()
         self.drop_path_rate = drop_path_rate
@@ -35,9 +37,22 @@ class TransformerEncoderLayer(nn.Module):
             bias,
             eps,
         )
-        self.mlp = NormMLP(
-            hidden_size, ffn_hidden_size, bias, activation, eps, hidden_dropout, glu_limit, glu_extra_bias
-        )
+        if num_experts is None:
+            self.mlp = NormMLP(
+                hidden_size, ffn_hidden_size, bias, activation, eps, hidden_dropout, glu_limit, glu_extra_bias
+            )
+        else:
+            self.mlp = SoftMoE(
+                hidden_size,
+                ffn_hidden_size,
+                num_experts,
+                bias,
+                activation,
+                eps,
+                hidden_dropout,
+                glu_limit,
+                glu_extra_bias,
+            )
         self.layer_scale_attn = (
             LayerScale(hidden_size, layer_scale, inplace=True) if layer_scale is not None else nn.Identity()
         )
@@ -76,6 +91,7 @@ class TransformerDecoderLayer(nn.Module):
         layer_scale: float | None = None,
         glu_limit: float | None = None,
         glu_extra_bias: float | None = None,
+        num_experts: int | None = None,
     ):
         super().__init__()
         self.drop_path_rate = drop_path_rate
@@ -95,9 +111,22 @@ class TransformerDecoderLayer(nn.Module):
             bias,
             eps,
         )
-        self.mlp = NormMLP(
-            hidden_size, ffn_hidden_size, bias, activation, eps, hidden_dropout, glu_limit, glu_extra_bias
-        )
+        if num_experts is None:
+            self.mlp = NormMLP(
+                hidden_size, ffn_hidden_size, bias, activation, eps, hidden_dropout, glu_limit, glu_extra_bias
+            )
+        else:
+            self.mlp = SoftMoE(
+                hidden_size,
+                ffn_hidden_size,
+                num_experts,
+                bias,
+                activation,
+                eps,
+                hidden_dropout,
+                glu_limit,
+                glu_extra_bias,
+            )
         self.layer_scale_attn = (
             LayerScale(hidden_size, layer_scale, inplace=True) if layer_scale is not None else nn.Identity()
         )
@@ -142,6 +171,7 @@ class CrossAttentionTransformer(nn.Module):
         layer_scale: float | None = None,
         glu_limit: float | None = None,
         glu_extra_bias: float | None = None,
+        num_experts: int | None = None,
     ):
         super().__init__()
         self.drop_path_rate = drop_path_rate
@@ -153,9 +183,22 @@ class CrossAttentionTransformer(nn.Module):
             bias,
             eps,
         )
-        self.mlp = NormMLP(
-            hidden_size, ffn_hidden_size, bias, activation, eps, hidden_dropout, glu_limit, glu_extra_bias
-        )
+        if num_experts is None:
+            self.mlp = NormMLP(
+                hidden_size, ffn_hidden_size, bias, activation, eps, hidden_dropout, glu_limit, glu_extra_bias
+            )
+        else:
+            self.mlp = SoftMoE(
+                hidden_size,
+                ffn_hidden_size,
+                num_experts,
+                bias,
+                activation,
+                eps,
+                hidden_dropout,
+                glu_limit,
+                glu_extra_bias,
+            )
         self.layer_scale_cross = (
             LayerScale(hidden_size, layer_scale, inplace=True) if layer_scale is not None else nn.Identity()
         )
