@@ -5,17 +5,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
+from .attention import _permute_and_fold_head, _unfold_head_and_permute
 from .helpers import get_activation
 
 
-@torch.compile(
-    fullgraph=True,
-    options={
-        "layout_optimization": True,
-        "epilogue_fusion": True,
-        "aggressive_fusion": True,
-    },
-)
 def batched_linear(x: Tensor, weight: Tensor, bias: Tensor | None) -> Tensor:
     y = torch.einsum("...sio,...si->...so", weight, x)
     if bias is not None:
@@ -23,45 +16,38 @@ def batched_linear(x: Tensor, weight: Tensor, bias: Tensor | None) -> Tensor:
     return y
 
 
-@torch.compile(
-    fullgraph=True,
-    options={
-        "layout_optimization": True,
-        "epilogue_fusion": True,
-        "aggressive_fusion": True,
-    },
-)
-def compute_dispatch_combine_weights(slots: Tensor, tokens: Tensor, scale: Tensor) -> tuple[Tensor, Tensor]:
-    tokens = F.normalize(tokens, dim=-1, eps=1e-5)
+def dispatch(tokens: Tensor, slots: Tensor, scale: Tensor) -> Tensor:
+    # FIXME: placeholder for proper head_dim selection
+    if tokens.shape[-1] % 64 == 0:
+        head_dim = 64
+    elif tokens.shape[-1] % 32 == 0:
+        head_dim = 32
+    else:
+        head_dim = 16
+    norm_tokens = F.normalize(tokens, dim=-1, eps=1e-5)
     slots = F.normalize(slots, dim=-1, eps=1e-5) * scale.unsqueeze(-1)
-    logits = torch.einsum("...sd, ...td->...st", slots, tokens)
-    dispatch = logits.softmax(dim=-1)
-    combine = logits.softmax(dim=-2)
-    return dispatch, combine
+    tokens = _unfold_head_and_permute(tokens, head_dim=head_dim)
+    norm_tokens = _unfold_head_and_permute(norm_tokens, head_dim=head_dim)
+    slots = _unfold_head_and_permute(slots.unsqueeze(0), head_dim=head_dim)
+    slots = F.scaled_dot_product_attention(slots, norm_tokens, tokens, scale=1.0)
+    return _permute_and_fold_head(slots)
 
 
-@torch.compile(
-    fullgraph=True,
-    options={
-        "layout_optimization": True,
-        "epilogue_fusion": True,
-        "aggressive_fusion": True,
-    },
-)
-def dispatch(tokens: Tensor, dispatch_weights: Tensor) -> Tensor:
-    return torch.einsum("...td, ...st->...sd", tokens, dispatch_weights)
-
-
-@torch.compile(
-    fullgraph=True,
-    options={
-        "layout_optimization": True,
-        "epilogue_fusion": True,
-        "aggressive_fusion": True,
-    },
-)
-def combine(moe_output: Tensor, combine_weights: Tensor) -> Tensor:
-    return torch.einsum("...sd, ...st->...td", moe_output, combine_weights)
+def combine(moe_output: Tensor, slots: Tensor, tokens: Tensor, scale: Tensor) -> Tensor:
+    # FIXME: placeholder for proper head_dim selection
+    if tokens.shape[-1] % 64 == 0:
+        head_dim = 64
+    elif tokens.shape[-1] % 32 == 0:
+        head_dim = 32
+    else:
+        head_dim = 16
+    norm_tokens = F.normalize(tokens, dim=-1, eps=1e-5)
+    slots = F.normalize(slots, dim=-1, eps=1e-5) * scale.unsqueeze(-1)
+    norm_tokens = _unfold_head_and_permute(norm_tokens, head_dim=head_dim)
+    slots = _unfold_head_and_permute(slots.unsqueeze(0), head_dim=head_dim)
+    moe_output = _unfold_head_and_permute(moe_output, head_dim=head_dim)
+    moe_output = F.scaled_dot_product_attention(norm_tokens, slots, moe_output, scale=1.0)
+    return _permute_and_fold_head(moe_output)
 
 
 @torch.compile(
@@ -88,14 +74,13 @@ def norm_mlp_softmoe(
     if norm_weight is not None:
         x = F.rms_norm(x, x.shape[-1:], weight=norm_weight, eps=eps)
 
-    dispatch_weights, combine_weights = compute_dispatch_combine_weights(slots, x, scale)
-    y = torch.einsum("...td, ...st->...sd", x, dispatch_weights)
+    y = dispatch(x, slots, scale)
     y = batched_linear(y, fc1_weight, fc1_bias)
     y = activation(y)
     y = F.dropout(y, p=dropout, training=training)
     y = batched_linear(y, fc2_weight, fc2_bias)
     y = F.dropout(y, p=dropout, training=training, inplace=True)
-    y = torch.einsum("...sd, ...st->...td", y, combine_weights)
+    y = combine(y, slots, x, scale)
     return y
 
 
@@ -125,8 +110,7 @@ def norm_mlp_softmoe_glu(
     if norm_weight is not None:
         x = F.rms_norm(x, x.shape[-1:], weight=norm_weight, eps=eps)
 
-    dispatch_weights, combine_weights = compute_dispatch_combine_weights(slots, x, scale)
-    y = torch.einsum("...td, ...st->...sd", x, dispatch_weights)
+    y = dispatch(x, slots, scale)
 
     # FC1 - GLU
     y = batched_linear(y, fc1_weight, fc1_bias)
@@ -143,7 +127,7 @@ def norm_mlp_softmoe_glu(
     y = batched_linear(y, fc2_weight, fc2_bias)
     y = F.dropout(y, p=dropout, training=training, inplace=True)
 
-    y = torch.einsum("...sd, ...st->...td", y, combine_weights)
+    y = combine(y, slots, x, scale)
     return y
 
 
