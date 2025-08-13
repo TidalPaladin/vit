@@ -1,11 +1,11 @@
 # ViT
 
 Implementation of Vision Transformer (ViT) in native PyTorch, accelerated by `torch.compile`.
-Supports modern enhancements like RMSNorm, SwiGLU, register tokens, and different positional encodings.
+Supports modern enhancements like RMSNorm, SwiGLU, Squared ReLU, register tokens, and different positional encodings. This implementation does not incorporate a `CLS` token.
 
 ## Installation
 
-The PyTorch backend is easily installable like a normal repository
+This library can be installed with the following command
 
 ```bash
 pip install vit @ git+https://github.com/TidalPaladin/vit.git
@@ -14,7 +14,8 @@ pip install vit @ git+https://github.com/TidalPaladin/vit.git
 ## Usage
 
 ```python
-from vit import ViTConfig
+import torch
+from vit import ViTConfig, HeadConfig
 
 # Create ViT-B/14, RMSNorm + SwiGLU, no biases
 config = ViTConfig(
@@ -31,9 +32,22 @@ config = ViTConfig(
     activation="swiglu", # or srelu, gelu, etc.
     drop_path_rate=0.1,
     num_register_tokens=16,
-    pos_emb="fourier",
+    pos_enc="fourier",
+    layer_scale=1e-5,
+    heads={
+        "cls": HeadConfig(pool_type="attentive", out_dim=10)
+    }
 )
 model = config.instantiate()
+
+# Forward pass for features
+B, C, H, W = 1, 3, 224, 224
+x = torch.randn(B, C, H, W)
+features = model(x) # B, L, D
+features_with_register_tokens = model(x, return_register_tokens=True)
+
+# Apply classification head
+logits = model.heads["cls"](features) # B, 10
 ```
 
 ## References
