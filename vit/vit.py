@@ -233,6 +233,12 @@ class ViT(nn.Module):
         x = self._apply_register_tokens(x)
 
         rope = self.rope(H=H, W=W) if self.rope is not None else None
+        if mask is not None and rope is not None:
+            sin, cos = rope
+            B = x.shape[0]
+            sin = apply_mask(mask, sin[None].expand(B, -1, -1))
+            cos = apply_mask(mask, cos[None].expand(B, -1, -1))
+            rope = (sin[:, None, ...], cos[:, None, ...])
 
         # Apply transformer
         for block in self.blocks:
