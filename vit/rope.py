@@ -120,6 +120,7 @@ class RopePositionEmbedding(nn.Module):
             periods = periods * self.max_period  # range [min_period, max_period]
         self.periods.data = periods
 
+
 def rope_rotate_half(x: Tensor) -> Tensor:
     # x:   [ x0  x1  x2  x3  x4  x5]
     # out: [-x3 -x4 -x5  x0  x1  x2]
@@ -135,22 +136,22 @@ def rope_apply(x: Tensor, sin: Tensor, cos: Tensor) -> Tensor:
 
 
 def apply_rope(q: Tensor, k: Tensor, rope: Tensor | tuple[Tensor, Tensor]) -> tuple[Tensor, Tensor]:
-        # All operations will use the dtype of rope, the output is cast back to the dtype of q and k
-        q_dtype = q.dtype
-        k_dtype = k.dtype
-        sin, cos = rope
-        rope_dtype = sin.dtype
-        q = q.to(dtype=rope_dtype)
-        k = k.to(dtype=rope_dtype)
-        N = q.shape[-2]
-        prefix = N - sin.shape[-2]
-        assert prefix >= 0
-        q_prefix = q[:, :, :prefix, :]
-        q = rope_apply(q[:, :, prefix:, :], sin, cos)  # [B, head, hw, D//head]
-        q = torch.cat((q_prefix, q), dim=-2)  # [B, head, N, D//head]
-        k_prefix = k[:, :, :prefix, :]
-        k = rope_apply(k[:, :, prefix:, :], sin, cos)  # [B, head, hw, D//head]
-        k = torch.cat((k_prefix, k), dim=-2)  # [B, head, N, D//head]
-        q = q.to(dtype=q_dtype)
-        k = k.to(dtype=k_dtype)
-        return q, k
+    # All operations will use the dtype of rope, the output is cast back to the dtype of q and k
+    q_dtype = q.dtype
+    k_dtype = k.dtype
+    sin, cos = rope
+    rope_dtype = sin.dtype
+    q = q.to(dtype=rope_dtype)
+    k = k.to(dtype=rope_dtype)
+    N = q.shape[-2]
+    prefix = N - sin.shape[-2]
+    assert prefix >= 0
+    q_prefix = q[:, :, :prefix, :]
+    q = rope_apply(q[:, :, prefix:, :], sin, cos)  # [B, head, hw, D//head]
+    q = torch.cat((q_prefix, q), dim=-2)  # [B, head, N, D//head]
+    k_prefix = k[:, :, :prefix, :]
+    k = rope_apply(k[:, :, prefix:, :], sin, cos)  # [B, head, hw, D//head]
+    k = torch.cat((k_prefix, k), dim=-2)  # [B, head, N, D//head]
+    q = q.to(dtype=q_dtype)
+    k = k.to(dtype=k_dtype)
+    return q, k

@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from .rope import apply_rope, RopePositionEmbedding
+from .rope import apply_rope
 
 
 # torch.compile has difficulty with einops.rearrange, so we use our own implementation
@@ -214,6 +214,7 @@ class SelfAttention(nn.Module):
             self.attention_dropout.p,
             self.dropout.p,
             self.training,
+            rope,
             # fmt: on
         )
 
@@ -260,7 +261,9 @@ class CrossAttention(nn.Module):
         nn.init.trunc_normal_(self.q_proj.weight, std=0.02)
         nn.init.trunc_normal_(self.kv_proj.weight, std=0.02)
 
-    def forward(self, q: Tensor, kv: Tensor, attn_mask: Tensor | None = None, rope: tuple[Tensor, Tensor] | None = None) -> Tensor:
+    def forward(
+        self, q: Tensor, kv: Tensor, attn_mask: Tensor | None = None, rope: tuple[Tensor, Tensor] | None = None
+    ) -> Tensor:
         return attention_q_kv_packed(
             # fmt: off
             q, kv,
