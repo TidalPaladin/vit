@@ -73,6 +73,15 @@ class TestViT:
         L = math.prod(model.stem.tokenized_size(config.img_size))
         assert out.shape == (2, L, 128)
 
+    def test_forward_with_rope(self, device, config):
+        x = torch.randn(2, 3, *config.img_size, device=device)
+        config = replace(config, use_rope=True)
+        model = ViT(config).to(device)
+        with torch.autocast(device_type=device.type, dtype=torch.float32, enabled=True):
+            out = model(x)
+        L = math.prod(model.stem.tokenized_size(config.img_size))
+        assert out.shape == (2, L, 128)
+
     @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
     def test_forward_return_register_tokens(self, device, config, num_register_tokens, dtype):

@@ -11,6 +11,7 @@ from .head import HeadConfig
 from .patch_embed import PatchEmbed2d, PatchEmbed3d
 from .pos_enc import PositionEncoder
 from .tokens import apply_mask, create_mask
+from .rope import RopePositionEmbedding
 from .transformer import CrossAttentionTransformer, TransformerDecoderLayer, TransformerEncoderLayer
 
 
@@ -52,6 +53,7 @@ class ViTConfig:
     layer_scale: float | None = None
     glu_limit: float | None = None
     glu_extra_bias: float | None = None
+    use_rope: bool = False
 
     # Trainable blocks
     mlp_requires_grad: bool = True
@@ -98,6 +100,15 @@ class ViT(nn.Module):
             config.img_size,
             pos_enc=config.pos_enc,
         )
+
+        if config.use_rope:
+            self.rope = RopePositionEmbedding(
+                config.hidden_size,
+                num_heads=config.num_attention_heads,
+                rescale_coords=2.0,
+            )
+        else:
+            self.rope = None
 
         # Register tokens
         if config.num_register_tokens > 0:
@@ -216,14 +227,17 @@ class ViT(nn.Module):
 
     def forward(self, x: Tensor, mask: Tensor | None = None, return_register_tokens: bool = False) -> Tensor:
         # Prepare transformer input
+        H, W = self.stem.tokenized_size(x.shape[2:])
         x = self.stem(x)
         x = apply_mask(mask, x) if mask is not None else x
         x = self._apply_register_tokens(x)
 
+        rope = self.rope(H=H, W=W) if self.rope is not None else None
+
         # Apply transformer
         for block in self.blocks:
             assert isinstance(block, TransformerEncoderLayer)
-            x = block(x)
+            x = block(x, rope=rope)
 
         # Prepare output
         x = self.output_norm(x)
