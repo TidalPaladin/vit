@@ -27,7 +27,7 @@ def project_qkv_packed(
     w_norm: Tensor,
     head_dim: int,
     eps: float,
-    rope: tuple[Tensor, Tensor] | None = None,
+    rope: Tensor | None = None,
     # fmt: on
 ) -> Tuple[Tensor, Tensor, Tensor]:
     x = F.rms_norm(x, x.shape[-1:], w_norm, eps=eps)
@@ -35,7 +35,8 @@ def project_qkv_packed(
     q = _unfold_head_and_permute(q, head_dim)
     k = _unfold_head_and_permute(k, head_dim)
     if rope is not None:
-        q, k = apply_rope(q, k, rope)
+        q = apply_rope(q, rope)
+        k = apply_rope(k, rope)
     v = _unfold_head_and_permute(v, head_dim)
     return q, k, v
 
@@ -49,7 +50,8 @@ def project_q_kv_packed(
     w_norm: Tensor,
     head_dim: int,
     eps: float,
-    rope: tuple[Tensor, Tensor] | None = None,
+    rope_q: Tensor | None = None,
+    rope_k: Tensor | None = None,
     # fmt: on
 ) -> Tuple[Tensor, Tensor, Tensor]:
     q = F.rms_norm(q, q.shape[-1:], w_norm, eps=eps)
@@ -58,8 +60,10 @@ def project_q_kv_packed(
     q = _unfold_head_and_permute(q, head_dim)
     k = _unfold_head_and_permute(k, head_dim)
     v = _unfold_head_and_permute(v, head_dim)
-    if rope is not None:
-        q, k = apply_rope(q, k, rope)
+    if rope_q is not None:
+        q = apply_rope(q, rope_q)
+    if rope_k is not None:
+        k = apply_rope(k, rope_k)
     return q, k, v
 
 
@@ -76,7 +80,7 @@ def attention_qkv_packed(
     attention_dropout: float,
     dropout: float,
     training: bool,
-    rope: tuple[Tensor, Tensor] | None = None,
+    rope: Tensor | None = None,
     # fmt: on
 ) -> Tensor:
     q, k, v = project_qkv_packed(x, w_in, b_in, w_norm, head_dim, eps, rope)
@@ -104,10 +108,11 @@ def attention_q_kv_packed(
     attention_dropout: float,
     dropout: float,
     training: bool,
-    rope: tuple[Tensor, Tensor] | None = None,
+    rope_q: Tensor | None = None,
+    rope_k: Tensor | None = None,
     # fmt: on
 ) -> Tensor:
-    q, k, v = project_q_kv_packed(q, kv, w_q, b_q, w_kv, b_kv, w_norm, head_dim, eps, rope)
+    q, k, v = project_q_kv_packed(q, kv, w_q, b_q, w_kv, b_kv, w_norm, head_dim, eps, rope_q, rope_k)
     attention_dropout = 0.0 if not training else attention_dropout
     o = F.scaled_dot_product_attention(
         q, k, v, attn_mask=attn_mask, dropout_p=attention_dropout, is_causal=False, enable_gqa=True
@@ -150,7 +155,7 @@ def attention_weights_qkv_packed(
     w_norm: Tensor,
     head_dim: int,
     eps: float,
-    rope: tuple[Tensor, Tensor] | None = None,
+    rope: Tensor | None = None,
     # fmt: on
 ) -> Tensor:
     q, k, _ = project_qkv_packed(x, w_in, b_in, w_norm, head_dim, eps, rope)
@@ -167,10 +172,11 @@ def attention_weights_q_kv_packed(
     w_norm: Tensor,
     head_dim: int,
     eps: float,
-    rope: tuple[Tensor, Tensor] | None = None,
+    rope_q: Tensor | None = None,
+    rope_k: Tensor | None = None,
     # fmt: on
 ) -> Tensor:
-    q, k, _ = project_q_kv_packed(q, kv, w_q, b_q, w_kv, b_kv, w_norm, head_dim, eps, rope)
+    q, k, _ = project_q_kv_packed(q, kv, w_q, b_q, w_kv, b_kv, w_norm, head_dim, eps, rope_q, rope_k)
     return (q @ k.mT).softmax(dim=-1)
 
 
@@ -201,7 +207,7 @@ class SelfAttention(nn.Module):
         self.norm.reset_parameters()
         nn.init.trunc_normal_(self.qkv_proj.weight, std=0.02)
 
-    def forward(self, x: Tensor, attn_mask: Tensor | None = None, rope: tuple[Tensor, Tensor] | None = None) -> Tensor:
+    def forward(self, x: Tensor, attn_mask: Tensor | None = None, rope: Tensor | None = None) -> Tensor:
         return attention_qkv_packed(
             # fmt: off
             x,
@@ -218,7 +224,7 @@ class SelfAttention(nn.Module):
             # fmt: on
         )
 
-    def forward_weights(self, x: Tensor, rope: tuple[Tensor, Tensor] | None = None) -> Tensor:
+    def forward_weights(self, x: Tensor, rope: Tensor | None = None) -> Tensor:
         return attention_weights_qkv_packed(
             # fmt: off
             x,
@@ -262,7 +268,12 @@ class CrossAttention(nn.Module):
         nn.init.trunc_normal_(self.kv_proj.weight, std=0.02)
 
     def forward(
-        self, q: Tensor, kv: Tensor, attn_mask: Tensor | None = None, rope: tuple[Tensor, Tensor] | None = None
+        self,
+        q: Tensor,
+        kv: Tensor,
+        attn_mask: Tensor | None = None,
+        rope_q: Tensor | None = None,
+        rope_k: Tensor | None = None,
     ) -> Tensor:
         return attention_q_kv_packed(
             # fmt: off
@@ -277,11 +288,14 @@ class CrossAttention(nn.Module):
             self.attention_dropout.p,
             self.dropout.p,
             self.training,
-            rope,
+            rope_q,
+            rope_k,
             # fmt: on
         )
 
-    def forward_weights(self, q: Tensor, kv: Tensor, rope: tuple[Tensor, Tensor] | None = None) -> Tensor:
+    def forward_weights(
+        self, q: Tensor, kv: Tensor, rope_q: Tensor | None = None, rope_k: Tensor | None = None
+    ) -> Tensor:
         return attention_weights_q_kv_packed(
             # fmt: off
             q, kv,
@@ -290,7 +304,8 @@ class CrossAttention(nn.Module):
             self.norm.weight,
             self._head_dim,
             self.norm.eps or 1e-5,
-            rope,
+            rope_q,
+            rope_k,
             # fmt: on
         )
 

@@ -54,7 +54,7 @@ class RopePositionEmbedding(nn.Module):
         )
         self._init_weights()
 
-    def forward(self, *, H: int, W: int) -> tuple[Tensor, Tensor]:
+    def forward(self, *, H: int, W: int) -> Tensor:
         device = self.periods.device
         dtype = self.dtype
         dd = {"device": device, "dtype": dtype}
@@ -102,8 +102,7 @@ class RopePositionEmbedding(nn.Module):
         angles = angles.tile(2)  # [HW, D]
         cos = torch.cos(angles)  # [HW, D]
         sin = torch.sin(angles)  # [HW, D]
-
-        return (sin, cos)  # 2 * [HW, D]
+        return torch.stack([sin, cos], dim=0)
 
     def _init_weights(self):
         device = self.periods.device
@@ -122,36 +121,27 @@ class RopePositionEmbedding(nn.Module):
 
 
 def rope_rotate_half(x: Tensor) -> Tensor:
-    # x:   [ x0  x1  x2  x3  x4  x5]
-    # out: [-x3 -x4 -x5  x0  x1  x2]
     x1, x2 = x.chunk(2, dim=-1)
     return torch.cat([-x2, x1], dim=-1)
 
 
 def rope_apply(x: Tensor, sin: Tensor, cos: Tensor) -> Tensor:
-    # x:   [..., D], eg [x0,     x1,   x2,   x3,   x4,   x5]
-    # sin: [..., D], eg [sin0, sin1, sin2, sin0, sin1, sin2]
-    # cos: [..., D], eg [cos0, cos1, cos2, cos0, cos1, cos2]
     return (x * cos) + (rope_rotate_half(x) * sin)
 
 
-def apply_rope(q: Tensor, k: Tensor, rope: Tensor | tuple[Tensor, Tensor]) -> tuple[Tensor, Tensor]:
-    # All operations will use the dtype of rope, the output is cast back to the dtype of q and k
-    q_dtype = q.dtype
-    k_dtype = k.dtype
+def apply_rope(x: Tensor, rope: Tensor) -> Tensor:
+    # Use rope dtype for operation
     sin, cos = rope
-    rope_dtype = sin.dtype
-    q = q.to(dtype=rope_dtype)
-    k = k.to(dtype=rope_dtype)
-    N = q.shape[-2]
-    prefix = N - sin.shape[-2]
-    assert prefix >= 0
-    q_prefix = q[:, :, :prefix, :]
-    q = rope_apply(q[:, :, prefix:, :], sin, cos)  # [B, head, hw, D//head]
-    q = torch.cat((q_prefix, q), dim=-2)  # [B, head, N, D//head]
-    k_prefix = k[:, :, :prefix, :]
-    k = rope_apply(k[:, :, prefix:, :], sin, cos)  # [B, head, hw, D//head]
-    k = torch.cat((k_prefix, k), dim=-2)  # [B, head, N, D//head]
-    q = q.to(dtype=q_dtype)
-    k = k.to(dtype=k_dtype)
-    return q, k
+    orig_dtype = x.dtype
+    x = x.type_as(rope)
+
+    # Get prefix length
+    L = x.shape[-2]
+    prefix_length = L - sin.shape[-2]
+    assert prefix_length >= 0
+
+    # Prefix is not rotated, everything after is
+    prefix = x[:, :, :prefix_length, :]
+    x = rope_apply(x[:, :, prefix_length:, :], sin, cos)
+    x = torch.cat((prefix, x), dim=-2)
+    return x.to(orig_dtype)

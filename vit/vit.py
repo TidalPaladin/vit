@@ -227,18 +227,25 @@ class ViT(nn.Module):
 
     def forward(self, x: Tensor, mask: Tensor | None = None, return_register_tokens: bool = False) -> Tensor:
         # Prepare transformer input
-        H, W = self.stem.tokenized_size(x.shape[2:])
+        tokenized_size = self.stem.tokenized_size(cast(Any, x.shape[2:]))
         x = self.stem(x)
         x = apply_mask(mask, x) if mask is not None else x
         x = self._apply_register_tokens(x)
 
-        rope = self.rope(H=H, W=W) if self.rope is not None else None
+        # Prepare RoPE sin/cos if needed
+        rope = None
+        if self.rope is not None:
+            if len(tokenized_size) == 2:
+                H, W = tokenized_size
+                rope = self.rope(H=H, W=W)
+            else:
+                raise ValueError(f"RoPE not supported for non-2D input, got {tokenized_size}")
         if mask is not None and rope is not None:
             sin, cos = rope
             B = x.shape[0]
             sin = apply_mask(mask, sin[None].expand(B, -1, -1))
             cos = apply_mask(mask, cos[None].expand(B, -1, -1))
-            rope = (sin[:, None, ...], cos[:, None, ...])
+            rope = torch.stack([sin[:, None, ...], cos[:, None, ...]], dim=0)
 
         # Apply transformer
         for block in self.blocks:
