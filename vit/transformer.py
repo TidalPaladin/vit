@@ -17,7 +17,8 @@ class TransformerEncoderLayer(nn.Module):
         num_attention_heads: int,
         hidden_dropout: float = 0.1,
         attention_dropout: float = 0.1,
-        bias: bool = True,
+        attention_bias: bool = True,
+        mlp_bias: bool = True,
         activation: str = "gelu",
         drop_path_rate: float = 0.0,
         eps: float = 1e-5,
@@ -32,11 +33,11 @@ class TransformerEncoderLayer(nn.Module):
             num_attention_heads,
             hidden_dropout,
             attention_dropout,
-            bias,
+            attention_bias,
             eps,
         )
         self.mlp = NormMLP(
-            hidden_size, ffn_hidden_size, bias, activation, eps, hidden_dropout, glu_limit, glu_extra_bias
+            hidden_size, ffn_hidden_size, mlp_bias, activation, eps, hidden_dropout, glu_limit, glu_extra_bias
         )
         self.layer_scale_attn = (
             LayerScale(hidden_size, layer_scale, inplace=True) if layer_scale is not None else nn.Identity()
@@ -69,7 +70,8 @@ class TransformerDecoderLayer(nn.Module):
         num_attention_heads: int,
         hidden_dropout: float = 0.1,
         attention_dropout: float = 0.1,
-        bias: bool = True,
+        attention_bias: bool = True,
+        mlp_bias: bool = True,
         activation: str = "gelu",
         drop_path_rate: float = 0.0,
         eps: float = 1e-5,
@@ -84,7 +86,7 @@ class TransformerDecoderLayer(nn.Module):
             num_attention_heads,
             hidden_dropout,
             attention_dropout,
-            bias,
+            attention_bias,
             eps,
         )
         self.cross_attention = CrossAttention(
@@ -92,11 +94,11 @@ class TransformerDecoderLayer(nn.Module):
             num_attention_heads,
             hidden_dropout,
             attention_dropout,
-            bias,
+            attention_bias,
             eps,
         )
         self.mlp = NormMLP(
-            hidden_size, ffn_hidden_size, bias, activation, eps, hidden_dropout, glu_limit, glu_extra_bias
+            hidden_size, ffn_hidden_size, mlp_bias, activation, eps, hidden_dropout, glu_limit, glu_extra_bias
         )
         self.layer_scale_attn = (
             LayerScale(hidden_size, layer_scale, inplace=True) if layer_scale is not None else nn.Identity()
@@ -135,7 +137,8 @@ class CrossAttentionTransformer(nn.Module):
         num_attention_heads: int,
         hidden_dropout: float = 0.1,
         attention_dropout: float = 0.1,
-        bias: bool = True,
+        attention_bias: bool = True,
+        mlp_bias: bool = True,
         activation: str = "gelu",
         drop_path_rate: float = 0.0,
         eps: float = 1e-5,
@@ -150,11 +153,11 @@ class CrossAttentionTransformer(nn.Module):
             num_attention_heads,
             hidden_dropout,
             attention_dropout,
-            bias,
+            attention_bias,
             eps,
         )
         self.mlp = NormMLP(
-            hidden_size, ffn_hidden_size, bias, activation, eps, hidden_dropout, glu_limit, glu_extra_bias
+            hidden_size, ffn_hidden_size, mlp_bias, activation, eps, hidden_dropout, glu_limit, glu_extra_bias
         )
         self.layer_scale_cross = (
             LayerScale(hidden_size, layer_scale, inplace=True) if layer_scale is not None else nn.Identity()
