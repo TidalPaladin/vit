@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Self, Sequence, Type, cast
+from typing import Any, Dict, Literal, Self, Sequence, Type, cast
 
 import torch
 import torch.nn as nn
@@ -54,7 +54,13 @@ class ViTConfig:
     layer_scale: float | None = None
     glu_limit: float | None = None
     glu_extra_bias: float | None = None
+
     use_rope: bool = False
+    rope_normalize_coords: Literal["min", "max", "separate"] = "separate"
+    rope_base: float = 100
+    rope_shift_coords: float | None = None
+    rope_jitter_coords: float | None = None
+    rope_rescale_coords: float | None = None
 
     # Trainable blocks
     mlp_requires_grad: bool = True
@@ -105,8 +111,11 @@ class ViT(nn.Module):
         if config.use_rope:
             self.rope = RopePositionEmbedding(
                 config.hidden_size,
+                base=config.rope_base,
                 num_heads=config.num_attention_heads,
-                rescale_coords=2.0,
+                rescale_coords=config.rope_rescale_coords,
+                shift_coords=config.rope_shift_coords,
+                jitter_coords=config.rope_jitter_coords,
             )
         else:
             self.rope = None
