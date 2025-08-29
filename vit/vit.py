@@ -45,7 +45,8 @@ class ViTConfig:
     num_attention_heads: int
     hidden_dropout: float = 0.1
     attention_dropout: float = 0.1
-    bias: bool = True
+    attention_bias: bool = True
+    mlp_bias: bool = True
     activation: str = "srelu"
     drop_path_rate: float = 0.0
     num_register_tokens: int = 0
@@ -138,7 +139,8 @@ class ViT(nn.Module):
             self.config.num_attention_heads,
             self.config.hidden_dropout,
             self.config.attention_dropout,
-            self.config.bias,
+            self.config.attention_bias,
+            self.config.mlp_bias,
             self.config.activation,
             self.config.drop_path_rate,
             layer_scale=self.config.layer_scale,
@@ -153,7 +155,8 @@ class ViT(nn.Module):
             self.config.num_attention_heads,
             self.config.hidden_dropout,
             self.config.attention_dropout,
-            self.config.bias,
+            self.config.attention_bias,
+            self.config.mlp_bias,
             self.config.activation,
             self.config.drop_path_rate,
             layer_scale=self.config.layer_scale,
@@ -168,7 +171,8 @@ class ViT(nn.Module):
             self.config.num_attention_heads,
             self.config.hidden_dropout,
             self.config.attention_dropout,
-            self.config.bias,
+            self.config.attention_bias,
+            self.config.mlp_bias,
             self.config.activation,
             self.config.drop_path_rate,
             layer_scale=self.config.layer_scale,
