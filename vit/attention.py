@@ -124,7 +124,8 @@ def attention_q_kv_packed(
 
 
 @torch.compile(fullgraph=True)
-def attentive_pool_weights(x: Tensor, w: Tensor, b: Tensor | None) -> Tensor:
+def attentive_pool_weights(x: Tensor, w: Tensor, b: Tensor | None, rope: Tensor | None = None) -> Tensor:
+    x = apply_rope(x, rope) if rope is not None else x
     weights = F.linear(x, w, b)  # B, S, H
     return F.softmax(weights, dim=-2)
 
@@ -136,10 +137,11 @@ def attentive_pool(
     w: Tensor, b: Tensor | None,
     w_v: Tensor, b_v: Tensor | None,
     head_dim: int,
+    rope: Tensor | None = None,
     # fmt: on
 ) -> Tensor:
     B, S, D = x.shape
-    weights = attentive_pool_weights(x, w, b)
+    weights = attentive_pool_weights(x, w, b, rope)
     weights = weights.unsqueeze(-1)  # B, S, H, 1
     v = F.linear(x, w_v, b_v).view(B, S, -1, head_dim)  # B, S, D
     v = (v * weights).sum(dim=1)
@@ -331,15 +333,16 @@ class AttentivePool(nn.Module):
         nn.init.trunc_normal_(self.weight.weight, std=0.02)
         nn.init.trunc_normal_(self.value.weight, std=0.02)
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Tensor, rope: Tensor | None = None) -> Tensor:
         return attentive_pool(
             # fmt: off
             x,
             self.weight.weight, self.weight.bias,
             self.value.weight, self.value.bias,
             self._head_dim,
+            rope,
             # fmt: on
         )
 
-    def forward_weights(self, x: Tensor) -> Tensor:
-        return attentive_pool_weights(x, self.weight.weight, self.weight.bias)
+    def forward_weights(self, x: Tensor, rope: Tensor | None = None) -> Tensor:
+        return attentive_pool_weights(x, self.weight.weight, self.weight.bias, rope)

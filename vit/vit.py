@@ -238,6 +238,29 @@ class ViT(nn.Module):
     def _drop_register_tokens(self, x: Tensor) -> Tensor:
         return x[..., self.config.num_register_tokens :, :]
 
+    def prepare_rope(
+        self,
+        tokenized_size: Sequence[int],
+        mask: Tensor | None = None,
+    ) -> Tensor:
+        if self.rope is None:
+            raise ValueError("RoPE is not enabled")
+
+        if len(tokenized_size) == 2:
+            H, W = tokenized_size
+            rope = self.rope(H=H, W=W)
+        else:
+            raise ValueError(f"RoPE not supported for non-2D input, got {tokenized_size}")
+
+        if mask is not None:
+            B = mask.shape[0]
+            sin, cos = rope
+            sin = apply_mask(mask, sin[None].expand(B, -1, -1))
+            cos = apply_mask(mask, cos[None].expand(B, -1, -1))
+            rope = torch.stack([sin[:, None, ...], cos[:, None, ...]], dim=0)
+
+        return rope
+
     def forward(self, x: Tensor, mask: Tensor | None = None, return_register_tokens: bool = False) -> Tensor:
         # Prepare transformer input
         tokenized_size = self.stem.tokenized_size(cast(Any, x.shape[2:]))
@@ -246,19 +269,7 @@ class ViT(nn.Module):
         x = self._apply_register_tokens(x)
 
         # Prepare RoPE sin/cos if needed
-        rope = None
-        if self.rope is not None:
-            if len(tokenized_size) == 2:
-                H, W = tokenized_size
-                rope = self.rope(H=H, W=W)
-            else:
-                raise ValueError(f"RoPE not supported for non-2D input, got {tokenized_size}")
-        if mask is not None and rope is not None:
-            sin, cos = rope
-            B = x.shape[0]
-            sin = apply_mask(mask, sin[None].expand(B, -1, -1))
-            cos = apply_mask(mask, cos[None].expand(B, -1, -1))
-            rope = torch.stack([sin[:, None, ...], cos[:, None, ...]], dim=0)
+        rope = self.prepare_rope(tokenized_size, mask) if self.rope is not None else None
 
         # Apply transformer
         for block in self.blocks:
