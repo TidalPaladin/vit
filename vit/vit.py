@@ -242,13 +242,14 @@ class ViT(nn.Module):
         self,
         tokenized_size: Sequence[int],
         mask: Tensor | None = None,
+        rope_seed: int | None = None,
     ) -> Tensor:
         if self.rope is None:
             raise ValueError("RoPE is not enabled")
 
         if len(tokenized_size) == 2:
             H, W = tokenized_size
-            rope = self.rope(H=H, W=W)
+            rope = self.rope(H=H, W=W, rope_seed=rope_seed)
         else:
             raise ValueError(f"RoPE not supported for non-2D input, got {tokenized_size}")
 
@@ -261,7 +262,9 @@ class ViT(nn.Module):
 
         return rope
 
-    def forward(self, x: Tensor, mask: Tensor | None = None, return_register_tokens: bool = False) -> Tensor:
+    def forward(
+        self, x: Tensor, mask: Tensor | None = None, return_register_tokens: bool = False, rope_seed: int | None = None
+    ) -> Tensor:
         # Prepare transformer input
         tokenized_size = self.stem.tokenized_size(cast(Any, x.shape[2:]))
         x = self.stem(x)
@@ -269,7 +272,7 @@ class ViT(nn.Module):
         x = self._apply_register_tokens(x)
 
         # Prepare RoPE sin/cos if needed
-        rope = self.prepare_rope(tokenized_size, mask) if self.rope is not None else None
+        rope = self.prepare_rope(tokenized_size, mask, rope_seed) if self.rope is not None else None
 
         # Apply transformer
         for block in self.blocks:
