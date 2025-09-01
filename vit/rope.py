@@ -11,9 +11,12 @@ import torch
 from torch import Tensor, nn
 
 
+# TODO: Refactor this
 # RoPE positional embedding with no mixing of coordinates (axial) and no learnable weights
 # Supports two parametrizations of the rope parameters: either using `base` or `min_period` and `max_period`.
 class RopePositionEmbedding(nn.Module):
+    periods: Tensor
+
     def __init__(
         self,
         embed_dim: int,
@@ -119,6 +122,7 @@ class RopePositionEmbedding(nn.Module):
                 2 * torch.arange(self.D_head // 4, device=device, dtype=dtype) / (self.D_head // 2)
             )  # [D//4]
         else:
+            assert self.min_period is not None and self.max_period is not None
             base = self.max_period / self.min_period
             exponents = torch.linspace(0, 1, self.D_head // 4, device=device, dtype=dtype)  # [D//4] range [0, 1]
             periods = base**exponents  # range [1, max_period / min_period]

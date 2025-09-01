@@ -76,10 +76,11 @@ class TestViT:
     @pytest.mark.parametrize("masked", [False, True])
     def test_forward_with_rope(self, device, config, masked):
         x = torch.randn(3, 3, *config.img_size, device=device)
-        config = replace(config, use_rope=True)
+        config = replace(config, pos_enc="rope")
         if len(config.patch_size) != 2:
             pytest.skip("RoPE not supported for non-2D input")
         model = ViT(config).to(device)
+        assert model.rope is not None
         mask = model.create_mask(x, 0.5, 1) if masked else None
         with torch.autocast(device_type=device.type, dtype=torch.float32, enabled=True):
             out = model(x, mask=mask)

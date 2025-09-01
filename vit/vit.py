@@ -55,7 +55,7 @@ class ViTConfig:
     glu_limit: float | None = None
     glu_extra_bias: float | None = None
 
-    use_rope: bool = False
+    # RoPE options
     rope_normalize_coords: Literal["min", "max", "separate"] = "separate"
     rope_base: float = 100
     rope_shift_coords: float | None = None
@@ -105,10 +105,10 @@ class ViT(nn.Module):
             config.hidden_size,
             config.patch_size,
             config.img_size,
-            pos_enc=config.pos_enc,
+            pos_enc=config.pos_enc if config.pos_enc != "rope" else "none",
         )
 
-        if config.use_rope:
+        if config.pos_enc == "rope":
             self.rope = RopePositionEmbedding(
                 config.hidden_size,
                 base=config.rope_base,

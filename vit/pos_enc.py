@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 
-PositionEncoder = Literal["fourier", "learnable", "none"]
+PositionEncoder = Literal["fourier", "learnable", "none", "rope"]
 
 
 def create_position_encoder(
@@ -24,6 +24,8 @@ def create_position_encoder(
             return FourierPosition(hidden_size, spatial_size, **kwargs)
         case "none":
             return None
+        case "rope":
+            raise ValueError("Please create RoPE position encoder manually")
         case _:
             raise ValueError(f"Invalid position encoder: {pos_enc}")
 
