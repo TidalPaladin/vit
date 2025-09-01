@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Self, Sequence, Type, cast
+from typing import Any, Dict, Literal, Self, Sequence, Type, cast
 
 import torch
 import torch.nn as nn
@@ -10,6 +10,7 @@ from torch import Tensor
 from .head import HeadConfig
 from .patch_embed import PatchEmbed2d, PatchEmbed3d
 from .pos_enc import PositionEncoder
+from .rope import RopePositionEmbedding
 from .tokens import apply_mask, create_mask
 from .transformer import CrossAttentionTransformer, TransformerDecoderLayer, TransformerEncoderLayer
 
@@ -54,6 +55,13 @@ class ViTConfig:
     glu_limit: float | None = None
     glu_extra_bias: float | None = None
 
+    # RoPE options
+    rope_normalize_coords: Literal["min", "max", "separate"] = "separate"
+    rope_base: float = 100
+    rope_shift_coords: float | None = None
+    rope_jitter_coords: float | None = None
+    rope_rescale_coords: float | None = None
+
     # Trainable blocks
     mlp_requires_grad: bool = True
     self_attention_requires_grad: bool = True
@@ -97,8 +105,20 @@ class ViT(nn.Module):
             config.hidden_size,
             config.patch_size,
             config.img_size,
-            pos_enc=config.pos_enc,
+            pos_enc=config.pos_enc if config.pos_enc != "rope" else "none",
         )
+
+        if config.pos_enc == "rope":
+            self.rope = RopePositionEmbedding(
+                config.hidden_size,
+                base=config.rope_base,
+                num_heads=config.num_attention_heads,
+                rescale_coords=config.rope_rescale_coords,
+                shift_coords=config.rope_shift_coords,
+                jitter_coords=config.rope_jitter_coords,
+            )
+        else:
+            self.rope = None
 
         # Register tokens
         if config.num_register_tokens > 0:
@@ -218,16 +238,46 @@ class ViT(nn.Module):
     def _drop_register_tokens(self, x: Tensor) -> Tensor:
         return x[..., self.config.num_register_tokens :, :]
 
-    def forward(self, x: Tensor, mask: Tensor | None = None, return_register_tokens: bool = False) -> Tensor:
+    def prepare_rope(
+        self,
+        tokenized_size: Sequence[int],
+        mask: Tensor | None = None,
+        rope_seed: int | None = None,
+    ) -> Tensor:
+        if self.rope is None:
+            raise ValueError("RoPE is not enabled")
+
+        if len(tokenized_size) == 2:
+            H, W = tokenized_size
+            rope = self.rope(H=H, W=W, rope_seed=rope_seed)
+        else:
+            raise ValueError(f"RoPE not supported for non-2D input, got {tokenized_size}")
+
+        if mask is not None:
+            B = mask.shape[0]
+            sin, cos = rope
+            sin = apply_mask(mask, sin[None].expand(B, -1, -1))
+            cos = apply_mask(mask, cos[None].expand(B, -1, -1))
+            rope = torch.stack([sin[:, None, ...], cos[:, None, ...]], dim=0)
+
+        return rope
+
+    def forward(
+        self, x: Tensor, mask: Tensor | None = None, return_register_tokens: bool = False, rope_seed: int | None = None
+    ) -> Tensor:
         # Prepare transformer input
+        tokenized_size = self.stem.tokenized_size(cast(Any, x.shape[2:]))
         x = self.stem(x)
         x = apply_mask(mask, x) if mask is not None else x
         x = self._apply_register_tokens(x)
 
+        # Prepare RoPE sin/cos if needed
+        rope = self.prepare_rope(tokenized_size, mask, rope_seed) if self.rope is not None else None
+
         # Apply transformer
         for block in self.blocks:
             assert isinstance(block, TransformerEncoderLayer)
-            x = block(x)
+            x = block(x, rope=rope)
 
         # Prepare output
         x = self.output_norm(x)

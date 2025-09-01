@@ -38,6 +38,7 @@ class HeadConfig:
     out_dim: int | None = None
     stop_gradient: bool = False
     num_attention_heads: int | None = None
+    rope: bool = False
 
     def instantiate(self, backbone_config: ViTConfig) -> Union["Head", "MLPHead"]:
         match self.head_type:
@@ -156,9 +157,9 @@ class MLPHead(nn.Module):
         if isinstance(self.pool, AttentivePool):
             self.pool.reset_parameters()
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Tensor, rope: Tensor | None = None) -> Tensor:
         if self.stop_gradient:
             x = x.detach()
-        x = self.pool(x)
+        x = self.pool(x, rope) if isinstance(self.pool, AttentivePool) else self.pool(x)
         x = self.neck(x)
         return self.proj(x)

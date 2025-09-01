@@ -52,8 +52,8 @@ class TransformerEncoderLayer(nn.Module):
         self.mlp.reset_parameters()
 
     @torch.compile
-    def forward(self, x: Tensor) -> Tensor:
-        o = self.layer_scale_attn(self.self_attention(x))
+    def forward(self, x: Tensor, rope: Tensor | None = None) -> Tensor:
+        o = self.layer_scale_attn(self.self_attention(x, rope=rope))
         x = x + drop_path(o, self.drop_path_rate, self.training)
 
         o = self.layer_scale_mlp(self.layer_scale_mlp(self.mlp(x)))
@@ -116,11 +116,11 @@ class TransformerDecoderLayer(nn.Module):
         self.cross_attention.reset_parameters()
         self.mlp.reset_parameters()
 
-    def forward(self, x: Tensor, kv: Tensor) -> Tensor:
-        o = self.layer_scale_attn(self.self_attention(x))
+    def forward(self, x: Tensor, kv: Tensor, rope_q: Tensor | None = None, rope_k: Tensor | None = None) -> Tensor:
+        o = self.layer_scale_attn(self.self_attention(x, rope=rope_q))
         x = x + drop_path(o, self.drop_path_rate, self.training)
 
-        o = self.layer_scale_cross(self.cross_attention(x, kv))
+        o = self.layer_scale_cross(self.cross_attention(x, kv, rope_q=rope_q, rope_k=rope_k))
         x = x + drop_path(o, self.drop_path_rate, self.training)
 
         o = self.layer_scale_mlp(self.mlp(x))
@@ -171,8 +171,8 @@ class CrossAttentionTransformer(nn.Module):
         self.cross_attention.reset_parameters()
         self.mlp.reset_parameters()
 
-    def forward(self, x: Tensor, kv: Tensor) -> Tensor:
-        o = self.layer_scale_cross(self.cross_attention(x, kv))
+    def forward(self, x: Tensor, kv: Tensor, rope_q: Tensor | None = None, rope_k: Tensor | None = None) -> Tensor:
+        o = self.layer_scale_cross(self.cross_attention(x, kv, rope_q=rope_q, rope_k=rope_k))
         x = x + drop_path(o, self.drop_path_rate, self.training)
 
         o = self.layer_scale_mlp(self.mlp(x))
