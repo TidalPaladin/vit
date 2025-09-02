@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Literal, Self, Sequence, Type, cast
+from typing import Any, Dict, Literal, Self, Sequence, Type, TypedDict, cast
 
 import torch
 import torch.nn as nn
@@ -49,6 +49,7 @@ class ViTConfig:
     mlp_bias: bool = True
     activation: str = "srelu"
     drop_path_rate: float = 0.0
+    cls_token: bool = True
     num_register_tokens: int = 0
     pos_enc: PositionEncoder = "fourier"
     layer_scale: float | None = None
@@ -92,6 +93,13 @@ class ViTConfig:
         return yaml.dump(self.__dict__)
 
 
+class ViTOutput(TypedDict):
+    x_reg: Tensor
+    x_cls: Tensor
+    x_visual: Tensor
+    x_pre_norm: Tensor
+
+
 class ViT(nn.Module):
 
     def __init__(self, config: ViTConfig):
@@ -120,12 +128,11 @@ class ViT(nn.Module):
         else:
             self.rope = None
 
-        # Register tokens
-        if config.num_register_tokens > 0:
-            self.register_tokens = nn.Parameter(torch.empty(config.num_register_tokens, config.hidden_size))
-            nn.init.trunc_normal_(self.register_tokens, std=0.02)
-        else:
-            self.register_tokens = None
+        # Prefix tokens
+        self.cls_token = nn.Parameter(torch.empty(1, 1 if self.config.cls_token else 0, config.hidden_size))
+        self.register_tokens = nn.Parameter(torch.empty(1, config.num_register_tokens, config.hidden_size))
+        nn.init.normal_(self.register_tokens, std=0.02)
+        nn.init.normal_(self.cls_token, std=0.02)
 
         self.blocks = nn.ModuleList([self.create_encoder_layer() for _ in range(config.depth)])
         self.output_norm = nn.RMSNorm(config.hidden_size)
@@ -228,12 +235,18 @@ class ViT(nn.Module):
         return mask
 
     @torch.compile(fullgraph=True)
-    def _apply_register_tokens(self, x: Tensor) -> Tensor:
-        if self.register_tokens is None:
-            return x
-        B = x.shape[0]
-        register_tokens = self.register_tokens.unsqueeze(0).expand(B, -1, -1)
-        return torch.cat([register_tokens, x], dim=1)
+    def _combine_prefix(self, x: Tensor) -> Tensor:
+        return torch.cat(
+            [self.register_tokens.expand(x.shape[0], -1, -1), self.cls_token.expand(x.shape[0], -1, -1), x], dim=1
+        )
+
+    @torch.compile(fullgraph=True)
+    def _separate_prefix(self, x: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+        L_reg = self.register_tokens.shape[1]
+        L_cls = self.cls_token.shape[1]
+        L_visual = x.shape[1] - L_reg - L_cls
+        x_reg, x_cls, x_tokens = x.split([L_reg, L_cls, L_visual], dim=1)
+        return x_reg, x_cls, x_tokens
 
     def _drop_register_tokens(self, x: Tensor) -> Tensor:
         return x[..., self.config.num_register_tokens :, :]
@@ -262,14 +275,12 @@ class ViT(nn.Module):
 
         return rope
 
-    def forward(
-        self, x: Tensor, mask: Tensor | None = None, return_register_tokens: bool = False, rope_seed: int | None = None
-    ) -> Tensor:
+    def forward(self, x: Tensor, mask: Tensor | None = None, rope_seed: int | None = None) -> ViTOutput:
         # Prepare transformer input
         tokenized_size = self.stem.tokenized_size(cast(Any, x.shape[2:]))
         x = self.stem(x)
         x = apply_mask(mask, x) if mask is not None else x
-        x = self._apply_register_tokens(x)
+        x = self._combine_prefix(x)
 
         # Prepare RoPE sin/cos if needed
         rope = self.prepare_rope(tokenized_size, mask, rope_seed) if self.rope is not None else None
@@ -280,21 +291,28 @@ class ViT(nn.Module):
             x = block(x, rope=rope)
 
         # Prepare output
-        x = self.output_norm(x)
-        return self._drop_register_tokens(x) if not return_register_tokens else x
+        x_norm = self.output_norm(x)
+        x_reg, x_cls, x_visual = self._separate_prefix(x_norm)
+        return {
+            "x_reg": x_reg,  # Register tokens
+            "x_cls": x_cls,  # CLS token
+            "x_visual": x_visual,  # Visual tokens
+            "x_pre_norm": x,  # Full sequence before normalization
+        }
 
     @torch.no_grad()
     def _reshape_attention_weights(self, w: Tensor, tokenized_size: Sequence[int]) -> Tensor:
         B, H, Lq, Lk = w.shape
         assert Lq == Lk, f"Query and key lengths must match, got {Lq} and {Lk}"
-        w = w[..., self.config.num_register_tokens :].view(B, H, Lq, *tokenized_size)
+        L_prefix = self.register_tokens.shape[1] + self.cls_token.shape[1]
+        w = w[..., L_prefix:].view(B, H, Lq, *tokenized_size)
         return w.contiguous()
 
     def forward_attention_weights(self, x: Tensor) -> Dict[str, Tensor]:
         # Prepare transformer input
         tokenized_size = self.stem.tokenized_size(x.shape[2:])
         x = self.stem(x)
-        x = self._apply_register_tokens(x)
+        x = self._combine_prefix(x)
 
         # Apply transformer
         weights: Dict[str, Tensor] = {}
@@ -320,8 +338,8 @@ class ViT(nn.Module):
         self.stem.requires_grad_(requires_grad)
         self.blocks.requires_grad_(requires_grad)
         self.output_norm.requires_grad_(requires_grad)
-        if self.register_tokens is not None:
-            self.register_tokens.requires_grad_(requires_grad)
+        self.register_tokens.requires_grad_(requires_grad)
+        self.cls_token.requires_grad_(requires_grad)
 
 
 register_constructors()

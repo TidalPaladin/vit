@@ -38,7 +38,6 @@ class HeadConfig:
     out_dim: int | None = None
     stop_gradient: bool = False
     num_attention_heads: int | None = None
-    rope: bool = False
 
     def instantiate(self, backbone_config: ViTConfig) -> Union["Head", "MLPHead"]:
         match self.head_type:
