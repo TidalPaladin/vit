@@ -1,4 +1,4 @@
-from typing import Sequence, Tuple
+from typing import Any, Sequence, Tuple, cast
 
 import torch
 import torch.nn as nn
@@ -18,7 +18,12 @@ class PatchEmbed2d(nn.Module):
         pos_enc: PositionEncoder = "fourier",
     ):
         super().__init__()
-        self.patch = nn.Conv2d(in_channels, hidden_size, tuple(patch_size), stride=tuple(patch_size))
+        self.patch = nn.Conv2d(
+            in_channels,
+            hidden_size,
+            cast(Any, tuple(patch_size)),
+            stride=cast(Any, tuple(patch_size)),
+        )
         self.pos_enc = create_position_encoder(pos_enc, hidden_size, self.tokenized_size(tuple(img_size)))
         self.reset_parameters()
 
@@ -29,9 +34,9 @@ class PatchEmbed2d(nn.Module):
 
     @property
     def patch_size(self) -> Tuple[int, int]:
-        return self.patch.weight.shape[2:]
+        return cast(Tuple[int, int], tuple(self.patch.weight.shape[2:]))
 
-    def tokenized_size(self, size: Tuple[int, int]) -> Tuple[int, int]:
+    def tokenized_size(self, size: Sequence[int]) -> Tuple[int, int]:
         ht, wt = tuple(s // p for s, p in zip(size, self.patch_size))
         return ht, wt
 
@@ -60,7 +65,12 @@ class PatchEmbed3d(nn.Module):
         pos_enc: PositionEncoder = "fourier",
     ):
         super().__init__()
-        self.patch = nn.Conv3d(in_channels, hidden_size, tuple(patch_size), stride=tuple(patch_size))
+        self.patch = nn.Conv3d(
+            in_channels,
+            hidden_size,
+            cast(Any, tuple(patch_size)),
+            stride=cast(Any, tuple(patch_size)),
+        )
         self.pos_enc = create_position_encoder(pos_enc, hidden_size, self.tokenized_size(tuple(img_size)))
         self.reset_parameters()
 
@@ -71,13 +81,13 @@ class PatchEmbed3d(nn.Module):
 
     @property
     def patch_size(self) -> Tuple[int, int, int]:
-        return self.patch.weight.shape[2:]
+        return cast(Tuple[int, int, int], tuple(self.patch.weight.shape[2:]))
 
-    def tokenized_size(self, size: Tuple[int, int, int]) -> Tuple[int, int, int]:
+    def tokenized_size(self, size: Sequence[int]) -> Tuple[int, int, int]:
         dt, ht, wt = tuple(s // p for s, p in zip(size, self.patch_size))
         return dt, ht, wt
 
-    def original_size(self, size: Tuple[int, int, int]) -> Tuple[int, int, int]:
+    def original_size(self, size: Sequence[int]) -> Tuple[int, int, int]:
         dt, ht, wt = tuple(s * p for s, p in zip(size, self.patch_size))
         return dt, ht, wt
 

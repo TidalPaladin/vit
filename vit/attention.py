@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import TYPE_CHECKING, Tuple
 
 import torch
 import torch.nn as nn
@@ -226,6 +226,11 @@ class SelfAttention(nn.Module):
             # fmt: on
         )
 
+    if TYPE_CHECKING:
+
+        def __call__(self, x: Tensor, attn_mask: Tensor | None = None, rope: Tensor | None = None) -> Tensor:
+            return self.forward(x, attn_mask, rope)
+
     def forward_weights(self, x: Tensor, rope: Tensor | None = None) -> Tensor:
         return attention_weights_qkv_packed(
             # fmt: off
@@ -295,6 +300,18 @@ class CrossAttention(nn.Module):
             # fmt: on
         )
 
+    if TYPE_CHECKING:
+
+        def __call__(
+            self,
+            q: Tensor,
+            kv: Tensor,
+            attn_mask: Tensor | None = None,
+            rope_q: Tensor | None = None,
+            rope_k: Tensor | None = None,
+        ) -> Tensor:
+            return self.forward(q, kv, attn_mask, rope_q, rope_k)
+
     def forward_weights(
         self, q: Tensor, kv: Tensor, rope_q: Tensor | None = None, rope_k: Tensor | None = None
     ) -> Tensor:
@@ -343,6 +360,11 @@ class AttentivePool(nn.Module):
             rope,
             # fmt: on
         )
+
+    if TYPE_CHECKING:
+
+        def __call__(self, x: Tensor, rope: Tensor | None = None) -> Tensor:
+            return self.forward(x, rope)
 
     def forward_weights(self, x: Tensor, rope: Tensor | None = None) -> Tensor:
         return attentive_pool_weights(x, self.weight.weight, self.weight.bias, rope)

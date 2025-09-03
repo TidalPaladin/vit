@@ -1,3 +1,5 @@
+from typing import TYPE_CHECKING
+
 import torch
 import torch.nn as nn
 from torch import Tensor
@@ -23,3 +25,8 @@ class LayerScale(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         return layer_scale(x, self.gamma, self.inplace)
+
+    if TYPE_CHECKING:
+
+        def __call__(self, x: Tensor) -> Tensor:
+            return self.forward(x)
