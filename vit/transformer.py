@@ -1,3 +1,5 @@
+from typing import TYPE_CHECKING
+
 import torch
 import torch.nn as nn
 from torch import Tensor
@@ -59,6 +61,11 @@ class TransformerEncoderLayer(nn.Module):
         o = self.layer_scale_mlp(self.layer_scale_mlp(self.mlp(x)))
         x = x + drop_path(o, self.drop_path_rate, self.training)
         return x
+
+    if TYPE_CHECKING:
+
+        def __call__(self, x: Tensor, rope: Tensor | None = None) -> Tensor:
+            return self.forward(x, rope)
 
 
 class TransformerDecoderLayer(nn.Module):
@@ -127,6 +134,11 @@ class TransformerDecoderLayer(nn.Module):
         x = x + drop_path(o, self.drop_path_rate, self.training)
         return x
 
+    if TYPE_CHECKING:
+
+        def __call__(self, x: Tensor, kv: Tensor, rope_q: Tensor | None = None, rope_k: Tensor | None = None) -> Tensor:
+            return self.forward(x, kv, rope_q, rope_k)
+
 
 class CrossAttentionTransformer(nn.Module):
 
@@ -178,3 +190,8 @@ class CrossAttentionTransformer(nn.Module):
         o = self.layer_scale_mlp(self.mlp(x))
         x = x + drop_path(o, self.drop_path_rate, self.training)
         return x
+
+    if TYPE_CHECKING:
+
+        def __call__(self, x: Tensor, kv: Tensor, rope_q: Tensor | None = None, rope_k: Tensor | None = None) -> Tensor:
+            return self.forward(x, kv, rope_q, rope_k)

@@ -1,5 +1,5 @@
 import math
-from typing import Literal, Sequence, Union
+from typing import TYPE_CHECKING, Literal, Sequence, Union
 
 import torch
 import torch.nn as nn
@@ -117,6 +117,11 @@ class LearnablePosition(nn.Module):
         dims = dims or self.spatial_size
         return learnable_position(dims, self.spatial_size, self.positions, self.dropout.p, self.training)
 
+    if TYPE_CHECKING:
+
+        def __call__(self, dims: Sequence[int] | None) -> Tensor:
+            return self.forward(dims)
+
 
 @torch.compile(fullgraph=True, dynamic=False)
 def fourier_position(
@@ -155,3 +160,8 @@ class FourierPosition(nn.Module):
             self.w_fc1.weight,
             self.w_fc1.bias,
         )
+
+    if TYPE_CHECKING:
+
+        def __call__(self, dims: Sequence[int] | None) -> Tensor:
+            return self.forward(dims)

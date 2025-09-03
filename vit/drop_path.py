@@ -1,3 +1,5 @@
+from typing import TYPE_CHECKING
+
 import torch
 import torch.nn as nn
 from torch import Tensor
@@ -40,3 +42,8 @@ class DropPath(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         return drop_path(x, self.drop_prob, self.training)
+
+    if TYPE_CHECKING:
+
+        def __call__(self, x: Tensor) -> Tensor:
+            return self.forward(x)
