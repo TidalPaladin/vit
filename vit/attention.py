@@ -125,7 +125,12 @@ def attention_q_kv_packed(
 
 @torch.compile(fullgraph=True)
 def attentive_pool_weights(x: Tensor, w: Tensor, b: Tensor | None, rope: Tensor | None = None) -> Tensor:
-    x = apply_rope(x, rope) if rope is not None else x
+    if rope is not None:
+        B, S, D = x.shape
+        D_head = rope.shape[-1]
+        x = x.view(B, S, -1, D_head).movedim(-2, 1)
+        x = apply_rope(x, rope)
+        x = x.movedim(1, -2).reshape(B, S, D)
     weights = F.linear(x, w, b)  # B, S, H
     return F.softmax(weights, dim=-2)
 
