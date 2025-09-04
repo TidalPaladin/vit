@@ -110,11 +110,16 @@ class Head(nn.Module):
         if isinstance(self.pool, AttentivePool):
             self.pool.reset_parameters()
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Tensor, rope: Tensor | None = None) -> Tensor:
         if self.stop_gradient:
             x = x.detach()
-        x = self.pool(x)
+        x = self.pool(x, rope) if isinstance(self.pool, AttentivePool) else self.pool(x)
         return self.proj(x)
+
+    if TYPE_CHECKING:
+
+        def __call__(self, x: Tensor, rope: Tensor | None = None) -> Tensor:
+            return self.forward(x)
 
 
 class MLPHead(nn.Module):
@@ -162,3 +167,8 @@ class MLPHead(nn.Module):
         x = self.pool(x, rope) if isinstance(self.pool, AttentivePool) else self.pool(x)
         x = self.neck(x)
         return self.proj(x)
+
+    if TYPE_CHECKING:
+
+        def __call__(self, x: Tensor, rope: Tensor | None = None) -> Tensor:
+            return self.forward(x, rope)

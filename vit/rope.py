@@ -4,7 +4,7 @@
 # the terms of the DINOv3 License Agreement.
 
 import math
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 import torch
@@ -113,6 +113,11 @@ class RopePositionEmbedding(nn.Module):
         cos = torch.cos(angles)  # [HW, D]
         sin = torch.sin(angles)  # [HW, D]
         return torch.stack([sin, cos], dim=0)
+
+    if TYPE_CHECKING:
+
+        def __call__(self, H: int, W: int, rope_seed: int | None = None) -> Tensor:
+            return self.forward(H=H, W=W, rope_seed=rope_seed)
 
     def _init_weights(self):
         device = self.periods.device

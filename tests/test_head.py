@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 
 from vit.head import Head, HeadConfig, MLPHead
+from vit.rope import RopePositionEmbedding
 from vit.vit import ViTConfig
 
 
@@ -60,6 +61,21 @@ class TestHead:
         assert layer.weight.grad is None
         assert layer.bias.grad is None
 
+    def test_forward_rope(self, device):
+        out_dim = 10
+        pool_type = "attentive"
+        dim = 128
+        num_heads = dim // 16
+        x = torch.randn(2, 144, 128, device=device)
+        model = Head(dim, pool_type, out_dim, num_heads, False).to(device)
+        rope = RopePositionEmbedding(dim, num_heads=num_heads, base=100).to(device)
+        rope_angle = rope(H=12, W=12)
+        out = model(x, rope_angle)
+        if pool_type == "none":
+            assert out.shape == (2, 196, out_dim or 128)
+        else:
+            assert out.shape == (2, out_dim or 128)
+
 
 class TestMLPHead:
 
@@ -91,3 +107,18 @@ class TestMLPHead:
         out.sum().backward()
         assert layer.weight.grad is None
         assert layer.bias.grad is None
+
+    def test_forward_rope(self, device):
+        out_dim = 10
+        pool_type = "attentive"
+        dim = 128
+        num_heads = dim // 16
+        x = torch.randn(2, 144, 128, device=device)
+        model = MLPHead(dim, 256, "gelu", pool_type, out_dim, num_heads, False).to(device)
+        rope = RopePositionEmbedding(dim, num_heads=num_heads, base=100).to(device)
+        rope_angle = rope(H=12, W=12)
+        out = model(x, rope_angle)
+        if pool_type == "none":
+            assert out.shape == (2, 196, out_dim or 128)
+        else:
+            assert out.shape == (2, out_dim or 128)

@@ -1,4 +1,4 @@
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 import torch
 import torch.nn as nn
@@ -37,6 +37,11 @@ class NormLinear(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         return norm_linear(x, self.linear.weight, self.linear.bias, self.norm.weight, self.norm.eps or 1e-5)
+
+    if TYPE_CHECKING:
+
+        def __call__(self, x: Tensor) -> Tensor:
+            return self.forward(x)
 
 
 @torch.compile(
@@ -178,3 +183,8 @@ class NormMLP(nn.Module):
                 self.training,
                 # fmt: on
             )
+
+    if TYPE_CHECKING:
+
+        def __call__(self, x: Tensor) -> Tensor:
+            return self.forward(x)

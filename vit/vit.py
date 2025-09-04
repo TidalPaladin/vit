@@ -1,13 +1,14 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Literal, Self, Sequence, Type, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Dict, Literal, Self, Sequence, Type, cast
 
 import torch
 import torch.nn as nn
 import yaml
 from torch import Tensor
 
-from .head import HeadConfig
+from .head import Head, HeadConfig, MLPHead
 from .patch_embed import PatchEmbed2d, PatchEmbed3d
 from .pos_enc import PositionEncoder
 from .rope import RopePositionEmbedding
@@ -128,11 +129,16 @@ class ViT(nn.Module):
         else:
             self.rope = None
 
-        # Prefix tokens
+        # CLS token
         self.cls_token = nn.Parameter(torch.empty(1, 1 if self.config.cls_token else 0, config.hidden_size))
-        self.register_tokens = nn.Parameter(torch.empty(1, config.num_register_tokens, config.hidden_size))
-        nn.init.normal_(self.register_tokens, std=0.02)
         nn.init.normal_(self.cls_token, std=0.02)
+
+        # Register tokens
+        self.register_tokens = nn.Parameter(
+            torch.empty(1, config.num_register_tokens, config.hidden_size),
+            requires_grad=config.num_register_tokens > 0,
+        )
+        nn.init.normal_(self.register_tokens, std=0.02)
 
         self.blocks = nn.ModuleList([self.create_encoder_layer() for _ in range(config.depth)])
         self.output_norm = nn.RMSNorm(config.hidden_size)
@@ -196,6 +202,16 @@ class ViT(nn.Module):
             glu_extra_bias=self.config.glu_extra_bias,
         )
 
+    def get_head(self, name: str) -> Head | MLPHead:
+        head = self.heads[name]
+        assert isinstance(head, Head | MLPHead)
+        return head
+
+    def get_block(self, i: int) -> TransformerEncoderLayer:
+        block = self.blocks[i]
+        assert isinstance(block, TransformerEncoderLayer)
+        return block
+
     def create_mask(
         self,
         input: Tensor,
@@ -234,11 +250,9 @@ class ViT(nn.Module):
 
         return mask
 
-    @torch.compile(fullgraph=True)
-    def _combine_prefix(self, x: Tensor) -> Tensor:
-        return torch.cat(
-            [self.register_tokens.expand(x.shape[0], -1, -1), self.cls_token.expand(x.shape[0], -1, -1), x], dim=1
-        )
+    @property
+    def prefix_length(self) -> int:
+        return self.config.num_register_tokens + (1 if self.config.cls_token else 0)
 
     @torch.compile(fullgraph=True)
     def _separate_prefix(self, x: Tensor) -> tuple[Tensor, Tensor, Tensor]:
@@ -248,8 +262,19 @@ class ViT(nn.Module):
         x_reg, x_cls, x_tokens = x.split([L_reg, L_cls, L_visual], dim=1)
         return x_reg, x_cls, x_tokens
 
-    def _drop_register_tokens(self, x: Tensor) -> Tensor:
-        return x[..., self.config.num_register_tokens :, :]
+    def add_prefix_tokens(self, x: Tensor) -> Tensor:
+        B = x.shape[0]
+        register_tokens = self.register_tokens.expand(B, -1, -1)
+        cls_token = self.cls_token.expand(B, -1, -1)
+        return torch.cat([register_tokens, cls_token, x], dim=1)
+
+    @torch.compile(fullgraph=True)
+    def separate_prefix_tokens(self, x: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+        L_reg = self.register_tokens.shape[1]
+        L_cls = self.cls_token.shape[1]
+        L_visual = x.shape[1] - L_reg - L_cls
+        x_reg, x_cls, x_visual = x.split([L_reg, L_cls, L_visual], dim=1)
+        return x_reg, x_cls, x_visual
 
     def prepare_rope(
         self,
@@ -277,10 +302,10 @@ class ViT(nn.Module):
 
     def forward(self, x: Tensor, mask: Tensor | None = None, rope_seed: int | None = None) -> ViTOutput:
         # Prepare transformer input
-        tokenized_size = self.stem.tokenized_size(cast(Any, x.shape[2:]))
+        tokenized_size = self.stem.tokenized_size(x.shape[2:])
         x = self.stem(x)
         x = apply_mask(mask, x) if mask is not None else x
-        x = self._combine_prefix(x)
+        x = self.add_prefix_tokens(x)
 
         # Prepare RoPE sin/cos if needed
         rope = self.prepare_rope(tokenized_size, mask, rope_seed) if self.rope is not None else None
@@ -291,14 +316,24 @@ class ViT(nn.Module):
             x = block(x, rope=rope)
 
         # Prepare output
-        x_norm = self.output_norm(x)
-        x_reg, x_cls, x_visual = self._separate_prefix(x_norm)
+        x = self.output_norm(x)
+        x_reg, x_cls, x_visual = self.separate_prefix_tokens(x)
         return {
             "x_reg": x_reg,  # Register tokens
             "x_cls": x_cls,  # CLS token
             "x_visual": x_visual,  # Visual tokens
             "x_pre_norm": x,  # Full sequence before normalization
         }
+
+    if TYPE_CHECKING:
+
+        def __call__(
+            self,
+            x: Tensor,
+            mask: Tensor | None = None,
+            rope_seed: int | None = None,
+        ) -> ViTOutput:
+            return self.forward(x, mask, rope_seed)
 
     @torch.no_grad()
     def _reshape_attention_weights(self, w: Tensor, tokenized_size: Sequence[int]) -> Tensor:
@@ -312,7 +347,7 @@ class ViT(nn.Module):
         # Prepare transformer input
         tokenized_size = self.stem.tokenized_size(x.shape[2:])
         x = self.stem(x)
-        x = self._combine_prefix(x)
+        x = self.add_prefix_tokens(x)
 
         # Apply transformer
         weights: Dict[str, Tensor] = {}
