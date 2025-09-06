@@ -316,8 +316,8 @@ class ViT(nn.Module):
             x = block(x, rope=rope)
 
         # Prepare output
-        x = self.output_norm(x)
-        x_reg, x_cls, x_visual = self.separate_prefix_tokens(x)
+        x_norm = self.output_norm(x)
+        x_reg, x_cls, x_visual = self.separate_prefix_tokens(x_norm)
         return {
             "x_reg": x_reg,  # Register tokens
             "x_cls": x_cls,  # CLS token
