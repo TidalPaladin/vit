@@ -341,35 +341,27 @@ class AttentivePool(nn.Module):
         self,
         hidden_size: int,
         num_attention_heads: int,
+        hidden_dropout: float = 0.1,
+        attention_dropout: float = 0.1,
         bias: bool = True,
+        eps: float = 1e-5,
     ):
         super().__init__()
-        self._head_dim = hidden_size // num_attention_heads
-        self.weight = nn.Linear(hidden_size, num_attention_heads, bias=bias)
-        self.value = nn.Linear(hidden_size, hidden_size, bias=bias)
+        self.query = nn.Parameter(torch.empty(1, 1, hidden_size))
+        self.attention = CrossAttention(hidden_size, num_attention_heads, hidden_dropout, attention_dropout, bias, eps)
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
-        self.weight.reset_parameters()
-        self.value.reset_parameters()
-        nn.init.trunc_normal_(self.weight.weight, std=0.02)
-        nn.init.trunc_normal_(self.value.weight, std=0.02)
+        self.attention.reset_parameters()
+        nn.init.normal_(self.query, std=0.02)
 
     def forward(self, x: Tensor, rope: Tensor | None = None) -> Tensor:
-        return attentive_pool(
-            # fmt: off
-            x,
-            self.weight.weight, self.weight.bias,
-            self.value.weight, self.value.bias,
-            self._head_dim,
-            rope,
-            # fmt: on
-        )
+        return self.attention(self.query, x, rope_k=rope).squeeze(1)
 
     if TYPE_CHECKING:
 
         def __call__(self, x: Tensor, rope: Tensor | None = None) -> Tensor:
-            return self.forward(x, rope)
+            return self.forward(x, rope=rope)
 
     def forward_weights(self, x: Tensor, rope: Tensor | None = None) -> Tensor:
-        return attentive_pool_weights(x, self.weight.weight, self.weight.bias, rope)
+        return self.attention.forward_weights(self.query, x, rope_k=rope)
