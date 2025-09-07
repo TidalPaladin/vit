@@ -400,7 +400,7 @@ class AttentivePool(nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
-        nn.init.normal_(self.query, std=0.02)
+        nn.init.normal_(self.query, std=1.0)
         self.kv_proj.reset_parameters()
         self.out_proj.reset_parameters()
         nn.init.trunc_normal_(self.kv_proj.weight, std=0.02)
