@@ -387,7 +387,7 @@ class AttentivePool(nn.Module):
         num_attention_heads: int,
         num_queries: int = 1,
         hidden_dropout: float = 0.0,
-        attention_dropout: float = 0.1,
+        attention_dropout: float = 0.0,
         bias: bool = True,
     ):
         super().__init__()
