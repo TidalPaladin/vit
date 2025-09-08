@@ -39,6 +39,7 @@ class HeadConfig:
     stop_gradient: bool = False
     num_attention_heads: int | None = None
     rope: bool = False
+    output_norm: bool = False
 
     def instantiate(self, backbone_config: ViTConfig) -> Union["Head", "MLPHead"]:
         match self.head_type:
@@ -49,6 +50,7 @@ class HeadConfig:
                     self.out_dim,
                     self.num_attention_heads or backbone_config.num_attention_heads,
                     self.stop_gradient,
+                    self.output_norm,
                 )
             case "mlp":
                 return MLPHead(
@@ -59,6 +61,7 @@ class HeadConfig:
                     self.out_dim,
                     self.num_attention_heads or backbone_config.num_attention_heads,
                     self.stop_gradient,
+                    self.output_norm,
                     backbone_config.hidden_dropout,
                 )
             case _:
@@ -86,6 +89,7 @@ class Head(nn.Module):
         out_dim: int | None = None,
         num_attention_heads: int | None = None,
         stop_gradient: bool = False,
+        output_norm: bool = False,
     ):
         super().__init__()
         out_dim = out_dim or hidden_size
@@ -104,6 +108,7 @@ class Head(nn.Module):
             case _:
                 raise ValueError(f"Invalid pool type: {pool_type}")
         self.proj = nn.Linear(hidden_size, out_dim)
+        self.norm = nn.RMSNorm(out_dim, eps=1e-5) if output_norm else nn.Identity()
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
@@ -115,7 +120,7 @@ class Head(nn.Module):
         if self.stop_gradient:
             x = x.detach()
         x = self.pool(x, rope) if isinstance(self.pool, AttentivePool) else self.pool(x)
-        return self.proj(x)
+        return self.norm(self.proj(x))
 
     if TYPE_CHECKING:
 
@@ -134,6 +139,7 @@ class MLPHead(nn.Module):
         out_dim: int | None = None,
         num_attention_heads: int | None = None,
         stop_gradient: bool = False,
+        output_norm: bool = False,
         dropout: float = 0.0,
     ):
         super().__init__()
@@ -154,6 +160,7 @@ class MLPHead(nn.Module):
                 raise ValueError(f"Invalid pool type: {pool_type}")
         self.neck = NormMLP(hidden_size, ffn_hidden_size, activation=activation, dropout=dropout)
         self.proj = nn.Linear(hidden_size, out_dim)
+        self.norm = nn.RMSNorm(out_dim, eps=1e-5) if output_norm else nn.Identity()
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
@@ -167,7 +174,7 @@ class MLPHead(nn.Module):
             x = x.detach()
         x = self.pool(x, rope) if isinstance(self.pool, AttentivePool) else self.pool(x)
         x = self.neck(x)
-        return self.proj(x)
+        return self.norm(self.proj(x))
 
     if TYPE_CHECKING:
 
