@@ -6,7 +6,7 @@ import yaml
 from torch import Tensor
 
 from .attention import AttentivePool
-from .fused import NormMLP
+from .fused import NormLinear, NormMLP
 
 
 if TYPE_CHECKING:
@@ -40,6 +40,8 @@ class HeadConfig:
     num_attention_heads: int | None = None
     rope: bool = False
     output_norm: bool = False
+    hidden_dropout: float = 0.0
+    attention_dropout: float = 0.0
 
     def instantiate(self, backbone_config: ViTConfig) -> Union["Head", "MLPHead"]:
         match self.head_type:
@@ -90,6 +92,8 @@ class Head(nn.Module):
         num_attention_heads: int | None = None,
         stop_gradient: bool = False,
         output_norm: bool = False,
+        hidden_dropout: float = 0.0,
+        attention_dropout: float = 0.0,
     ):
         super().__init__()
         out_dim = out_dim or hidden_size
@@ -102,12 +106,14 @@ class Head(nn.Module):
             case "attentive":
                 if num_attention_heads is None:
                     raise ValueError("num_attention_heads is required for attentive pooling")
-                self.pool = AttentivePool(hidden_size, num_attention_heads)
+                self.pool = AttentivePool(
+                    hidden_size, num_attention_heads, hidden_dropout=hidden_dropout, attention_dropout=attention_dropout
+                )
             case "none":
                 self.pool = nn.Identity()
             case _:
                 raise ValueError(f"Invalid pool type: {pool_type}")
-        self.proj = nn.Linear(hidden_size, out_dim)
+        self.proj = NormLinear(hidden_size, out_dim, dropout=hidden_dropout)
         self.norm = nn.RMSNorm(out_dim, eps=1e-5) if output_norm else nn.Identity()
         self.reset_parameters()
 
@@ -140,7 +146,8 @@ class MLPHead(nn.Module):
         num_attention_heads: int | None = None,
         stop_gradient: bool = False,
         output_norm: bool = False,
-        dropout: float = 0.0,
+        hidden_dropout: float = 0.0,
+        attention_dropout: float = 0.0,
     ):
         super().__init__()
         out_dim = out_dim or hidden_size
@@ -153,13 +160,15 @@ class MLPHead(nn.Module):
             case "attentive":
                 if num_attention_heads is None:
                     raise ValueError("num_attention_heads is required for attentive pooling")
-                self.pool = AttentivePool(hidden_size, num_attention_heads)
+                self.pool = AttentivePool(
+                    hidden_size, num_attention_heads, hidden_dropout=hidden_dropout, attention_dropout=attention_dropout
+                )
             case "none":
                 self.pool = nn.Identity()
             case _:
                 raise ValueError(f"Invalid pool type: {pool_type}")
-        self.neck = NormMLP(hidden_size, ffn_hidden_size, activation=activation, dropout=dropout)
-        self.proj = nn.Linear(hidden_size, out_dim)
+        self.neck = NormMLP(hidden_size, ffn_hidden_size, activation=activation, dropout=hidden_dropout)
+        self.proj = NormLinear(hidden_size, out_dim, dropout=hidden_dropout)
         self.norm = nn.RMSNorm(out_dim, eps=1e-5) if output_norm else nn.Identity()
         self.reset_parameters()
 
