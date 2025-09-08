@@ -26,6 +26,21 @@ class TestNormLinear:
             assert param.grad is not None
             assert not param.grad.isnan().any()
 
+    def test_determinstic(self, device):
+        torch.random.manual_seed(0)
+        layer = NormLinear(10, 20, dropout=0.5).to(device)
+        x = torch.randn(10, device=device)
+
+        layer.eval()
+        y1 = layer(x)
+        y2 = layer(x)
+        assert_close(y1, y2)
+
+        layer.train()
+        y3 = layer(x)
+        y4 = layer(x)
+        assert not torch.allclose(y3, y4)
+
 
 class TestNormMLP:
 

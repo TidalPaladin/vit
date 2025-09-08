@@ -15,20 +15,24 @@ def norm_linear(
     weight: Tensor, bias: Tensor | None,
     norm_weight: Tensor,
     eps: float,
+    dropout: float,
+    training: bool,
     # fmt: on
 ) -> Tensor:
     x = F.rms_norm(x, x.shape[-1:], weight=norm_weight, eps=eps)
+    x = F.dropout(x, p=dropout, training=training)
     return F.linear(x, weight, bias)
 
 
 class NormLinear(nn.Module):
 
-    def __init__(self, in_features: int, out_features: int, bias: bool = True, eps: float = 1e-5):
+    def __init__(self, in_features: int, out_features: int, bias: bool = True, eps: float = 1e-5, dropout: float = 0.0):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
         self.norm = nn.RMSNorm(in_features, eps=eps)
         self.linear = nn.Linear(in_features, out_features, bias=bias)
+        self.dropout = nn.Dropout(dropout)
 
     def reset_parameters(self) -> None:
         self.norm.reset_parameters()
@@ -36,7 +40,15 @@ class NormLinear(nn.Module):
         nn.init.trunc_normal_(self.linear.weight, std=0.02)
 
     def forward(self, x: Tensor) -> Tensor:
-        return norm_linear(x, self.linear.weight, self.linear.bias, self.norm.weight, self.norm.eps or 1e-5)
+        return norm_linear(
+            x,
+            self.linear.weight,
+            self.linear.bias,
+            self.norm.weight,
+            self.norm.eps or 1e-5,
+            self.dropout.p,
+            self.training,
+        )
 
     if TYPE_CHECKING:
 
