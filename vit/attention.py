@@ -24,13 +24,11 @@ def project_qkv_packed(
     # fmt: off
     x: Tensor,
     w_in: Tensor, b_in: Tensor | None,
-    w_norm: Tensor,
     head_dim: int,
     eps: float,
     rope: Tensor | None = None,
     # fmt: on
 ) -> Tuple[Tensor, Tensor, Tensor]:
-    x = F.rms_norm(x, x.shape[-1:], w_norm, eps=eps)
     q, k, v = F.linear(x, w_in, b_in).chunk(3, dim=-1)
     q = _unfold_head_and_permute(q, head_dim)
     k = _unfold_head_and_permute(k, head_dim)
@@ -47,14 +45,12 @@ def project_q_kv_packed(
     q: Tensor, kv: Tensor,
     w_q: Tensor, b_q: Tensor | None,
     w_kv: Tensor, b_kv: Tensor | None,
-    w_norm: Tensor,
     head_dim: int,
     eps: float,
     rope_q: Tensor | None = None,
     rope_k: Tensor | None = None,
     # fmt: on
 ) -> Tuple[Tensor, Tensor, Tensor]:
-    q = F.rms_norm(q, q.shape[-1:], w_norm, eps=eps)
     q = F.linear(q, w_q, b_q)
     k, v = F.linear(kv, w_kv, b_kv).chunk(2, dim=-1)
     q = _unfold_head_and_permute(q, head_dim)
@@ -102,15 +98,19 @@ def attention_qkv_packed(
     dropout: float,
     training: bool,
     rope: Tensor | None = None,
+    w_gate: Tensor | None = None, b_gate: Tensor | None = None,
     # fmt: on
 ) -> Tensor:
-    q, k, v = project_qkv_packed(x, w_in, b_in, w_norm, head_dim, eps, rope)
+    x = F.rms_norm(x, x.shape[-1:], w_norm, eps=eps)
+    q, k, v = project_qkv_packed(x, w_in, b_in, head_dim, eps, rope)
     attention_dropout = 0.0 if not training else attention_dropout
     o = F.scaled_dot_product_attention(
         q, k, v, attn_mask=attn_mask, dropout_p=attention_dropout, is_causal=False, enable_gqa=True
     )
     o = _permute_and_fold_head(o)
     o = F.linear(o, w_out, b_out)
+    if w_gate is not None:
+        o = o * F.linear(x, w_gate, b_gate).sigmoid()
     o = F.dropout(o, p=dropout, training=training, inplace=True)
     return o
 
@@ -131,15 +131,19 @@ def attention_q_kv_packed(
     training: bool,
     rope_q: Tensor | None = None,
     rope_k: Tensor | None = None,
+    w_gate: Tensor | None = None, b_gate: Tensor | None = None,
     # fmt: on
 ) -> Tensor:
-    q, k, v = project_q_kv_packed(q, kv, w_q, b_q, w_kv, b_kv, w_norm, head_dim, eps, rope_q, rope_k)
+    q_norm = F.rms_norm(q, q.shape[-1:], w_norm, eps=eps)
+    q, k, v = project_q_kv_packed(q_norm, kv, w_q, b_q, w_kv, b_kv, head_dim, eps, rope_q, rope_k)
     attention_dropout = 0.0 if not training else attention_dropout
     o = F.scaled_dot_product_attention(
         q, k, v, attn_mask=attn_mask, dropout_p=attention_dropout, is_causal=False, enable_gqa=True
     )
     o = _permute_and_fold_head(o)
     o = F.linear(o, w_out, b_out)
+    if w_gate is not None:
+        o = o * F.linear(q_norm, w_gate, b_gate).sigmoid()
     o = F.dropout(o, p=dropout, training=training, inplace=True)
     return o
 
@@ -157,8 +161,10 @@ def attention_q_kv_packed_static_query(
     training: bool,
     rope_q: Tensor | None = None,
     rope_k: Tensor | None = None,
+    w_gate: Tensor | None = None, b_gate: Tensor | None = None,
     # fmt: on
 ) -> Tensor:
+    q_original = q
     q, k, v = project_q_kv_packed_static_query(q, kv, w_kv, b_kv, head_dim, rope_q, rope_k)
     attention_dropout = 0.0 if not training else attention_dropout
     o = F.scaled_dot_product_attention(
@@ -166,20 +172,10 @@ def attention_q_kv_packed_static_query(
     )
     o = _permute_and_fold_head(o)
     o = F.linear(o, w_out, b_out)
+    if w_gate is not None:
+        o = o * F.linear(q_original, w_gate, b_gate).sigmoid()
     o = F.dropout(o, p=dropout, training=training, inplace=True)
     return o
-
-
-@torch.compile(fullgraph=True)
-def attentive_pool_weights(x: Tensor, w: Tensor, b: Tensor | None, rope: Tensor | None = None) -> Tensor:
-    if rope is not None:
-        B, S, D = x.shape
-        D_head = rope.shape[-1]
-        x = x.view(B, S, -1, D_head).movedim(-2, 1)
-        x = apply_rope(x, rope)
-        x = x.movedim(1, -2).reshape(B, S, D)
-    weights = F.linear(x, w, b)  # B, S, H
-    return F.softmax(weights, dim=-2)
 
 
 @torch.no_grad()
@@ -194,7 +190,8 @@ def attention_weights_qkv_packed(
     rope: Tensor | None = None,
     # fmt: on
 ) -> Tensor:
-    q, k, _ = project_qkv_packed(x, w_in, b_in, w_norm, head_dim, eps, rope)
+    x = F.rms_norm(x, x.shape[-1:], w_norm, eps=eps)
+    q, k, _ = project_qkv_packed(x, w_in, b_in, head_dim, eps, rope)
     return (q @ k.mT).softmax(dim=-1)
 
 
@@ -212,7 +209,8 @@ def attention_weights_q_kv_packed(
     rope_k: Tensor | None = None,
     # fmt: on
 ) -> Tensor:
-    q, k, _ = project_q_kv_packed(q, kv, w_q, b_q, w_kv, b_kv, w_norm, head_dim, eps, rope_q, rope_k)
+    q_norm = F.rms_norm(q, q.shape[-1:], w_norm, eps=eps)
+    q, k, _ = project_q_kv_packed(q_norm, kv, w_q, b_q, w_kv, b_kv, head_dim, eps, rope_q, rope_k)
     return (q @ k.mT).softmax(dim=-1)
 
 
@@ -242,6 +240,7 @@ class SelfAttention(nn.Module):
         attention_dropout: float = 0.1,
         bias: bool = True,
         eps: float = 1e-5,
+        gated: bool = False,
     ):
         super().__init__()
         self.norm = nn.RMSNorm(hidden_size, eps=eps)
@@ -250,6 +249,8 @@ class SelfAttention(nn.Module):
         self.dropout = nn.Dropout(hidden_dropout)
         self.attention_dropout = nn.Dropout(attention_dropout)
         self._head_dim = hidden_size // num_attention_heads
+        self.gate = nn.Linear(hidden_size, hidden_size) if gated else None
+
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
@@ -257,6 +258,9 @@ class SelfAttention(nn.Module):
         self.out_proj.reset_parameters()
         self.norm.reset_parameters()
         nn.init.trunc_normal_(self.qkv_proj.weight, std=0.02)
+        if self.gate is not None:
+            nn.init.trunc_normal_(self.gate.weight, std=0.02)
+            nn.init.zeros_(self.gate.bias)
 
     def forward(self, x: Tensor, attn_mask: Tensor | None = None, rope: Tensor | None = None) -> Tensor:
         return attention_qkv_packed(
@@ -272,6 +276,8 @@ class SelfAttention(nn.Module):
             self.dropout.p,
             self.training,
             rope,
+            w_gate=self.gate.weight if self.gate is not None else None,
+            b_gate=self.gate.bias if self.gate is not None else None,
             # fmt: on
         )
 
@@ -304,6 +310,7 @@ class CrossAttention(nn.Module):
         attention_dropout: float = 0.1,
         bias: bool = True,
         eps: float = 1e-5,
+        gated: bool = False,
     ):
         super().__init__()
         self.norm = nn.RMSNorm(hidden_size, eps=eps)
@@ -313,6 +320,7 @@ class CrossAttention(nn.Module):
         self.dropout = nn.Dropout(hidden_dropout)
         self.attention_dropout = nn.Dropout(attention_dropout)
         self._head_dim = hidden_size // num_attention_heads
+        self.gate = nn.Linear(hidden_size, hidden_size) if gated else None
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
@@ -322,6 +330,9 @@ class CrossAttention(nn.Module):
         self.norm.reset_parameters()
         nn.init.trunc_normal_(self.q_proj.weight, std=0.02)
         nn.init.trunc_normal_(self.kv_proj.weight, std=0.02)
+        if self.gate is not None:
+            nn.init.trunc_normal_(self.gate.weight, std=0.02)
+            nn.init.zeros_(self.gate.bias)
 
     def forward(
         self,
@@ -346,6 +357,8 @@ class CrossAttention(nn.Module):
             self.training,
             rope_q,
             rope_k,
+            w_gate=self.gate.weight if self.gate is not None else None,
+            b_gate=self.gate.bias if self.gate is not None else None,
             # fmt: on
         )
 
@@ -389,6 +402,7 @@ class AttentivePool(nn.Module):
         hidden_dropout: float = 0.0,
         attention_dropout: float = 0.0,
         bias: bool = True,
+        gated: bool = False,
     ):
         super().__init__()
         self._head_dim = hidden_size // num_attention_heads
@@ -397,6 +411,7 @@ class AttentivePool(nn.Module):
         self.query = nn.Parameter(torch.empty(1, num_queries, hidden_size))
         self.kv_proj = nn.Linear(hidden_size, 2 * hidden_size, bias=bias)
         self.out_proj = nn.Linear(hidden_size, hidden_size, bias=bias)
+        self.gate = nn.Linear(hidden_size, hidden_size) if gated else None
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
@@ -405,6 +420,9 @@ class AttentivePool(nn.Module):
         self.out_proj.reset_parameters()
         nn.init.trunc_normal_(self.kv_proj.weight, std=0.02)
         nn.init.trunc_normal_(self.out_proj.weight, std=0.02)
+        if self.gate is not None:
+            nn.init.trunc_normal_(self.gate.weight, std=0.02)
+            nn.init.zeros_(self.gate.bias)
 
     def forward(self, x: Tensor, rope: Tensor | None = None) -> Tensor:
         y = attention_q_kv_packed_static_query(
@@ -418,6 +436,8 @@ class AttentivePool(nn.Module):
             self.dropout.p,
             self.training,
             rope_k=rope,
+            w_gate=self.gate.weight if self.gate is not None else None,
+            b_gate=self.gate.bias if self.gate is not None else None,
             # fmt: on
         )
         if y.shape[1] == 1:
@@ -430,7 +450,7 @@ class AttentivePool(nn.Module):
             return self.forward(x, rope)
 
     def forward_weights(self, x: Tensor, rope: Tensor | None = None) -> Tensor:
-        return attention_weights_q_kv_packed_static_query(
+        w = attention_weights_q_kv_packed_static_query(
             # fmt: off
             self.query, x,
             self.kv_proj.weight, self.kv_proj.bias,
@@ -438,3 +458,7 @@ class AttentivePool(nn.Module):
             rope_k=rope,
             # fmt: on
         )
+        w = w.movedim(1, -1)
+        if w.shape[1] == 1:
+            w = w.squeeze(1)
+        return w

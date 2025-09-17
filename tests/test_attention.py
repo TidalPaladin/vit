@@ -8,9 +8,10 @@ from vit.attention import AttentivePool, CrossAttention, SelfAttention
 class TestSelfAttention:
 
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_forward(self, dtype, device):
+    @pytest.mark.parametrize("gated", [False, True])
+    def test_forward(self, dtype, device, gated):
         B, L, D = 16, 128, 128
-        multihead_attention = SelfAttention(D, D // 16).to(device)
+        multihead_attention = SelfAttention(D, D // 16, gated=gated).to(device)
         x = torch.randn(B, L, D, dtype=dtype, device=device)
         with torch.autocast(device_type=device.type, dtype=dtype):
             y = multihead_attention(x)
@@ -57,9 +58,10 @@ class TestSelfAttention:
 class TestCrossAttention:
 
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_forward(self, dtype, device):
+    @pytest.mark.parametrize("gated", [False, True])
+    def test_forward(self, dtype, device, gated):
         B, L, D = 16, 128, 128
-        multihead_attention = CrossAttention(D, D // 16).to(device)
+        multihead_attention = CrossAttention(D, D // 16, gated=gated).to(device)
         x = torch.randn(B, L, D, dtype=dtype, device=device)
         kv = torch.randn(B, L // 2, D, dtype=dtype, device=device)
         with torch.autocast(device_type=device.type, dtype=dtype):
@@ -110,9 +112,10 @@ class TestCrossAttention:
 class TestAttentivePool:
 
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_forward(self, dtype, device):
+    @pytest.mark.parametrize("gated", [False, True])
+    def test_forward(self, dtype, device, gated):
         B, L, D = 16, 128, 128
-        layer = AttentivePool(D, D // 16).to(device)
+        layer = AttentivePool(D, D // 16, gated=gated).to(device)
         x = torch.randn(B, L, D, dtype=dtype, device=device)
         with torch.autocast(device_type=device.type, dtype=dtype):
             y = layer(x)

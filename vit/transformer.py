@@ -27,6 +27,7 @@ class TransformerEncoderLayer(nn.Module):
         layer_scale: float | None = None,
         glu_limit: float | None = None,
         glu_extra_bias: float | None = None,
+        gated_attention: bool = False,
     ):
         super().__init__()
         self.drop_path_rate = drop_path_rate
@@ -37,6 +38,7 @@ class TransformerEncoderLayer(nn.Module):
             attention_dropout,
             attention_bias,
             eps,
+            gated=gated_attention,
         )
         self.mlp = NormMLP(
             hidden_size, ffn_hidden_size, mlp_bias, activation, eps, hidden_dropout, glu_limit, glu_extra_bias
@@ -85,6 +87,7 @@ class TransformerDecoderLayer(nn.Module):
         layer_scale: float | None = None,
         glu_limit: float | None = None,
         glu_extra_bias: float | None = None,
+        gated_attention: bool = False,
     ):
         super().__init__()
         self.drop_path_rate = drop_path_rate
@@ -95,6 +98,7 @@ class TransformerDecoderLayer(nn.Module):
             attention_dropout,
             attention_bias,
             eps,
+            gated=gated_attention,
         )
         self.cross_attention = CrossAttention(
             hidden_size,
@@ -103,6 +107,7 @@ class TransformerDecoderLayer(nn.Module):
             attention_dropout,
             attention_bias,
             eps,
+            gated=gated_attention,
         )
         self.mlp = NormMLP(
             hidden_size, ffn_hidden_size, mlp_bias, activation, eps, hidden_dropout, glu_limit, glu_extra_bias
@@ -157,6 +162,7 @@ class CrossAttentionTransformer(nn.Module):
         layer_scale: float | None = None,
         glu_limit: float | None = None,
         glu_extra_bias: float | None = None,
+        gated_attention: bool = False,
     ):
         super().__init__()
         self.drop_path_rate = drop_path_rate
@@ -167,6 +173,7 @@ class CrossAttentionTransformer(nn.Module):
             attention_dropout,
             attention_bias,
             eps,
+            gated=gated_attention,
         )
         self.mlp = NormMLP(
             hidden_size, ffn_hidden_size, mlp_bias, activation, eps, hidden_dropout, glu_limit, glu_extra_bias

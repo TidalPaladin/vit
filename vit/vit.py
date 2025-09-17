@@ -54,6 +54,7 @@ class ViTConfig:
     layer_scale: float | None = None
     glu_limit: float | None = None
     glu_extra_bias: float | None = None
+    gated_attention: bool = False
 
     # RoPE options
     rope_normalize_coords: Literal["min", "max", "separate"] = "separate"
@@ -155,6 +156,7 @@ class ViT(nn.Module):
             layer_scale=self.config.layer_scale,
             glu_limit=self.config.glu_limit,
             glu_extra_bias=self.config.glu_extra_bias,
+            gated_attention=self.config.gated_attention,
         )
 
     def create_decoder_layer(self) -> TransformerDecoderLayer:
@@ -171,6 +173,7 @@ class ViT(nn.Module):
             layer_scale=self.config.layer_scale,
             glu_limit=self.config.glu_limit,
             glu_extra_bias=self.config.glu_extra_bias,
+            gated_attention=self.config.gated_attention,
         )
 
     def create_cross_attention_layer(self) -> CrossAttentionTransformer:
@@ -187,6 +190,7 @@ class ViT(nn.Module):
             layer_scale=self.config.layer_scale,
             glu_limit=self.config.glu_limit,
             glu_extra_bias=self.config.glu_extra_bias,
+            gated_attention=self.config.gated_attention,
         )
 
     def get_head(self, name: str) -> Head | MLPHead:
