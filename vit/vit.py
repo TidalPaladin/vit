@@ -1,7 +1,6 @@
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Literal, Self, Sequence, Type, TypedDict, cast
-from typing import TYPE_CHECKING, Any, Dict, Literal, Self, Sequence, Type, cast
+from typing import TYPE_CHECKING, Any, Dict, Literal, Self, Sequence, Type, TypedDict, cast
 
 import torch
 import torch.nn as nn
@@ -99,6 +98,7 @@ class ViTOutput(TypedDict):
     x_cls: Tensor
     x_visual: Tensor
     x_pre_norm: Tensor
+    x_post_norm: Tensor
 
 
 class ViT(nn.Module):
@@ -323,6 +323,7 @@ class ViT(nn.Module):
             "x_cls": x_cls,  # CLS token
             "x_visual": x_visual,  # Visual tokens
             "x_pre_norm": x,  # Full sequence before normalization
+            "x_post_norm": x_norm,  # Full sequence after normalization
         }
 
     if TYPE_CHECKING:
