@@ -3,7 +3,7 @@
 PROJECT=vit
 QUALITY_DIRS=$(PROJECT) tests
 CLEAN_DIRS=$(PROJECT) tests
-PYTHON=pdm run python
+PYTHON=uv run python
 
 CONFIG_FILE := config.mk
 ifneq ($(wildcard $(CONFIG_FILE)),)
@@ -25,21 +25,19 @@ clean: ## remove cache files
 	find $(CLEAN_DIRS) -name '*.orig' -type f -delete
 
 clean-env: ## remove the virtual environment directory
-	pdm venv remove $(PROJECT)
+	rm -rf .venv
 
 
 deploy: ## installs from lockfile
 	git submodule update --init --recursive
-	which pdm || pip install --user pdm
-	pdm venv create 
-	pdm install --production --no-lock
+	which uv || pip install --user uv
+	uv sync --frozen --no-dev
 
 
 init: ## pulls submodules and initializes virtual environment
 	git submodule update --init --recursive
-	which pdm || pip install --user pdm
-	pdm venv create --with-pip
-	pdm install -d
+	which uv || pip install --user uv
+	uv sync --all-groups
 
 node_modules: 
 ifeq (, $(shell which npm))
@@ -83,7 +81,7 @@ test-ci: ## runs CI-only tests
 		./tests/
 
 types: node_modules
-	pdm run npx --no-install pyright tests $(PROJECT)
+	uv run npx --no-install pyright tests $(PROJECT)
 
 help: ## display this help message
 	@echo "Please use \`make <target>' where <target> is one of"
