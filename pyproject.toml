@@ -1,6 +1,6 @@
 [build-system]
-requires = ["pdm-pep517>=1.0"]
-build-backend = "pdm.pep517.api"
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
 
 [project]
 name = "vit"
@@ -53,8 +53,11 @@ ignore = ["src/oldstuff"]
 pythonVersion = "3.11"
 pythonPlatform = "Linux"
 
-[tool.pdm]
-version = { source = "scm" }
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "vit/_version.py"
 
 [tool.pytest.ini_options]
 markers = [
@@ -68,14 +71,12 @@ filterwarnings = []
 #foo = "project.cli.__main__:main"
 
 [dependency-groups]
-quality = [
+dev = [
     "autoflake",
     "autopep8",
     "black",
     "flake8",
     "isort",
-]
-test = [
     "pytest",
     "pytest-mock",
     "pytest-cov",
