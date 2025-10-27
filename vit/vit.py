@@ -277,7 +277,12 @@ class ViT(nn.Module):
         return rope
 
     def forward(
-        self, x: Tensor, mask: Tensor | None = None, return_register_tokens: bool = False, rope_seed: int | None = None
+        self,
+        x: Tensor,
+        mask: Tensor | None = None,
+        return_register_tokens: bool = False,
+        rope_seed: int | None = None,
+        output_norm: bool = True,
     ) -> Tensor:
         # Prepare transformer input
         tokenized_size = self.stem.tokenized_size(x.shape[2:])
@@ -294,7 +299,7 @@ class ViT(nn.Module):
             x = block(x, rope=rope)
 
         # Prepare output
-        x = self.output_norm(x)
+        x = self.output_norm(x) if output_norm else x
         if not return_register_tokens:
             _, x = self.separate_prefix_tokens(x)
         return x
@@ -307,8 +312,9 @@ class ViT(nn.Module):
             mask: Tensor | None = None,
             return_register_tokens: bool = False,
             rope_seed: int | None = None,
+            output_norm: bool = True,
         ) -> Tensor:
-            return self.forward(x, mask, return_register_tokens, rope_seed)
+            return self.forward(x, mask, return_register_tokens, rope_seed, output_norm)
 
     @torch.no_grad()
     def _reshape_attention_weights(self, w: Tensor, tokenized_size: Sequence[int]) -> Tensor:
