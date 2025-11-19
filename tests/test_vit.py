@@ -5,9 +5,10 @@ from typing import Any
 import pytest
 import torch
 import torch.nn as nn
+from torch.testing import assert_close
 
 from vit.head import HeadConfig
-from vit.vit import ViT, ViTConfig
+from vit.vit import ViT, ViTConfig, ViTFeatures
 
 
 @pytest.fixture(params=[pytest.param(False, id="2d"), pytest.param(True, id="3d")])
@@ -71,7 +72,7 @@ class TestViT:
         with torch.autocast(device_type=device.type, dtype=dtype, enabled=True):
             out = model(x)
         L = math.prod(model.stem.tokenized_size(config.img_size))
-        assert out.shape == (2, L, 128)
+        assert out.visual_tokens.shape == (2, L, 128)
 
     @pytest.mark.parametrize("masked", [False, True])
     def test_forward_with_rope(self, device, config, masked):
@@ -85,7 +86,7 @@ class TestViT:
         with torch.autocast(device_type=device.type, dtype=torch.float32, enabled=True):
             out = model(x, mask=mask)
         L = math.prod(model.stem.tokenized_size(config.img_size))
-        assert out.shape == (3, L if not masked else L // 2, 128)
+        assert out.visual_tokens.shape == (3, L if not masked else L // 2, 128)
 
     @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
@@ -97,9 +98,23 @@ class TestViT:
         x = torch.randn(2, 3, *config.img_size, device=device)
         model = ViT(config).to(device)
         with torch.autocast(device_type=device.type, dtype=dtype, enabled=True):
-            out = model(x, return_register_tokens=True)
-        L = math.prod(model.stem.tokenized_size(config.img_size))
-        assert out.shape == (2, L + num_register_tokens, 128)
+            out = model(x)
+        math.prod(model.stem.tokenized_size(config.img_size))
+        assert out.register_tokens.shape == (2, num_register_tokens, 128)
+
+    @pytest.mark.parametrize("num_cls_tokens", [0, 1, 2])
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+    def test_forward_return_cls_tokens(self, device, config, num_cls_tokens, dtype):
+        config = replace(
+            config,
+            num_cls_tokens=num_cls_tokens,
+        )
+        x = torch.randn(2, 3, *config.img_size, device=device)
+        model = ViT(config).to(device)
+        with torch.autocast(device_type=device.type, dtype=dtype, enabled=True):
+            out = model(x)
+        math.prod(model.stem.tokenized_size(config.img_size))
+        assert out.cls_tokens.shape == (2, num_cls_tokens, 128)
 
     @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
     def test_forward_masked(self, device, config, num_register_tokens):
@@ -112,7 +127,7 @@ class TestViT:
         mask = model.create_mask(x, 0.5, 1)
         out = model(x, mask)
         L = math.prod(model.stem.tokenized_size(config.img_size))
-        assert out.shape == (2, L // 2, 128)
+        assert out.visual_tokens.shape == (2, L // 2, 128)
 
     @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
@@ -125,10 +140,11 @@ class TestViT:
         model = ViT(config).to(device)
         with torch.autocast(device_type=device.type, dtype=dtype, enabled=True):
             out = model(x)
-        out.sum().backward()
+        out.dense_features.sum().backward()
         for name, param in model.named_parameters():
-            assert param.grad is not None, f"{name} has no gradient"
-            assert not param.grad.isnan().any(), f"{name} has nan gradient"
+            if param.requires_grad:
+                assert param.grad is not None, f"{name} has no gradient"
+                assert not param.grad.isnan().any(), f"{name} has nan gradient"
 
     def test_mlp_requires_grad(self, config):
         model = ViT(config)
@@ -164,7 +180,7 @@ class TestViT:
         x = torch.randn(2, 3, *config.img_size, device=device)
         model = ViT(config).to(device)
         out = model(x)
-        pred = model.heads["cls"](out)
+        pred = model.heads["cls"](out.visual_tokens)
         assert pred.shape == (2, 128)
 
     @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
@@ -188,3 +204,38 @@ class TestViT:
             assert (weight >= 0).all(), f"{name} has negative weights"
             assert (weight <= 1).all(), f"{name} has weights greater than 1"
             assert weight.shape == (B, H, L + num_register_tokens, *size)
+
+
+class TestViTFeatures:
+
+    def test_iter(self):
+        num_cls_tokens = 1
+        num_register_tokens = 2
+        num_visual_tokens = 128
+        total_tokens = num_cls_tokens + num_register_tokens + num_visual_tokens
+        features = ViTFeatures(torch.randn(2, total_tokens, 128), num_register_tokens, num_cls_tokens)
+        cls_tokens, register_tokens, visual_tokens = features
+        assert cls_tokens.shape == (2, 1, 128)
+        assert register_tokens.shape == (2, num_register_tokens, 128)
+        assert visual_tokens.shape == (2, num_visual_tokens, 128)
+
+    def test_apply(self):
+        features = ViTFeatures(torch.randn(2, 32, 128), 0, 0)
+        features_plus_one = features.apply(lambda x: x + 1)
+        assert_close(features_plus_one.dense_features, features.dense_features + 1)
+
+    def test_repr(self):
+        features = ViTFeatures(torch.randn(2, 33, 128), 0, 1)
+        expected = f"ViTFeatures(cls_tokens=(2, 1, 128), register_tokens=(2, 0, 128), visual_tokens=(2, 32, 128))"
+        assert isinstance(repr(features), str)
+        assert repr(features) == expected
+
+    def test_from_separate_features(self):
+        cls_tokens = torch.randn(2, 1, 128)
+        register_tokens = torch.randn(2, 2, 128)
+        visual_tokens = torch.randn(2, 128, 128)
+        features = ViTFeatures.from_separate_features(cls_tokens, register_tokens, visual_tokens)
+        assert_close(features.dense_features, torch.cat([cls_tokens, register_tokens, visual_tokens], dim=1))
+        assert features.num_cls_tokens == 1
+        assert features.num_register_tokens == 2
+        assert features.visual_tokens.shape == (2, 128, 128)

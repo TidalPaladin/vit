@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Literal, Self, Sequence, Type, cast
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, Literal, Self, Sequence, Type, cast
 
 import torch
 import torch.nn as nn
@@ -50,7 +50,8 @@ class ViTConfig:
     activation: str = "srelu"
     drop_path_rate: float = 0.0
     num_register_tokens: int = 0
-    pos_enc: PositionEncoder = "fourier"
+    num_cls_tokens: int = 0
+    pos_enc: PositionEncoder = "none"
     layer_scale: float | None = None
     glu_limit: float | None = None
     glu_extra_bias: float | None = None
@@ -92,6 +93,68 @@ class ViTConfig:
         return yaml.dump(self.__dict__)
 
 
+class ViTFeatures:
+
+    def __init__(self, dense_features: Tensor, num_register_tokens: int, num_cls_tokens: int):
+        self._dense_features = dense_features
+        self._num_register_tokens = num_register_tokens
+        self._num_cls_tokens = num_cls_tokens
+
+    def __repr__(self) -> str:
+        return (
+            f"{self.__class__.__name__}("
+            f"cls_tokens={tuple(self.cls_tokens.shape)}, "
+            f"register_tokens={tuple(self.register_tokens.shape)}, "
+            f"visual_tokens={tuple(self.visual_tokens.shape)})"
+        )
+
+    def __iter__(self) -> Iterator[Tensor]:
+        yield self.cls_tokens
+        yield self.register_tokens
+        yield self.visual_tokens
+
+    @property
+    def dense_features(self) -> Tensor:
+        return self._dense_features
+
+    @property
+    def num_register_tokens(self) -> int:
+        return self._num_register_tokens
+
+    @property
+    def num_cls_tokens(self) -> int:
+        return self._num_cls_tokens
+
+    @property
+    def visual_tokens(self) -> Tensor:
+        start = self.num_register_tokens + self.num_cls_tokens
+        return self.dense_features[..., start:, :]
+
+    @property
+    def register_tokens(self) -> Tensor:
+        start = self.num_cls_tokens
+        end = self.num_cls_tokens + self.num_register_tokens
+        return self.dense_features[..., start:end, :]
+
+    @property
+    def cls_tokens(self) -> Tensor:
+        end = self.num_cls_tokens
+        return self.dense_features[..., :end, :]
+
+    def apply(self: Self, func: Callable[[Tensor], Tensor]) -> Self:
+        return self.__class__(func(self.dense_features), self.num_register_tokens, self.num_cls_tokens)
+
+    @classmethod
+    def from_separate_features(
+        cls: Type[Self], cls_tokens: Tensor, register_tokens: Tensor, visual_tokens: Tensor
+    ) -> Self:
+        return cls(
+            dense_features=torch.cat([cls_tokens, register_tokens, visual_tokens], dim=1),
+            num_register_tokens=register_tokens.shape[1],
+            num_cls_tokens=cls_tokens.shape[1],
+        )
+
+
 class ViT(nn.Module):
 
     def __init__(self, config: ViTConfig):
@@ -120,12 +183,17 @@ class ViT(nn.Module):
         else:
             self.rope = None
 
-        # Register tokens
+        # Register / CLS tokens
         self.register_tokens = nn.Parameter(
             torch.empty(1, config.num_register_tokens, config.hidden_size),
             requires_grad=config.num_register_tokens > 0,
         )
+        self.cls_tokens = nn.Parameter(
+            torch.empty(1, config.num_cls_tokens, config.hidden_size),
+            requires_grad=config.num_cls_tokens > 0,
+        )
         nn.init.normal_(self.register_tokens, std=0.02)
+        nn.init.normal_(self.cls_tokens, std=0.02)
 
         self.blocks = nn.ModuleList([self.create_encoder_layer() for _ in range(config.depth)])
         self.output_norm = nn.RMSNorm(config.hidden_size)
@@ -245,12 +313,8 @@ class ViT(nn.Module):
     def add_prefix_tokens(self, x: Tensor) -> Tensor:
         B = x.shape[0]
         register_tokens = self.register_tokens.expand(B, -1, -1)
-        return torch.cat([register_tokens, x], dim=1)
-
-    @torch.compile(fullgraph=True)
-    def separate_prefix_tokens(self, x: Tensor) -> tuple[Tensor, Tensor]:
-        prefix, x = x.split([self.prefix_length, x.shape[1] - self.prefix_length], dim=1)
-        return prefix, x
+        cls_tokens = self.cls_tokens.expand(B, -1, -1)
+        return torch.cat([cls_tokens, register_tokens, x], dim=1)
 
     def prepare_rope(
         self,
@@ -280,10 +344,9 @@ class ViT(nn.Module):
         self,
         x: Tensor,
         mask: Tensor | None = None,
-        return_register_tokens: bool = False,
         rope_seed: int | None = None,
         output_norm: bool = True,
-    ) -> Tensor:
+    ) -> ViTFeatures:
         # Prepare transformer input
         tokenized_size = self.stem.tokenized_size(x.shape[2:])
         x = self.stem(x)
@@ -300,9 +363,7 @@ class ViT(nn.Module):
 
         # Prepare output
         x = self.output_norm(x) if output_norm else x
-        if not return_register_tokens:
-            _, x = self.separate_prefix_tokens(x)
-        return x
+        return ViTFeatures(x, self.config.num_register_tokens, self.config.num_cls_tokens)
 
     if TYPE_CHECKING:
 
@@ -310,11 +371,10 @@ class ViT(nn.Module):
             self,
             x: Tensor,
             mask: Tensor | None = None,
-            return_register_tokens: bool = False,
             rope_seed: int | None = None,
             output_norm: bool = True,
-        ) -> Tensor:
-            return self.forward(x, mask, return_register_tokens, rope_seed, output_norm)
+        ) -> ViTFeatures:
+            return self.forward(x, mask, rope_seed, output_norm)
 
     @torch.no_grad()
     def _reshape_attention_weights(self, w: Tensor, tokenized_size: Sequence[int]) -> Tensor:
