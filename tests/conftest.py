@@ -6,7 +6,7 @@ import torch._dynamo.config
 torch._dynamo.config.dynamic_shapes = True
 torch._dynamo.config.cache_size_limit = 100000000
 torch.backends.cuda.matmul.fp32_precision = "high"
-torch.backends.cudnn.conv.fp32_precision = "high"
+torch.backends.cudnn.conv.fp32_precision = "high"  # type: ignore
 
 
 def cuda_available():

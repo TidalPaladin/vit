@@ -51,7 +51,7 @@ class ViTConfig:
     drop_path_rate: float = 0.0
     num_register_tokens: int = 0
     num_cls_tokens: int = 0
-    pos_enc: PositionEncoder = "none"
+    pos_enc: PositionEncoder = "rope"
     layer_scale: float | None = None
     glu_limit: float | None = None
     glu_extra_bias: float | None = None

@@ -48,7 +48,7 @@ use_parentheses = false
 skip_glob = ["*/_version.py"]
 
 [tool.pyright]
-include = ["vit", "tests"]
+include = ["vit", "tests", "benchmark"]
 exclude = [
   "**/node_modules",
   "**/__pycache__",
