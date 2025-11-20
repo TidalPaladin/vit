@@ -157,7 +157,13 @@ class ViTFeatures:
 
 class ViT(nn.Module):
 
-    def __init__(self, config: ViTConfig):
+    def __init__(
+        self,
+        config: ViTConfig,
+        mlp_quantization_config: Any | None = None,
+        qkv_quantization_config: Any | None = None,
+        attn_quantization_config: Any | None = None,
+    ):
         super().__init__()
         self._config = config
 
@@ -195,7 +201,12 @@ class ViT(nn.Module):
         nn.init.normal_(self.register_tokens, std=0.02)
         nn.init.normal_(self.cls_tokens, std=0.02)
 
-        self.blocks = nn.ModuleList([self.create_encoder_layer() for _ in range(config.depth)])
+        self.blocks = nn.ModuleList(
+            [
+                self.create_encoder_layer(mlp_quantization_config, qkv_quantization_config, attn_quantization_config)
+                for _ in range(config.depth)
+            ]
+        )
         self.output_norm = nn.RMSNorm(config.hidden_size)
 
         self.mlp_requires_grad_(self.config.mlp_requires_grad)
@@ -205,11 +216,26 @@ class ViT(nn.Module):
             {name: head_config.instantiate(config) for name, head_config in config.heads.items()}
         )
 
+    def apply_quantization(
+        self,
+        mlp_quantization_config: Any | None = None,
+        qkv_quantization_config: Any | None = None,
+        attn_quantization_config: Any | None = None,
+    ) -> None:
+        for block in self.blocks:
+            assert isinstance(block, TransformerEncoderLayer)
+            block.apply_quantization(mlp_quantization_config, qkv_quantization_config, attn_quantization_config)
+
     @property
     def config(self) -> ViTConfig:
         return self._config
 
-    def create_encoder_layer(self) -> TransformerEncoderLayer:
+    def create_encoder_layer(
+        self,
+        mlp_quantization_config: Any | None = None,
+        qkv_quantization_config: Any | None = None,
+        attn_quantization_config: Any | None = None,
+    ) -> TransformerEncoderLayer:
         return TransformerEncoderLayer(
             self.config.hidden_size,
             self.config.ffn_hidden_size,
@@ -223,9 +249,17 @@ class ViT(nn.Module):
             layer_scale=self.config.layer_scale,
             glu_limit=self.config.glu_limit,
             glu_extra_bias=self.config.glu_extra_bias,
+            mlp_quantization_config=mlp_quantization_config,
+            qkv_quantization_config=qkv_quantization_config,
+            attn_quantization_config=attn_quantization_config,
         )
 
-    def create_decoder_layer(self) -> TransformerDecoderLayer:
+    def create_decoder_layer(
+        self,
+        mlp_quantization_config: Any | None = None,
+        qkv_quantization_config: Any | None = None,
+        attn_quantization_config: Any | None = None,
+    ) -> TransformerDecoderLayer:
         return TransformerDecoderLayer(
             self.config.hidden_size,
             self.config.ffn_hidden_size,
@@ -239,9 +273,17 @@ class ViT(nn.Module):
             layer_scale=self.config.layer_scale,
             glu_limit=self.config.glu_limit,
             glu_extra_bias=self.config.glu_extra_bias,
+            mlp_quantization_config=mlp_quantization_config,
+            qkv_quantization_config=qkv_quantization_config,
+            attn_quantization_config=attn_quantization_config,
         )
 
-    def create_cross_attention_layer(self) -> CrossAttentionTransformer:
+    def create_cross_attention_layer(
+        self,
+        mlp_quantization_config: Any | None = None,
+        qkv_quantization_config: Any | None = None,
+        attn_quantization_config: Any | None = None,
+    ) -> CrossAttentionTransformer:
         return CrossAttentionTransformer(
             self.config.hidden_size,
             self.config.ffn_hidden_size,
@@ -255,6 +297,9 @@ class ViT(nn.Module):
             layer_scale=self.config.layer_scale,
             glu_limit=self.config.glu_limit,
             glu_extra_bias=self.config.glu_extra_bias,
+            mlp_quantization_config=mlp_quantization_config,
+            qkv_quantization_config=qkv_quantization_config,
+            attn_quantization_config=attn_quantization_config,
         )
 
     def get_head(self, name: str) -> Head | MLPHead:

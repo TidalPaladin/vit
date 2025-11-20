@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import torch
 import torch.nn as nn
@@ -27,6 +27,9 @@ class TransformerEncoderLayer(nn.Module):
         layer_scale: float | None = None,
         glu_limit: float | None = None,
         glu_extra_bias: float | None = None,
+        mlp_quantization_config: Any | None = None,
+        qkv_quantization_config: Any | None = None,
+        attn_quantization_config: Any | None = None,
     ):
         super().__init__()
         self.drop_path_rate = drop_path_rate
@@ -37,9 +40,19 @@ class TransformerEncoderLayer(nn.Module):
             attention_dropout,
             attention_bias,
             eps,
+            qkv_quantization_config=qkv_quantization_config,
+            out_quantization_config=attn_quantization_config,
         )
         self.mlp = NormMLP(
-            hidden_size, ffn_hidden_size, mlp_bias, activation, eps, hidden_dropout, glu_limit, glu_extra_bias
+            hidden_size,
+            ffn_hidden_size,
+            mlp_bias,
+            activation,
+            eps,
+            hidden_dropout,
+            glu_limit,
+            glu_extra_bias,
+            mlp_quantization_config,
         )
         self.layer_scale_attn = (
             LayerScale(hidden_size, layer_scale, inplace=True) if layer_scale is not None else nn.Identity()
@@ -52,6 +65,17 @@ class TransformerEncoderLayer(nn.Module):
     def reset_parameters(self):
         self.self_attention.reset_parameters()
         self.mlp.reset_parameters()
+
+    def apply_quantization(
+        self,
+        mlp_quantization_config: Any | None = None,
+        qkv_quantization_config: Any | None = None,
+        attn_quantization_config: Any | None = None,
+    ) -> None:
+        if mlp_quantization_config is not None:
+            self.mlp.apply_quantization(mlp_quantization_config)
+        if qkv_quantization_config is not None or attn_quantization_config is not None:
+            self.self_attention.apply_quantization(qkv_quantization_config, attn_quantization_config)
 
     @torch.compile
     def forward(self, x: Tensor, rope: Tensor | None = None) -> Tensor:
@@ -85,6 +109,9 @@ class TransformerDecoderLayer(nn.Module):
         layer_scale: float | None = None,
         glu_limit: float | None = None,
         glu_extra_bias: float | None = None,
+        mlp_quantization_config: Any | None = None,
+        qkv_quantization_config: Any | None = None,
+        attn_quantization_config: Any | None = None,
     ):
         super().__init__()
         self.drop_path_rate = drop_path_rate
@@ -95,6 +122,8 @@ class TransformerDecoderLayer(nn.Module):
             attention_dropout,
             attention_bias,
             eps,
+            qkv_quantization_config=qkv_quantization_config,
+            out_quantization_config=attn_quantization_config,
         )
         self.cross_attention = CrossAttention(
             hidden_size,
@@ -103,9 +132,19 @@ class TransformerDecoderLayer(nn.Module):
             attention_dropout,
             attention_bias,
             eps,
+            qkv_quantization_config=qkv_quantization_config,
+            out_quantization_config=attn_quantization_config,
         )
         self.mlp = NormMLP(
-            hidden_size, ffn_hidden_size, mlp_bias, activation, eps, hidden_dropout, glu_limit, glu_extra_bias
+            hidden_size,
+            ffn_hidden_size,
+            mlp_bias,
+            activation,
+            eps,
+            hidden_dropout,
+            glu_limit,
+            glu_extra_bias,
+            mlp_quantization_config,
         )
         self.layer_scale_attn = (
             LayerScale(hidden_size, layer_scale, inplace=True) if layer_scale is not None else nn.Identity()
@@ -122,6 +161,19 @@ class TransformerDecoderLayer(nn.Module):
         self.self_attention.reset_parameters()
         self.cross_attention.reset_parameters()
         self.mlp.reset_parameters()
+
+    def apply_quantization(
+        self,
+        mlp_quantization_config: Any | None = None,
+        qkv_quantization_config: Any | None = None,
+        attn_quantization_config: Any | None = None,
+    ) -> None:
+        if mlp_quantization_config is not None:
+            self.mlp.apply_quantization(mlp_quantization_config)
+        if qkv_quantization_config is not None or attn_quantization_config is not None:
+            self.self_attention.apply_quantization(qkv_quantization_config, attn_quantization_config)
+        if qkv_quantization_config is not None or attn_quantization_config is not None:
+            self.cross_attention.apply_quantization(qkv_quantization_config, attn_quantization_config)
 
     def forward(self, x: Tensor, kv: Tensor, rope_q: Tensor | None = None, rope_k: Tensor | None = None) -> Tensor:
         o = self.layer_scale_attn(self.self_attention(x, rope=rope_q))
@@ -157,6 +209,9 @@ class CrossAttentionTransformer(nn.Module):
         layer_scale: float | None = None,
         glu_limit: float | None = None,
         glu_extra_bias: float | None = None,
+        mlp_quantization_config: Any | None = None,
+        qkv_quantization_config: Any | None = None,
+        attn_quantization_config: Any | None = None,
     ):
         super().__init__()
         self.drop_path_rate = drop_path_rate
@@ -167,9 +222,19 @@ class CrossAttentionTransformer(nn.Module):
             attention_dropout,
             attention_bias,
             eps,
+            qkv_quantization_config=qkv_quantization_config,
+            out_quantization_config=attn_quantization_config,
         )
         self.mlp = NormMLP(
-            hidden_size, ffn_hidden_size, mlp_bias, activation, eps, hidden_dropout, glu_limit, glu_extra_bias
+            hidden_size,
+            ffn_hidden_size,
+            mlp_bias,
+            activation,
+            eps,
+            hidden_dropout,
+            glu_limit,
+            glu_extra_bias,
+            mlp_quantization_config,
         )
         self.layer_scale_cross = (
             LayerScale(hidden_size, layer_scale, inplace=True) if layer_scale is not None else nn.Identity()
@@ -182,6 +247,17 @@ class CrossAttentionTransformer(nn.Module):
     def reset_parameters(self):
         self.cross_attention.reset_parameters()
         self.mlp.reset_parameters()
+
+    def apply_quantization(
+        self,
+        mlp_quantization_config: Any | None = None,
+        qkv_quantization_config: Any | None = None,
+        attn_quantization_config: Any | None = None,
+    ) -> None:
+        if mlp_quantization_config is not None:
+            self.mlp.apply_quantization(mlp_quantization_config)
+        if qkv_quantization_config is not None or attn_quantization_config is not None:
+            self.cross_attention.apply_quantization(qkv_quantization_config, attn_quantization_config)
 
     def forward(self, x: Tensor, kv: Tensor, rope_q: Tensor | None = None, rope_k: Tensor | None = None) -> Tensor:
         o = self.layer_scale_cross(self.cross_attention(x, kv, rope_q=rope_q, rope_k=rope_k))

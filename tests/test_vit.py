@@ -1,4 +1,5 @@
 import math
+from copy import deepcopy
 from dataclasses import replace
 from typing import Any
 
@@ -6,6 +7,7 @@ import pytest
 import torch
 import torch.nn as nn
 from torch.testing import assert_close
+from torchao.quantization import Int8WeightOnlyConfig
 
 from vit.head import HeadConfig
 from vit.vit import ViT, ViTConfig, ViTFeatures
@@ -204,6 +206,22 @@ class TestViT:
             assert (weight >= 0).all(), f"{name} has negative weights"
             assert (weight <= 1).all(), f"{name} has weights greater than 1"
             assert weight.shape == (B, H, L + num_register_tokens, *size)
+
+    def test_quantization(self, device, config):
+        torch.random.manual_seed(0)
+        D = config.hidden_size
+        H = D // 16
+        config = replace(config, hidden_size=D, num_attention_heads=H)
+        model = ViT(config).to(device)
+        model.eval()
+        quantized_model = deepcopy(model)
+        quantized_model.apply_quantization(mlp_quantization_config=Int8WeightOnlyConfig())
+
+        x = torch.randn(2, 3, *config.img_size, device=device)
+        with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=True):
+            y = model(x)
+            y_quant = quantized_model(x)
+        assert_close(y.visual_tokens, y_quant.visual_tokens, atol=1e-2, rtol=0)
 
 
 class TestViTFeatures:

@@ -13,6 +13,7 @@ dependencies = [
   "torch",
   "numpy",
   "pyyaml",
+  "torchao",
 ]
 
 readme = "README.md"

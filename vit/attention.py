@@ -1,9 +1,10 @@
-from typing import TYPE_CHECKING, Tuple
+from typing import TYPE_CHECKING, Any, Tuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
+from torchao.quantization import quantize_
 
 from .rope import apply_rope
 
@@ -242,6 +243,8 @@ class SelfAttention(nn.Module):
         attention_dropout: float = 0.1,
         bias: bool = True,
         eps: float = 1e-5,
+        qkv_quantization_config: Any | None = None,
+        out_quantization_config: Any | None = None,
     ):
         super().__init__()
         self.norm = nn.RMSNorm(hidden_size, eps=eps)
@@ -250,6 +253,8 @@ class SelfAttention(nn.Module):
         self.dropout = nn.Dropout(hidden_dropout)
         self.attention_dropout = nn.Dropout(attention_dropout)
         self._head_dim = hidden_size // num_attention_heads
+        self.qkv_quantization_config = qkv_quantization_config
+        self.out_quantization_config = out_quantization_config
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
@@ -257,6 +262,16 @@ class SelfAttention(nn.Module):
         self.out_proj.reset_parameters()
         self.norm.reset_parameters()
         nn.init.trunc_normal_(self.qkv_proj.weight, std=0.02)
+        self.apply_quantization(self.qkv_quantization_config, self.out_quantization_config)
+
+    def apply_quantization(
+        self, qkv_quantization_config: Any | None = None, out_quantization_config: Any | None = None
+    ) -> None:
+        """Apply quantization to the linear layers using torchao."""
+        if qkv_quantization_config is not None:
+            quantize_(self.qkv_proj, qkv_quantization_config)
+        if out_quantization_config is not None:
+            quantize_(self.out_proj, out_quantization_config)
 
     def forward(self, x: Tensor, attn_mask: Tensor | None = None, rope: Tensor | None = None) -> Tensor:
         return attention_qkv_packed(
@@ -304,6 +319,8 @@ class CrossAttention(nn.Module):
         attention_dropout: float = 0.1,
         bias: bool = True,
         eps: float = 1e-5,
+        qkv_quantization_config: Any | None = None,
+        out_quantization_config: Any | None = None,
     ):
         super().__init__()
         self.norm = nn.RMSNorm(hidden_size, eps=eps)
@@ -313,6 +330,8 @@ class CrossAttention(nn.Module):
         self.dropout = nn.Dropout(hidden_dropout)
         self.attention_dropout = nn.Dropout(attention_dropout)
         self._head_dim = hidden_size // num_attention_heads
+        self.qkv_quantization_config = qkv_quantization_config
+        self.out_quantization_config = out_quantization_config
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
@@ -322,6 +341,17 @@ class CrossAttention(nn.Module):
         self.norm.reset_parameters()
         nn.init.trunc_normal_(self.q_proj.weight, std=0.02)
         nn.init.trunc_normal_(self.kv_proj.weight, std=0.02)
+        self.apply_quantization(self.qkv_quantization_config, self.out_quantization_config)
+
+    def apply_quantization(
+        self, qkv_quantization_config: Any | None = None, out_quantization_config: Any | None = None
+    ) -> None:
+        """Apply quantization to the linear layers using torchao."""
+        if qkv_quantization_config is not None:
+            quantize_(self.q_proj, qkv_quantization_config)
+            quantize_(self.kv_proj, qkv_quantization_config)
+        if out_quantization_config is not None:
+            quantize_(self.out_proj, out_quantization_config)
 
     def forward(
         self,

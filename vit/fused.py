@@ -1,9 +1,10 @@
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
+from torchao.quantization import quantize_
 
 from .helpers import get_activation
 
@@ -26,18 +27,35 @@ def norm_linear(
 
 class NormLinear(nn.Module):
 
-    def __init__(self, in_features: int, out_features: int, bias: bool = True, eps: float = 1e-5, dropout: float = 0.0):
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        bias: bool = True,
+        eps: float = 1e-5,
+        dropout: float = 0.0,
+        quantization_config: Any | None = None,
+    ):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
         self.norm = nn.RMSNorm(in_features, eps=eps)
         self.linear = nn.Linear(in_features, out_features, bias=bias)
         self.dropout = nn.Dropout(dropout)
+        self.quantization_config = quantization_config
+        self.reset_parameters()
 
     def reset_parameters(self) -> None:
         self.norm.reset_parameters()
         self.linear.reset_parameters()
         nn.init.trunc_normal_(self.linear.weight, std=0.02)
+        self.apply_quantization(self.quantization_config)
+
+    def apply_quantization(self, quantization_config: Any | None) -> None:
+        """Apply quantization to the linear layer using torchao."""
+        if quantization_config is None:
+            return
+        quantize_(self.linear, quantization_config)
 
     def forward(self, x: Tensor) -> Tensor:
         return norm_linear(
@@ -142,6 +160,7 @@ class NormMLP(nn.Module):
         dropout: float = 0.1,
         limit: float | None = None,
         extra_bias: float | None = None,
+        quantization_config: Any | None = None,
     ):
         super().__init__()
         self.norm = nn.RMSNorm(hidden_size, eps=eps)
@@ -157,6 +176,7 @@ class NormMLP(nn.Module):
         self.activation = get_activation(activation)
         self.limit = limit
         self.extra_bias = extra_bias
+        self.quantization_config = quantization_config
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
@@ -165,6 +185,16 @@ class NormMLP(nn.Module):
         self.fc2.reset_parameters()
         nn.init.trunc_normal_(self.fc1.weight, std=0.02)
         nn.init.trunc_normal_(self.fc2.weight, std=0.02)
+
+        # Apply quantization after weight initialization
+        self.apply_quantization(self.quantization_config)
+
+    def apply_quantization(self, quantization_config: Any | None) -> None:
+        """Apply quantization to both linear layers using torchao."""
+        if quantization_config is None:
+            return
+        quantize_(self.fc1, quantization_config)
+        quantize_(self.fc2, quantization_config)
 
     def forward(self, x: Tensor) -> Tensor:
         if self._is_glu:
