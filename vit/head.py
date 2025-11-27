@@ -35,6 +35,7 @@ def register_constructors():
 class HeadConfig:
     head_type: Literal["linear", "mlp"] = "linear"
     pool_type: Literal["avg", "max", "attentive", "none"] = "avg"
+    in_dim: int | None = None
     out_dim: int | None = None
     stop_gradient: bool = False
     num_attention_heads: int | None = None
@@ -47,7 +48,7 @@ class HeadConfig:
         match self.head_type:
             case "linear":
                 return Head(
-                    backbone_config.hidden_size,
+                    self.in_dim or backbone_config.hidden_size,
                     self.pool_type,
                     self.out_dim,
                     self.num_attention_heads or backbone_config.num_attention_heads,
@@ -56,7 +57,7 @@ class HeadConfig:
                 )
             case "mlp":
                 return MLPHead(
-                    backbone_config.hidden_size,
+                    self.in_dim or backbone_config.hidden_size,
                     backbone_config.ffn_hidden_size,
                     backbone_config.activation,
                     self.pool_type,

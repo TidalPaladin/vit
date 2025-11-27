@@ -24,6 +24,7 @@ def config(request):
         hidden_size=128,
         ffn_hidden_size=256,
         num_attention_heads=128 // 16,
+        pos_enc="learnable",
     )
     return config
 
