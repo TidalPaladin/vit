@@ -43,6 +43,7 @@ class HeadConfig:
     output_norm: bool = False
     hidden_dropout: float = 0.0
     attention_dropout: float = 0.0
+    activation: str | None = None
 
     def instantiate(self, backbone_config: ViTConfig) -> Union["Head", "MLPHead"]:
         match self.head_type:
@@ -59,7 +60,7 @@ class HeadConfig:
                 return MLPHead(
                     self.in_dim or backbone_config.hidden_size,
                     backbone_config.ffn_hidden_size,
-                    backbone_config.activation,
+                    self.activation or backbone_config.activation,
                     self.pool_type,
                     self.out_dim,
                     self.num_attention_heads or backbone_config.num_attention_heads,
