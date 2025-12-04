@@ -1,12 +1,9 @@
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, Union
+from typing import TYPE_CHECKING, Any
 
 import torch.nn as nn
 import yaml
 from torch import Tensor
-
-from .attention import AttentivePool
-from .fused import NormLinear, NormMLP
 
 
 if TYPE_CHECKING:
@@ -20,174 +17,161 @@ def head_config_constructor(loader, node):
     return HeadConfig(**values)
 
 
+def transposed_conv2d_head_config_constructor(loader, node):
+    values = loader.construct_mapping(node, deep=True)
+    return TransposedConv2dHeadConfig(**values)
+
+
 def register_constructors():
-    tags = [
+    head_tags = [
         "tag:yaml.org,2002:python/object:vit.head.HeadConfig",
         "tag:yaml.org,2002:python/object:vit.HeadConfig",
     ]
+    transposed_conv2d_head_tags = [
+        "tag:yaml.org,2002:python/object:vit.head.TransposedConv2dHeadConfig",
+        "tag:yaml.org,2002:python/object:vit.TransposedConv2dHeadConfig",
+    ]
     loaders = [yaml.SafeLoader, yaml.FullLoader, yaml.UnsafeLoader]
-    for tag in tags:
+    for tag in head_tags:
         for loader in loaders:
             loader.add_constructor(tag, head_config_constructor)
+    for tag in transposed_conv2d_head_tags:
+        for loader in loaders:
+            loader.add_constructor(tag, transposed_conv2d_head_config_constructor)
 
 
 @dataclass
 class HeadConfig:
-    head_type: Literal["linear", "mlp"] = "linear"
-    pool_type: Literal["avg", "max", "attentive", "none"] = "avg"
-    in_dim: int | None = None
-    out_dim: int | None = None
-    stop_gradient: bool = False
-    num_attention_heads: int | None = None
-    rope: bool = False
-    output_norm: bool = False
-    hidden_dropout: float = 0.0
-    attention_dropout: float = 0.0
-    activation: str | None = None
+    in_features: int | None = None
+    out_features: int | None = None
+    dropout: float = 0.0
 
-    def instantiate(self, backbone_config: ViTConfig) -> Union["Head", "MLPHead"]:
-        match self.head_type:
-            case "linear":
-                return Head(
-                    self.in_dim or backbone_config.hidden_size,
-                    self.pool_type,
-                    self.out_dim,
-                    self.num_attention_heads or backbone_config.num_attention_heads,
-                    self.stop_gradient,
-                    self.output_norm,
-                )
-            case "mlp":
-                return MLPHead(
-                    self.in_dim or backbone_config.hidden_size,
-                    backbone_config.ffn_hidden_size,
-                    self.activation or backbone_config.activation,
-                    self.pool_type,
-                    self.out_dim,
-                    self.num_attention_heads or backbone_config.num_attention_heads,
-                    self.stop_gradient,
-                    self.output_norm,
-                    backbone_config.hidden_dropout,
-                )
-            case _:
-                raise ValueError(f"Invalid head type: {self.head_type}")
+    def instantiate(self, backbone_config: ViTConfig) -> "Head":
+        return Head(
+            self.in_features or backbone_config.hidden_size,
+            self.out_features or backbone_config.hidden_size,
+            self.dropout,
+        )
 
 
-class AveragePool(nn.Module):
+@dataclass
+class TransposedConv2dHeadConfig:
+    """Config for TransposedConv2dHead.
 
-    def forward(self, x: Tensor) -> Tensor:
-        return x.mean(dim=1)
+    Args:
+        in_features: Number of input features. If None, uses backbone hidden_size.
+        out_features: Number of output features. If None, uses backbone hidden_size.
+        kernel_size: Size of convolving kernel.
+        stride: Stride of the convolution.
+        padding: Padding added to input.
+        output_padding: Additional size added to output shape.
+        dilation: Spacing between kernel elements.
+        groups: Number of blocked connections from input to output.
+        dropout: Dropout probability.
+    """
 
+    in_features: int | None = None
+    out_features: int | None = None
+    kernel_size: int | tuple[int, int] = 4
+    stride: int | tuple[int, int] = 2
+    padding: int | tuple[int, int] = 1
+    output_padding: int | tuple[int, int] = 0
+    dilation: int | tuple[int, int] = 1
+    groups: int = 1
+    dropout: float = 0.0
 
-class MaxPool(nn.Module):
-
-    def forward(self, x: Tensor) -> Tensor:
-        return x.amax(dim=1)
+    def instantiate(self, backbone_config: ViTConfig) -> "TransposedConv2dHead":
+        in_features = self.in_features or backbone_config.hidden_size
+        out_features = self.out_features or backbone_config.hidden_size
+        return TransposedConv2dHead(
+            in_channels=in_features,
+            out_channels=out_features,
+            kernel_size=self.kernel_size,
+            stride=self.stride,
+            padding=self.padding,
+            output_padding=self.output_padding,
+            dilation=self.dilation,
+            groups=self.groups,
+            dropout=self.dropout,
+        )
 
 
 class Head(nn.Module):
 
-    def __init__(
-        self,
-        hidden_size: int,
-        pool_type: Literal["avg", "max", "attentive", "none"] = "avg",
-        out_dim: int | None = None,
-        num_attention_heads: int | None = None,
-        stop_gradient: bool = False,
-        output_norm: bool = False,
-        hidden_dropout: float = 0.0,
-        attention_dropout: float = 0.0,
-    ):
+    def __init__(self, in_features: int, out_features: int, dropout: float = 0.0):
         super().__init__()
-        out_dim = out_dim or hidden_size
-        self.stop_gradient = stop_gradient
-        match pool_type:
-            case "avg":
-                self.pool = AveragePool()
-            case "max":
-                self.pool = MaxPool()
-            case "attentive":
-                if num_attention_heads is None:
-                    raise ValueError("num_attention_heads is required for attentive pooling")
-                self.pool = AttentivePool(
-                    hidden_size, num_attention_heads, hidden_dropout=hidden_dropout, attention_dropout=attention_dropout
-                )
-            case "none":
-                self.pool = nn.Identity()
-            case _:
-                raise ValueError(f"Invalid pool type: {pool_type}")
-        self.proj = NormLinear(hidden_size, out_dim, dropout=hidden_dropout)
-        self.norm = nn.RMSNorm(out_dim, eps=1e-5) if output_norm else nn.Identity()
+        self.dropout = nn.Dropout(dropout)
+        self.proj = nn.Linear(in_features, out_features)
         self.reset_parameters()
 
-    def reset_parameters(self) -> None:
+    def reset_parameters(self, bias: float = 0.0) -> None:
         self.proj.reset_parameters()
-        if isinstance(self.pool, AttentivePool):
-            self.pool.reset_parameters()
+        nn.init.trunc_normal_(self.proj.weight, std=0.02)
+        if self.proj.bias is not None:
+            nn.init.constant_(self.proj.bias, bias)
 
-    def forward(self, x: Tensor, rope: Tensor | None = None) -> Tensor:
-        if self.stop_gradient:
-            x = x.detach()
-        x = self.pool(x, rope) if isinstance(self.pool, AttentivePool) else self.pool(x)
-        return self.norm(self.proj(x))
+    def forward(self, x: Tensor) -> Tensor:
+        x = self.dropout(x)
+        return self.proj(x)
 
     if TYPE_CHECKING:
 
-        def __call__(self, x: Tensor, rope: Tensor | None = None) -> Tensor:
+        def __call__(self, x: Tensor) -> Tensor:
             return self.forward(x)
 
 
-class MLPHead(nn.Module):
+class TransposedConv2dHead(nn.Module):
+    """Head that applies transposed 2D convolution.
+
+    Expects input of shape (B, D, H, W) and outputs (B, out_channels, H', W')
+    where H' and W' depend on the convolution parameters.
+    """
 
     def __init__(
         self,
-        hidden_size: int,
-        ffn_hidden_size: int,
-        activation: str = "gelu",
-        pool_type: Literal["avg", "max", "attentive", "none"] = "avg",
-        out_dim: int | None = None,
-        num_attention_heads: int | None = None,
-        stop_gradient: bool = False,
-        output_norm: bool = False,
-        hidden_dropout: float = 0.0,
-        attention_dropout: float = 0.0,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int | tuple[int, int] = 4,
+        stride: int | tuple[int, int] = 2,
+        padding: int | tuple[int, int] = 1,
+        output_padding: int | tuple[int, int] = 0,
+        dilation: int | tuple[int, int] = 1,
+        groups: int = 1,
+        dropout: float = 0.0,
     ):
         super().__init__()
-        out_dim = out_dim or hidden_size
-        self.stop_gradient = stop_gradient
-        match pool_type:
-            case "avg":
-                self.pool = AveragePool()
-            case "max":
-                self.pool = MaxPool()
-            case "attentive":
-                if num_attention_heads is None:
-                    raise ValueError("num_attention_heads is required for attentive pooling")
-                self.pool = AttentivePool(
-                    hidden_size, num_attention_heads, hidden_dropout=hidden_dropout, attention_dropout=attention_dropout
-                )
-            case "none":
-                self.pool = nn.Identity()
-            case _:
-                raise ValueError(f"Invalid pool type: {pool_type}")
-        self.neck = NormMLP(hidden_size, ffn_hidden_size, activation=activation, dropout=hidden_dropout)
-        self.proj = NormLinear(hidden_size, out_dim, dropout=hidden_dropout)
-        self.norm = nn.RMSNorm(out_dim, eps=1e-5) if output_norm else nn.Identity()
+        self.dropout = nn.Dropout(dropout)
+        self.conv_transpose = nn.ConvTranspose2d(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            output_padding=output_padding,
+            dilation=dilation,
+            groups=groups,
+        )
         self.reset_parameters()
 
-    def reset_parameters(self) -> None:
-        self.proj.reset_parameters()
-        self.neck.reset_parameters()
-        if isinstance(self.pool, AttentivePool):
-            self.pool.reset_parameters()
+    def reset_parameters(self, bias: float = 0.0) -> None:
+        nn.init.trunc_normal_(self.conv_transpose.weight, std=0.02)
+        if self.conv_transpose.bias is not None:
+            nn.init.constant_(self.conv_transpose.bias, bias)
 
-    def forward(self, x: Tensor, rope: Tensor | None = None) -> Tensor:
-        if self.stop_gradient:
-            x = x.detach()
-        x = self.pool(x, rope) if isinstance(self.pool, AttentivePool) else self.pool(x)
-        x = self.neck(x)
-        return self.norm(self.proj(x))
+    def forward(self, x: Tensor) -> Tensor:
+        """Forward pass.
+
+        Args:
+            x: Input tensor of shape (B, D, H, W).
+
+        Returns:
+            Output tensor of shape (B, out_channels, H', W').
+        """
+        x = self.dropout(x)
+        x = self.conv_transpose(x)
+        return x
 
     if TYPE_CHECKING:
 
-        def __call__(self, x: Tensor, rope: Tensor | None = None) -> Tensor:
-            return self.forward(x, rope)
+        def __call__(self, x: Tensor) -> Tensor:
+            return self.forward(x)

@@ -7,7 +7,7 @@ import torch.nn as nn
 import yaml
 from torch import Tensor
 
-from .head import Head, HeadConfig, MLPHead
+from .head import Head, HeadConfig, TransposedConv2dHead
 from .patch_embed import PatchEmbed2d, PatchEmbed3d
 from .pos_enc import PositionEncoder
 from .rope import RopePositionEmbedding
@@ -302,9 +302,9 @@ class ViT(nn.Module):
             attn_quantization_config=attn_quantization_config,
         )
 
-    def get_head(self, name: str) -> Head | MLPHead:
+    def get_head(self, name: str) -> Head | TransposedConv2dHead:
         head = self.heads[name]
-        assert isinstance(head, Head | MLPHead)
+        assert isinstance(head, Head | TransposedConv2dHead)
         return head
 
     def get_block(self, i: int) -> TransformerEncoderLayer:

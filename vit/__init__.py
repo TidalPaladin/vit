@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 import importlib.metadata
 
-from .head import Head, HeadConfig, MLPHead
+from .head import Head, HeadConfig, TransposedConv2dHead, TransposedConv2dHeadConfig
 from .head import register_constructors as register_head_constructors
 from .vit import ViT, ViTConfig, ViTFeatures
 from .vit import register_constructors as register_vit_constructors
@@ -18,7 +18,8 @@ __all__ = [
     "ViTFeatures",
     "HeadConfig",
     "Head",
-    "MLPHead",
+    "TransposedConv2dHead",
+    "TransposedConv2dHeadConfig",
     "register_vit_constructors",
     "register_head_constructors",
 ]
