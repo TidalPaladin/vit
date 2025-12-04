@@ -196,7 +196,9 @@ class UpsampleHeadConfig:
     Args:
         in_features: Number of input channels. If None, uses backbone hidden_size.
         out_features: Number of output channels.
-        hidden_features: Number of hidden channels. If None, uses in_features.
+        hidden_features: Hidden channel sizes. Can be an int (same for all stages) or
+            a list of ints specifying the output channels for each stage except the last.
+            If None, uses in_features. For N stages, a list should have N-1 elements.
         num_upsample_stages: Number of 2x upsample stages (e.g., 4 for 16x total).
         num_smooth_layers: Number of smoothing conv layers per upsample stage.
         dropout: Dropout probability.
@@ -204,14 +206,14 @@ class UpsampleHeadConfig:
 
     in_features: int | None = None
     out_features: int | None = None
-    hidden_features: int | None = None
+    hidden_features: int | list[int] | None = None
     num_upsample_stages: int = 4
     num_smooth_layers: int = 2
     dropout: float = 0.0
 
     def instantiate(self, backbone_config: ViTConfig) -> "UpsampleHead":
         in_features = self.in_features or backbone_config.hidden_size
-        hidden_features = self.hidden_features or in_features
+        hidden_features = self.hidden_features if self.hidden_features is not None else in_features
         out_features = self.out_features or backbone_config.hidden_size
         return UpsampleHead(
             in_channels=in_features,
@@ -238,23 +240,50 @@ class UpsampleHead(nn.Module):
         self,
         in_channels: int,
         out_channels: int,
-        hidden_channels: int | None = None,
+        hidden_channels: int | list[int] | None = None,
         num_upsample_stages: int = 4,
         num_smooth_layers: int = 2,
         dropout: float = 0.0,
     ):
         super().__init__()
-        hidden_channels = hidden_channels or in_channels
         self.dropout = nn.Dropout(dropout)
         self.num_upsample_stages = num_upsample_stages
+
+        # Resolve hidden_channels to a list of output channels for each stage
+        if hidden_channels is None:
+            hidden_channels_list = [in_channels] * (num_upsample_stages - 1)
+        elif isinstance(hidden_channels, int):
+            hidden_channels_list = [hidden_channels] * (num_upsample_stages - 1)
+        else:
+            hidden_channels_list = hidden_channels
+            expected_len = num_upsample_stages - 1
+            if len(hidden_channels_list) < expected_len:
+                raise ValueError(
+                    f"hidden_channels list has {len(hidden_channels_list)} elements, but "
+                    f"{num_upsample_stages} upsample stages require {expected_len} hidden channel values "
+                    f"(one for each stage except the last, which uses out_channels={out_channels})"
+                )
+            if len(hidden_channels_list) > expected_len:
+                raise ValueError(
+                    f"hidden_channels list has {len(hidden_channels_list)} elements, but "
+                    f"{num_upsample_stages} upsample stages only need {expected_len} hidden channel values "
+                    f"(one for each stage except the last, which uses out_channels={out_channels})"
+                )
 
         # Build progressive upsample stages
         upsample_layers: list[nn.ConvTranspose2d] = []
         smooth_layers: list[nn.Sequential] = []
 
         for i in range(num_upsample_stages):
-            stage_in = in_channels if i == 0 else hidden_channels
-            stage_out = out_channels if i == num_upsample_stages - 1 else hidden_channels
+            if i == 0:
+                stage_in = in_channels
+            else:
+                stage_in = hidden_channels_list[i - 1]
+
+            if i == num_upsample_stages - 1:
+                stage_out = out_channels
+            else:
+                stage_out = hidden_channels_list[i]
 
             # Transposed conv for 2x upsampling
             upsample_layers.append(nn.ConvTranspose2d(stage_in, stage_out, kernel_size=2, stride=2, padding=0))

@@ -319,7 +319,7 @@ class TestUpsampleHead:
             conv_count = sum(1 for m in smooth if isinstance(m, torch.nn.Conv2d))  # type: ignore
             assert conv_count == num_smooth_layers
 
-    def test_hidden_channels(self, device):
+    def test_hidden_channels_int(self, device):
         x = torch.randn(2, 128, 14, 14, device=device)
         model = UpsampleHead(
             in_channels=128,
@@ -329,13 +329,71 @@ class TestUpsampleHead:
         ).to(device)
         out = model(x)
         assert out.shape == (2, 32, 112, 112)
-        # Check intermediate channel dimensions
+        # Check intermediate channel dimensions (same hidden size for all)
         assert model.upsample_layers[0].in_channels == 128
         assert model.upsample_layers[0].out_channels == 64
         assert model.upsample_layers[1].in_channels == 64
         assert model.upsample_layers[1].out_channels == 64
         assert model.upsample_layers[2].in_channels == 64
         assert model.upsample_layers[2].out_channels == 32
+
+    def test_hidden_channels_list(self, device):
+        x = torch.randn(2, 128, 14, 14, device=device)
+        # Gradually decrease channels: 128 -> 96 -> 64 -> 32
+        model = UpsampleHead(
+            in_channels=128,
+            out_channels=32,
+            hidden_channels=[96, 64],
+            num_upsample_stages=3,
+        ).to(device)
+        out = model(x)
+        assert out.shape == (2, 32, 112, 112)
+        # Check channel progression
+        assert model.upsample_layers[0].in_channels == 128
+        assert model.upsample_layers[0].out_channels == 96
+        assert model.upsample_layers[1].in_channels == 96
+        assert model.upsample_layers[1].out_channels == 64
+        assert model.upsample_layers[2].in_channels == 64
+        assert model.upsample_layers[2].out_channels == 32
+
+    def test_hidden_channels_list_4_stages(self, device):
+        x = torch.randn(2, 256, 14, 14, device=device)
+        # Gradually decrease: 256 -> 128 -> 64 -> 32 -> 16
+        model = UpsampleHead(
+            in_channels=256,
+            out_channels=16,
+            hidden_channels=[128, 64, 32],
+            num_upsample_stages=4,
+        ).to(device)
+        out = model(x)
+        assert out.shape == (2, 16, 224, 224)
+        # Check channel progression
+        assert model.upsample_layers[0].in_channels == 256
+        assert model.upsample_layers[0].out_channels == 128
+        assert model.upsample_layers[1].in_channels == 128
+        assert model.upsample_layers[1].out_channels == 64
+        assert model.upsample_layers[2].in_channels == 64
+        assert model.upsample_layers[2].out_channels == 32
+        assert model.upsample_layers[3].in_channels == 32
+        assert model.upsample_layers[3].out_channels == 16
+
+    def test_hidden_channels_list_too_short(self):
+        with pytest.raises(ValueError, match="has 1 elements.*3 upsample stages require 2"):
+            UpsampleHead(
+                in_channels=128,
+                out_channels=32,
+                hidden_channels=[64],  # Should have 2 elements for 3 stages
+                num_upsample_stages=3,
+            )
+
+    def test_hidden_channels_list_too_long(self):
+        with pytest.raises(ValueError, match="has 4 elements.*3 upsample stages only need 2"):
+            UpsampleHead(
+                in_channels=128,
+                out_channels=32,
+                hidden_channels=[96, 64, 48, 32],  # Should have 2 elements for 3 stages
+                num_upsample_stages=3,
+            )
 
     def test_backward(self, device):
         x = torch.randn(2, 64, 14, 14, device=device, requires_grad=True)
