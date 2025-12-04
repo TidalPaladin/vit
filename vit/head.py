@@ -22,6 +22,11 @@ def transposed_conv2d_head_config_constructor(loader, node):
     return TransposedConv2dHeadConfig(**values)
 
 
+def upsample_head_config_constructor(loader, node):
+    values = loader.construct_mapping(node, deep=True)
+    return UpsampleHeadConfig(**values)
+
+
 def register_constructors():
     head_tags = [
         "tag:yaml.org,2002:python/object:vit.head.HeadConfig",
@@ -31,6 +36,10 @@ def register_constructors():
         "tag:yaml.org,2002:python/object:vit.head.TransposedConv2dHeadConfig",
         "tag:yaml.org,2002:python/object:vit.TransposedConv2dHeadConfig",
     ]
+    upsample_head_tags = [
+        "tag:yaml.org,2002:python/object:vit.head.UpsampleHeadConfig",
+        "tag:yaml.org,2002:python/object:vit.UpsampleHeadConfig",
+    ]
     loaders = [yaml.SafeLoader, yaml.FullLoader, yaml.UnsafeLoader]
     for tag in head_tags:
         for loader in loaders:
@@ -38,6 +47,9 @@ def register_constructors():
     for tag in transposed_conv2d_head_tags:
         for loader in loaders:
             loader.add_constructor(tag, transposed_conv2d_head_config_constructor)
+    for tag in upsample_head_tags:
+        for loader in loaders:
+            loader.add_constructor(tag, upsample_head_config_constructor)
 
 
 @dataclass
@@ -169,6 +181,124 @@ class TransposedConv2dHead(nn.Module):
         """
         x = self.dropout(x)
         x = self.conv_transpose(x)
+        return x
+
+    if TYPE_CHECKING:
+
+        def __call__(self, x: Tensor) -> Tensor:
+            return self.forward(x)
+
+
+@dataclass
+class UpsampleHeadConfig:
+    """Config for UpsampleHead.
+
+    Args:
+        in_features: Number of input channels. If None, uses backbone hidden_size.
+        out_features: Number of output channels.
+        hidden_features: Number of hidden channels. If None, uses in_features.
+        num_upsample_stages: Number of 2x upsample stages (e.g., 4 for 16x total).
+        num_smooth_layers: Number of smoothing conv layers per upsample stage.
+        dropout: Dropout probability.
+    """
+
+    in_features: int | None = None
+    out_features: int | None = None
+    hidden_features: int | None = None
+    num_upsample_stages: int = 4
+    num_smooth_layers: int = 2
+    dropout: float = 0.0
+
+    def instantiate(self, backbone_config: ViTConfig) -> "UpsampleHead":
+        in_features = self.in_features or backbone_config.hidden_size
+        hidden_features = self.hidden_features or in_features
+        out_features = self.out_features or backbone_config.hidden_size
+        return UpsampleHead(
+            in_channels=in_features,
+            out_channels=out_features,
+            hidden_channels=hidden_features,
+            num_upsample_stages=self.num_upsample_stages,
+            num_smooth_layers=self.num_smooth_layers,
+            dropout=self.dropout,
+        )
+
+
+class UpsampleHead(nn.Module):
+    """Head with progressive upsampling and smoothing for artifact-free output.
+
+    Uses interleaved transposed convolutions (2x2, stride 2) for upsampling and
+    regular convolutions (3x3, stride 1) for smoothing to reduce tiling artifacts
+    between ViT patches.
+
+    Expects input of shape (B, C, H, W) and outputs (B, out_channels, H * scale, W * scale)
+    where scale = 2^num_upsample_stages.
+    """
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        hidden_channels: int | None = None,
+        num_upsample_stages: int = 4,
+        num_smooth_layers: int = 2,
+        dropout: float = 0.0,
+    ):
+        super().__init__()
+        hidden_channels = hidden_channels or in_channels
+        self.dropout = nn.Dropout(dropout)
+        self.num_upsample_stages = num_upsample_stages
+
+        # Build progressive upsample stages
+        upsample_layers: list[nn.ConvTranspose2d] = []
+        smooth_layers: list[nn.Sequential] = []
+
+        for i in range(num_upsample_stages):
+            stage_in = in_channels if i == 0 else hidden_channels
+            stage_out = out_channels if i == num_upsample_stages - 1 else hidden_channels
+
+            # Transposed conv for 2x upsampling
+            upsample_layers.append(nn.ConvTranspose2d(stage_in, stage_out, kernel_size=2, stride=2, padding=0))
+
+            # Smoothing convolutions to blend across patch boundaries
+            smooth_modules: list[nn.Module] = []
+            for j in range(num_smooth_layers):
+                smooth_modules.append(nn.Conv2d(stage_out, stage_out, kernel_size=3, stride=1, padding=1))
+                # Add GELU activation except after the last layer of the last stage
+                if not (i == num_upsample_stages - 1 and j == num_smooth_layers - 1):
+                    smooth_modules.append(nn.GELU())
+            smooth_layers.append(nn.Sequential(*smooth_modules))
+
+        self.upsample_layers = nn.ModuleList(upsample_layers)
+        self.smooth_layers = nn.ModuleList(smooth_layers)
+        self.reset_parameters()
+
+    def reset_parameters(self, bias: float = 0.0) -> None:
+        for upsample in self.upsample_layers:
+            assert isinstance(upsample, nn.ConvTranspose2d)
+            nn.init.trunc_normal_(upsample.weight, std=0.02)
+            if upsample.bias is not None:
+                nn.init.constant_(upsample.bias, bias)
+        for smooth in self.smooth_layers:
+            assert isinstance(smooth, nn.Sequential)
+            for module in smooth:
+                if isinstance(module, nn.Conv2d):
+                    nn.init.trunc_normal_(module.weight, std=0.02)
+                    if module.bias is not None:
+                        nn.init.constant_(module.bias, bias)
+
+    def forward(self, x: Tensor) -> Tensor:
+        """Forward pass.
+
+        Args:
+            x: Input tensor of shape (B, C, H, W).
+
+        Returns:
+            Output tensor of shape (B, out_channels, H * scale, W * scale).
+        """
+        x = self.dropout(x)
+        for upsample, smooth in zip(self.upsample_layers, self.smooth_layers):
+            x = upsample(x)
+            x = x + smooth(x)
         return x
 
     if TYPE_CHECKING:

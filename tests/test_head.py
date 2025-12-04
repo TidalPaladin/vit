@@ -1,7 +1,14 @@
 import pytest
 import torch
 
-from vit.head import Head, HeadConfig, TransposedConv2dHead, TransposedConv2dHeadConfig
+from vit.head import (
+    Head,
+    HeadConfig,
+    TransposedConv2dHead,
+    TransposedConv2dHeadConfig,
+    UpsampleHead,
+    UpsampleHeadConfig,
+)
 from vit.vit import ViTConfig
 
 
@@ -221,3 +228,137 @@ class TestTransposedConv2dHead:
         assert model.dropout.p == dropout
         out = model(x)
         assert out.shape == (2, 32, 28, 28)
+
+
+class TestUpsampleHeadConfig:
+
+    def test_instantiate(self):
+        config = UpsampleHeadConfig(out_features=32, num_upsample_stages=4)
+        vit_config = ViTConfig(
+            in_channels=3,
+            patch_size=(16, 16),
+            img_size=(224, 224),
+            depth=3,
+            hidden_size=128,
+            ffn_hidden_size=256,
+            num_attention_heads=128 // 16,
+        )
+        model = config.instantiate(vit_config)
+        assert isinstance(model, UpsampleHead)
+        assert len(model.upsample_layers) == 4
+        assert len(model.smooth_layers) == 4
+
+    @pytest.mark.parametrize("num_upsample_stages", [1, 2, 3, 4])
+    def test_instantiate_stages(self, num_upsample_stages):
+        config = UpsampleHeadConfig(
+            in_features=64,
+            out_features=32,
+            num_upsample_stages=num_upsample_stages,
+        )
+        vit_config = ViTConfig(
+            in_channels=3,
+            patch_size=(16, 16),
+            img_size=(224, 224),
+            depth=3,
+            hidden_size=128,
+            ffn_hidden_size=256,
+            num_attention_heads=128 // 16,
+        )
+        model = config.instantiate(vit_config)
+        assert isinstance(model, UpsampleHead)
+        assert len(model.upsample_layers) == num_upsample_stages
+
+
+class TestUpsampleHead:
+
+    @pytest.mark.parametrize("in_channels", [64, 128])
+    @pytest.mark.parametrize("out_channels", [32, 64])
+    def test_forward(self, device, in_channels, out_channels):
+        # 14x14 input with 4 stages -> 224x224 output (16x upscale)
+        x = torch.randn(2, in_channels, 14, 14, device=device)
+        model = UpsampleHead(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            num_upsample_stages=4,
+        ).to(device)
+        out = model(x)
+        assert out.shape == (2, out_channels, 224, 224)
+
+    @pytest.mark.parametrize(
+        "num_upsample_stages,expected_scale",
+        [
+            (1, 2),
+            (2, 4),
+            (3, 8),
+            (4, 16),
+        ],
+    )
+    def test_output_sizes(self, device, num_upsample_stages, expected_scale):
+        x = torch.randn(2, 64, 14, 14, device=device)
+        model = UpsampleHead(
+            in_channels=64,
+            out_channels=32,
+            num_upsample_stages=num_upsample_stages,
+        ).to(device)
+        out = model(x)
+        assert out.shape == (2, 32, 14 * expected_scale, 14 * expected_scale)
+
+    @pytest.mark.parametrize("num_smooth_layers", [1, 2, 3])
+    def test_smooth_layers(self, device, num_smooth_layers):
+        x = torch.randn(2, 64, 14, 14, device=device)
+        model = UpsampleHead(
+            in_channels=64,
+            out_channels=32,
+            num_upsample_stages=2,
+            num_smooth_layers=num_smooth_layers,
+        ).to(device)
+        out = model(x)
+        assert out.shape == (2, 32, 56, 56)
+        # Check that each stage has the right number of conv layers in smooth
+        for smooth in model.smooth_layers:
+            conv_count = sum(1 for m in smooth if isinstance(m, torch.nn.Conv2d))  # type: ignore
+            assert conv_count == num_smooth_layers
+
+    def test_hidden_channels(self, device):
+        x = torch.randn(2, 128, 14, 14, device=device)
+        model = UpsampleHead(
+            in_channels=128,
+            out_channels=32,
+            hidden_channels=64,
+            num_upsample_stages=3,
+        ).to(device)
+        out = model(x)
+        assert out.shape == (2, 32, 112, 112)
+        # Check intermediate channel dimensions
+        assert model.upsample_layers[0].in_channels == 128
+        assert model.upsample_layers[0].out_channels == 64
+        assert model.upsample_layers[1].in_channels == 64
+        assert model.upsample_layers[1].out_channels == 64
+        assert model.upsample_layers[2].in_channels == 64
+        assert model.upsample_layers[2].out_channels == 32
+
+    def test_backward(self, device):
+        x = torch.randn(2, 64, 14, 14, device=device, requires_grad=True)
+        model = UpsampleHead(
+            in_channels=64,
+            out_channels=32,
+            num_upsample_stages=4,
+        ).to(device)
+        out = model(x)
+        out.sum().backward()
+        for name, param in model.named_parameters():
+            assert param.grad is not None, f"{name} has no gradient"
+            assert not param.grad.isnan().any(), f"{name} has nan gradient"
+
+    @pytest.mark.parametrize("dropout", [0.0, 0.1, 0.5])
+    def test_dropout(self, device, dropout):
+        x = torch.randn(2, 64, 14, 14, device=device)
+        model = UpsampleHead(
+            in_channels=64,
+            out_channels=32,
+            num_upsample_stages=2,
+            dropout=dropout,
+        ).to(device)
+        assert model.dropout.p == dropout
+        out = model(x)
+        assert out.shape == (2, 32, 56, 56)
