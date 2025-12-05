@@ -1,17 +1,21 @@
 import pytest
 import torch
-import torch.nn as nn
 
-from vit.head import Head, HeadConfig, MLPHead
-from vit.rope import RopePositionEmbedding
+from vit.head import (
+    Head,
+    HeadConfig,
+    TransposedConv2dHead,
+    TransposedConv2dHeadConfig,
+    UpsampleHead,
+    UpsampleHeadConfig,
+)
 from vit.vit import ViTConfig
 
 
 class TestHeadConfig:
 
-    @pytest.mark.parametrize("head_type", ["linear", "mlp"])
-    def test_instantiate(self, head_type):
-        config = HeadConfig(head_type=head_type, pool_type="avg", out_dim=128, stop_gradient=False)
+    def test_instantiate(self):
+        config = HeadConfig(out_features=128)
         vit_config = ViTConfig(
             in_channels=3,
             patch_size=(16, 16),
@@ -22,105 +26,397 @@ class TestHeadConfig:
             num_attention_heads=128 // 16,
         )
         model = config.instantiate(vit_config)
-        if head_type == "linear":
-            assert isinstance(model, Head)
-        elif head_type == "mlp":
-            assert isinstance(model, MLPHead)
-        else:
-            raise ValueError(f"Invalid head type: {head_type}")
+        assert isinstance(model, Head)
+        assert model.proj.in_features == 128
+        assert model.proj.out_features == 128
+
+    def test_instantiate_custom_dims(self):
+        config = HeadConfig(in_features=256, out_features=64, dropout=0.1)
+        vit_config = ViTConfig(
+            in_channels=3,
+            patch_size=(16, 16),
+            img_size=(224, 224),
+            depth=3,
+            hidden_size=128,
+            ffn_hidden_size=256,
+            num_attention_heads=128 // 16,
+        )
+        model = config.instantiate(vit_config)
+        assert isinstance(model, Head)
+        assert model.proj.in_features == 256
+        assert model.proj.out_features == 64
+
+
+class TestTransposedConv2dHeadConfig:
+
+    def test_instantiate(self):
+        config = TransposedConv2dHeadConfig(out_features=64, kernel_size=4, stride=2, padding=1)
+        vit_config = ViTConfig(
+            in_channels=3,
+            patch_size=(16, 16),
+            img_size=(224, 224),
+            depth=3,
+            hidden_size=128,
+            ffn_hidden_size=256,
+            num_attention_heads=128 // 16,
+        )
+        model = config.instantiate(vit_config)
+        assert isinstance(model, TransposedConv2dHead)
+        assert model.conv_transpose.in_channels == 128
+        assert model.conv_transpose.out_channels == 64
+
+    @pytest.mark.parametrize(
+        "kernel_size,stride,padding,output_padding",
+        [
+            (4, 2, 1, 0),
+            (3, 1, 1, 0),
+            ((4, 4), (2, 2), (1, 1), (0, 0)),
+            (2, 2, 0, 0),
+        ],
+    )
+    def test_instantiate_conv_params(self, kernel_size, stride, padding, output_padding):
+        config = TransposedConv2dHeadConfig(
+            in_features=64,
+            out_features=32,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            output_padding=output_padding,
+        )
+        vit_config = ViTConfig(
+            in_channels=3,
+            patch_size=(16, 16),
+            img_size=(224, 224),
+            depth=3,
+            hidden_size=128,
+            ffn_hidden_size=256,
+            num_attention_heads=128 // 16,
+        )
+        model = config.instantiate(vit_config)
+        assert isinstance(model, TransposedConv2dHead)
+        assert model.conv_transpose.in_channels == 64
+        assert model.conv_transpose.out_channels == 32
 
 
 class TestHead:
 
-    @pytest.mark.parametrize("pool_type", ["avg", "max", "attentive", "none"])
-    @pytest.mark.parametrize("out_dim", [None, 128, 32])
-    @pytest.mark.parametrize("output_norm", [True, False])
-    def test_forward(self, device, pool_type, out_dim, output_norm):
-        x = torch.randn(2, 196, 128, device=device)
-        model = Head(128, pool_type, out_dim, 128 // 16, False, output_norm).to(device)
+    @pytest.mark.parametrize("in_features", [64, 128])
+    @pytest.mark.parametrize("out_features", [32, 128])
+    def test_forward(self, device, in_features, out_features):
+        x = torch.randn(2, 196, in_features, device=device)
+        model = Head(in_features, out_features).to(device)
         out = model(x)
-        if pool_type == "none":
-            assert out.shape == (2, 196, out_dim or 128)
-        else:
-            assert out.shape == (2, out_dim or 128)
+        assert out.shape == (2, 196, out_features)
+
+    def test_forward_2d(self, device):
+        x = torch.randn(2, 128, device=device)
+        model = Head(128, 64).to(device)
+        out = model(x)
+        assert out.shape == (2, 64)
 
     def test_backward(self, device):
         x = torch.randn(2, 196, 128, device=device, requires_grad=True)
-        model = Head(128, "avg", 128, 128 // 16, False).to(device)
+        model = Head(128, 64).to(device)
         out = model(x)
         out.sum().backward()
         for name, param in model.named_parameters():
             assert param.grad is not None, f"{name} has no gradient"
             assert not param.grad.isnan().any(), f"{name} has nan gradient"
 
-    def test_stop_gradient(self, device):
-        x = torch.randn(2, 196, 128, device=device, requires_grad=True)
-        layer = nn.Linear(128, 128).to(device)
-        model = Head(128, "avg", 128, 128 // 16, True).to(device)
-        out = model(layer(x))
-        out.sum().backward()
-        assert layer.weight.grad is None
-        assert layer.bias.grad is None
-
-    def test_forward_rope(self, device):
-        out_dim = 10
-        pool_type = "attentive"
-        dim = 128
-        num_heads = dim // 16
-        x = torch.randn(2, 144, 128, device=device)
-        model = Head(dim, pool_type, out_dim, num_heads, False).to(device)
-        rope = RopePositionEmbedding(dim, num_heads=num_heads, base=100).to(device)
-        rope_angle = rope(H=12, W=12)
-        out = model(x, rope_angle)
-        if pool_type == "none":
-            assert out.shape == (2, 196, out_dim or 128)
-        else:
-            assert out.shape == (2, out_dim or 128)
-
-
-class TestMLPHead:
-
-    @pytest.mark.parametrize("pool_type", ["avg", "max", "attentive", "none"])
-    @pytest.mark.parametrize("out_dim", [None, 128, 32])
-    @pytest.mark.parametrize("output_norm", [True, False])
-    def test_forward(self, device, pool_type, out_dim, output_norm):
+    @pytest.mark.parametrize("dropout", [0.0, 0.1, 0.5])
+    def test_dropout(self, device, dropout):
         x = torch.randn(2, 196, 128, device=device)
-        model = MLPHead(128, 256, "gelu", pool_type, out_dim, 128 // 16, False, output_norm).to(device)
+        model = Head(128, 64, dropout=dropout).to(device)
+        assert model.dropout.p == dropout
         out = model(x)
-        if pool_type == "none":
-            assert out.shape == (2, 196, out_dim or 128)
-        else:
-            assert out.shape == (2, out_dim or 128)
+        assert out.shape == (2, 196, 64)
+
+
+class TestTransposedConv2dHead:
+
+    @pytest.mark.parametrize("in_channels", [64, 128])
+    @pytest.mark.parametrize("out_channels", [32, 64])
+    def test_forward(self, device, in_channels, out_channels):
+        x = torch.randn(2, in_channels, 14, 14, device=device)
+        model = TransposedConv2dHead(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=4,
+            stride=2,
+            padding=1,
+        ).to(device)
+        out = model(x)
+        assert out.shape == (2, out_channels, 28, 28)
+
+    @pytest.mark.parametrize(
+        "kernel_size,stride,padding,expected_size",
+        [
+            (4, 2, 1, 28),  # 14 -> 28 (2x upscale)
+            (2, 2, 0, 28),  # 14 -> 28 (2x upscale)
+            (4, 4, 0, 56),  # 14 -> 56 (4x upscale)
+        ],
+    )
+    def test_output_sizes(self, device, kernel_size, stride, padding, expected_size):
+        x = torch.randn(2, 64, 14, 14, device=device)
+        model = TransposedConv2dHead(
+            in_channels=64,
+            out_channels=32,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+        ).to(device)
+        out = model(x)
+        assert out.shape == (2, 32, expected_size, expected_size)
 
     def test_backward(self, device):
-        x = torch.randn(2, 196, 128, device=device, requires_grad=True)
-        model = MLPHead(128, 256, "gelu", "avg", 128, 128 // 16).to(device)
+        x = torch.randn(2, 64, 14, 14, device=device, requires_grad=True)
+        model = TransposedConv2dHead(
+            in_channels=64,
+            out_channels=32,
+            kernel_size=4,
+            stride=2,
+            padding=1,
+        ).to(device)
         out = model(x)
         out.sum().backward()
         for name, param in model.named_parameters():
             assert param.grad is not None, f"{name} has no gradient"
             assert not param.grad.isnan().any(), f"{name} has nan gradient"
 
-    def test_stop_gradient(self, device):
-        x = torch.randn(2, 196, 128, device=device, requires_grad=True)
-        layer = nn.Linear(128, 128).to(device)
-        model = MLPHead(128, 256, "gelu", "avg", 128, 128 // 16, stop_gradient=True).to(device)
-        out = model(layer(x))
-        out.sum().backward()
-        assert layer.weight.grad is None
-        assert layer.bias.grad is None
+    @pytest.mark.parametrize("groups", [1, 2, 4])
+    def test_groups(self, device, groups):
+        in_channels = 64
+        out_channels = 32
+        x = torch.randn(2, in_channels, 14, 14, device=device)
+        model = TransposedConv2dHead(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=4,
+            stride=2,
+            padding=1,
+            groups=groups,
+        ).to(device)
+        out = model(x)
+        assert out.shape == (2, out_channels, 28, 28)
 
-    def test_forward_rope(self, device):
-        out_dim = 10
-        pool_type = "attentive"
-        dim = 128
-        num_heads = dim // 16
-        x = torch.randn(2, 144, 128, device=device)
-        model = MLPHead(dim, 256, "gelu", pool_type, out_dim, num_heads).to(device)
-        rope = RopePositionEmbedding(dim, num_heads=num_heads, base=100).to(device)
-        rope_angle = rope(H=12, W=12)
-        out = model(x, rope_angle)
-        if pool_type == "none":
-            assert out.shape == (2, 196, out_dim or 128)
-        else:
-            assert out.shape == (2, out_dim or 128)
+    @pytest.mark.parametrize("dilation", [1, 2])
+    def test_dilation(self, device, dilation):
+        x = torch.randn(2, 64, 14, 14, device=device)
+        model = TransposedConv2dHead(
+            in_channels=64,
+            out_channels=32,
+            kernel_size=3,
+            stride=1,
+            padding=dilation,
+            dilation=dilation,
+        ).to(device)
+        out = model(x)
+        assert out.shape[0] == 2
+        assert out.shape[1] == 32
+
+    @pytest.mark.parametrize("dropout", [0.0, 0.1, 0.5])
+    def test_dropout(self, device, dropout):
+        x = torch.randn(2, 64, 14, 14, device=device)
+        model = TransposedConv2dHead(
+            in_channels=64,
+            out_channels=32,
+            kernel_size=4,
+            stride=2,
+            padding=1,
+            dropout=dropout,
+        ).to(device)
+        assert model.dropout.p == dropout
+        out = model(x)
+        assert out.shape == (2, 32, 28, 28)
+
+
+class TestUpsampleHeadConfig:
+
+    def test_instantiate(self):
+        config = UpsampleHeadConfig(out_features=32, num_upsample_stages=4)
+        vit_config = ViTConfig(
+            in_channels=3,
+            patch_size=(16, 16),
+            img_size=(224, 224),
+            depth=3,
+            hidden_size=128,
+            ffn_hidden_size=256,
+            num_attention_heads=128 // 16,
+        )
+        model = config.instantiate(vit_config)
+        assert isinstance(model, UpsampleHead)
+        assert len(model.upsample_layers) == 4
+        assert len(model.smooth_layers) == 4
+
+    @pytest.mark.parametrize("num_upsample_stages", [1, 2, 3, 4])
+    def test_instantiate_stages(self, num_upsample_stages):
+        config = UpsampleHeadConfig(
+            in_features=64,
+            out_features=32,
+            num_upsample_stages=num_upsample_stages,
+        )
+        vit_config = ViTConfig(
+            in_channels=3,
+            patch_size=(16, 16),
+            img_size=(224, 224),
+            depth=3,
+            hidden_size=128,
+            ffn_hidden_size=256,
+            num_attention_heads=128 // 16,
+        )
+        model = config.instantiate(vit_config)
+        assert isinstance(model, UpsampleHead)
+        assert len(model.upsample_layers) == num_upsample_stages
+
+
+class TestUpsampleHead:
+
+    @pytest.mark.parametrize("in_channels", [64, 128])
+    @pytest.mark.parametrize("out_channels", [32, 64])
+    def test_forward(self, device, in_channels, out_channels):
+        # 14x14 input with 4 stages -> 224x224 output (16x upscale)
+        x = torch.randn(2, in_channels, 14, 14, device=device)
+        model = UpsampleHead(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            num_upsample_stages=4,
+        ).to(device)
+        out = model(x)
+        assert out.shape == (2, out_channels, 224, 224)
+
+    @pytest.mark.parametrize(
+        "num_upsample_stages,expected_scale",
+        [
+            (1, 2),
+            (2, 4),
+            (3, 8),
+            (4, 16),
+        ],
+    )
+    def test_output_sizes(self, device, num_upsample_stages, expected_scale):
+        x = torch.randn(2, 64, 14, 14, device=device)
+        model = UpsampleHead(
+            in_channels=64,
+            out_channels=32,
+            num_upsample_stages=num_upsample_stages,
+        ).to(device)
+        out = model(x)
+        assert out.shape == (2, 32, 14 * expected_scale, 14 * expected_scale)
+
+    @pytest.mark.parametrize("num_smooth_layers", [1, 2, 3])
+    def test_smooth_layers(self, device, num_smooth_layers):
+        x = torch.randn(2, 64, 14, 14, device=device)
+        model = UpsampleHead(
+            in_channels=64,
+            out_channels=32,
+            num_upsample_stages=2,
+            num_smooth_layers=num_smooth_layers,
+        ).to(device)
+        out = model(x)
+        assert out.shape == (2, 32, 56, 56)
+        # Check that each stage has the right number of conv layers in smooth
+        for smooth in model.smooth_layers:
+            conv_count = sum(1 for m in smooth if isinstance(m, torch.nn.Conv2d))  # type: ignore
+            assert conv_count == num_smooth_layers
+
+    def test_hidden_channels_int(self, device):
+        x = torch.randn(2, 128, 14, 14, device=device)
+        model = UpsampleHead(
+            in_channels=128,
+            out_channels=32,
+            hidden_channels=64,
+            num_upsample_stages=3,
+        ).to(device)
+        out = model(x)
+        assert out.shape == (2, 32, 112, 112)
+        # Check intermediate channel dimensions (same hidden size for all)
+        assert model.upsample_layers[0].in_channels == 128
+        assert model.upsample_layers[0].out_channels == 64
+        assert model.upsample_layers[1].in_channels == 64
+        assert model.upsample_layers[1].out_channels == 64
+        assert model.upsample_layers[2].in_channels == 64
+        assert model.upsample_layers[2].out_channels == 32
+
+    def test_hidden_channels_list(self, device):
+        x = torch.randn(2, 128, 14, 14, device=device)
+        # Gradually decrease channels: 128 -> 96 -> 64 -> 32
+        model = UpsampleHead(
+            in_channels=128,
+            out_channels=32,
+            hidden_channels=[96, 64],
+            num_upsample_stages=3,
+        ).to(device)
+        out = model(x)
+        assert out.shape == (2, 32, 112, 112)
+        # Check channel progression
+        assert model.upsample_layers[0].in_channels == 128
+        assert model.upsample_layers[0].out_channels == 96
+        assert model.upsample_layers[1].in_channels == 96
+        assert model.upsample_layers[1].out_channels == 64
+        assert model.upsample_layers[2].in_channels == 64
+        assert model.upsample_layers[2].out_channels == 32
+
+    def test_hidden_channels_list_4_stages(self, device):
+        x = torch.randn(2, 256, 14, 14, device=device)
+        # Gradually decrease: 256 -> 128 -> 64 -> 32 -> 16
+        model = UpsampleHead(
+            in_channels=256,
+            out_channels=16,
+            hidden_channels=[128, 64, 32],
+            num_upsample_stages=4,
+        ).to(device)
+        out = model(x)
+        assert out.shape == (2, 16, 224, 224)
+        # Check channel progression
+        assert model.upsample_layers[0].in_channels == 256
+        assert model.upsample_layers[0].out_channels == 128
+        assert model.upsample_layers[1].in_channels == 128
+        assert model.upsample_layers[1].out_channels == 64
+        assert model.upsample_layers[2].in_channels == 64
+        assert model.upsample_layers[2].out_channels == 32
+        assert model.upsample_layers[3].in_channels == 32
+        assert model.upsample_layers[3].out_channels == 16
+
+    def test_hidden_channels_list_too_short(self):
+        with pytest.raises(ValueError, match="has 1 elements.*3 upsample stages require 2"):
+            UpsampleHead(
+                in_channels=128,
+                out_channels=32,
+                hidden_channels=[64],  # Should have 2 elements for 3 stages
+                num_upsample_stages=3,
+            )
+
+    def test_hidden_channels_list_too_long(self):
+        with pytest.raises(ValueError, match="has 4 elements.*3 upsample stages only need 2"):
+            UpsampleHead(
+                in_channels=128,
+                out_channels=32,
+                hidden_channels=[96, 64, 48, 32],  # Should have 2 elements for 3 stages
+                num_upsample_stages=3,
+            )
+
+    def test_backward(self, device):
+        x = torch.randn(2, 64, 14, 14, device=device, requires_grad=True)
+        model = UpsampleHead(
+            in_channels=64,
+            out_channels=32,
+            num_upsample_stages=4,
+        ).to(device)
+        out = model(x)
+        out.sum().backward()
+        for name, param in model.named_parameters():
+            assert param.grad is not None, f"{name} has no gradient"
+            assert not param.grad.isnan().any(), f"{name} has nan gradient"
+
+    @pytest.mark.parametrize("dropout", [0.0, 0.1, 0.5])
+    def test_dropout(self, device, dropout):
+        x = torch.randn(2, 64, 14, 14, device=device)
+        model = UpsampleHead(
+            in_channels=64,
+            out_channels=32,
+            num_upsample_stages=2,
+            dropout=dropout,
+        ).to(device)
+        assert model.dropout.p == dropout
+        out = model(x)
+        assert out.shape == (2, 32, 56, 56)
