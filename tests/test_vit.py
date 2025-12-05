@@ -224,6 +224,15 @@ class TestViT:
             y_quant = quantized_model(x)
         assert_close(y.visual_tokens, y_quant.visual_tokens, atol=1e-2, rtol=0)
 
+    def test_forward_returns_tokenized_size(self, device, config):
+        x = torch.randn(2, 3, *config.img_size, device=device)
+        model = ViT(config).to(device)
+        out = model(x)
+        expected_size = model.stem.tokenized_size(config.img_size)
+        assert out.tokenized_size == tuple(expected_size)
+        grid = out.visual_tokens_as_grid
+        assert grid.shape == (2, *expected_size, config.hidden_size)
+
 
 class TestViTFeatures:
 
@@ -258,3 +267,63 @@ class TestViTFeatures:
         assert features.num_cls_tokens == 1
         assert features.num_register_tokens == 2
         assert features.visual_tokens.shape == (2, 128, 128)
+
+    @pytest.mark.parametrize(
+        "tokenized_size",
+        [
+            pytest.param((8, 16), id="2d"),
+            pytest.param((4, 8, 16), id="3d"),
+        ],
+    )
+    def test_visual_tokens_as_grid(self, tokenized_size):
+        B, C = 2, 64
+        L = math.prod(tokenized_size)
+        dense_features = torch.randn(B, L, C)
+        features = ViTFeatures(dense_features, num_register_tokens=0, num_cls_tokens=0, tokenized_size=tokenized_size)
+        grid = features.visual_tokens_as_grid
+        assert grid.shape == (B, *tokenized_size, C)
+        assert_close(grid.view(B, L, C), dense_features)
+
+    def test_visual_tokens_as_grid_with_prefix_tokens(self):
+        B, C = 2, 64
+        tokenized_size = (8, 16)
+        L = math.prod(tokenized_size)
+        num_cls_tokens, num_register_tokens = 1, 2
+        total_tokens = num_cls_tokens + num_register_tokens + L
+        dense_features = torch.randn(B, total_tokens, C)
+        features = ViTFeatures(dense_features, num_register_tokens, num_cls_tokens, tokenized_size)
+        grid = features.visual_tokens_as_grid
+        assert grid.shape == (B, *tokenized_size, C)
+        assert_close(grid.view(B, L, C), features.visual_tokens)
+
+    def test_visual_tokens_as_grid_no_tokenized_size_raises(self):
+        features = ViTFeatures(torch.randn(2, 32, 128), 0, 0)
+        with pytest.raises(ValueError, match="tokenized_size is not set"):
+            _ = features.visual_tokens_as_grid
+
+    def test_tokenized_size_property(self):
+        tokenized_size = (14, 14)
+        features = ViTFeatures(torch.randn(2, 196, 128), 0, 0, tokenized_size=tokenized_size)
+        assert features.tokenized_size == tokenized_size
+
+    def test_tokenized_size_none_by_default(self):
+        features = ViTFeatures(torch.randn(2, 32, 128), 0, 0)
+        assert features.tokenized_size is None
+
+    def test_apply_preserves_tokenized_size(self):
+        tokenized_size = (8, 8)
+        features = ViTFeatures(torch.randn(2, 64, 128), 0, 0, tokenized_size=tokenized_size)
+        features_plus_one = features.apply(lambda x: x + 1)
+        assert features_plus_one.tokenized_size == tokenized_size
+
+    def test_from_separate_features_with_tokenized_size(self):
+        cls_tokens = torch.randn(2, 1, 128)
+        register_tokens = torch.randn(2, 2, 128)
+        visual_tokens = torch.randn(2, 64, 128)
+        tokenized_size = (8, 8)
+        features = ViTFeatures.from_separate_features(
+            cls_tokens, register_tokens, visual_tokens, tokenized_size=tokenized_size
+        )
+        assert features.tokenized_size == tokenized_size
+        grid = features.visual_tokens_as_grid
+        assert grid.shape == (2, 8, 8, 128)

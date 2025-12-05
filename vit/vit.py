@@ -95,10 +95,17 @@ class ViTConfig:
 
 class ViTFeatures:
 
-    def __init__(self, dense_features: Tensor, num_register_tokens: int, num_cls_tokens: int):
+    def __init__(
+        self,
+        dense_features: Tensor,
+        num_register_tokens: int,
+        num_cls_tokens: int,
+        tokenized_size: Sequence[int] | None = None,
+    ):
         self._dense_features = dense_features
         self._num_register_tokens = num_register_tokens
         self._num_cls_tokens = num_cls_tokens
+        self._tokenized_size = tuple(tokenized_size) if tokenized_size is not None else None
 
     def __repr__(self) -> str:
         return (
@@ -141,17 +148,48 @@ class ViTFeatures:
         end = self.num_cls_tokens
         return self.dense_features[..., :end, :]
 
+    @property
+    def tokenized_size(self) -> tuple[int, ...] | None:
+        return self._tokenized_size
+
+    @property
+    def visual_tokens_as_grid(self) -> Tensor:
+        """Returns visual tokens reshaped to spatial grid.
+
+        Shapes:
+            - For 2D: (B, L, C) -> (B, H, W, C)
+            - For 3D: (B, L, C) -> (B, D, H, W, C)
+
+        Returns:
+            Reshaped visual tokens with spatial dimensions.
+
+        Raises:
+            ValueError: If tokenized_size is not set.
+        """
+        if self._tokenized_size is None:
+            raise ValueError("tokenized_size is not set, cannot reshape to grid")
+        visual = self.visual_tokens
+        B, L, C = visual.shape
+        return visual.view(B, *self._tokenized_size, C)
+
     def apply(self: Self, func: Callable[[Tensor], Tensor]) -> Self:
-        return self.__class__(func(self.dense_features), self.num_register_tokens, self.num_cls_tokens)
+        return self.__class__(
+            func(self.dense_features), self.num_register_tokens, self.num_cls_tokens, self._tokenized_size
+        )
 
     @classmethod
     def from_separate_features(
-        cls: Type[Self], cls_tokens: Tensor, register_tokens: Tensor, visual_tokens: Tensor
+        cls: Type[Self],
+        cls_tokens: Tensor,
+        register_tokens: Tensor,
+        visual_tokens: Tensor,
+        tokenized_size: Sequence[int] | None = None,
     ) -> Self:
         return cls(
             dense_features=torch.cat([cls_tokens, register_tokens, visual_tokens], dim=1),
             num_register_tokens=register_tokens.shape[1],
             num_cls_tokens=cls_tokens.shape[1],
+            tokenized_size=tokenized_size,
         )
 
 
@@ -408,7 +446,7 @@ class ViT(nn.Module):
 
         # Prepare output
         x = self.output_norm(x) if output_norm else x
-        return ViTFeatures(x, self.config.num_register_tokens, self.config.num_cls_tokens)
+        return ViTFeatures(x, self.config.num_register_tokens, self.config.num_cls_tokens, tokenized_size)
 
     if TYPE_CHECKING:
 
