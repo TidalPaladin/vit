@@ -306,14 +306,16 @@ class UpsampleHead(nn.Module):
             assert isinstance(upsample, nn.ConvTranspose2d)
             nn.init.trunc_normal_(upsample.weight, std=0.02)
             if upsample.bias is not None:
-                nn.init.constant_(upsample.bias, bias)
-        for smooth in self.smooth_layers:
+                nn.init.constant_(upsample.bias, 0.0)
+        for stage_idx, smooth in enumerate(self.smooth_layers):
             assert isinstance(smooth, nn.Sequential)
-            for module in smooth:
-                if isinstance(module, nn.Conv2d):
-                    nn.init.trunc_normal_(module.weight, std=0.02)
-                    if module.bias is not None:
-                        nn.init.constant_(module.bias, bias)
+            is_last_stage = stage_idx == len(self.smooth_layers) - 1
+            conv_modules = [m for m in smooth if isinstance(m, nn.Conv2d)]
+            for conv_idx, module in enumerate(conv_modules):
+                nn.init.trunc_normal_(module.weight, std=0.02)
+                if module.bias is not None:
+                    is_final_layer = is_last_stage and conv_idx == len(conv_modules) - 1
+                    nn.init.constant_(module.bias, bias if is_final_layer else 0.0)
 
     def forward(self, x: Tensor) -> Tensor:
         """Forward pass.
