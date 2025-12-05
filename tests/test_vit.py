@@ -79,6 +79,53 @@ class TestViT:
         for name, param in model.named_parameters():
             assert param.dtype == torch.float32, f"{name} has dtype {param.dtype}, expected float32"
 
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+    def test_all_params_initialized_with_correct_dtype_and_device(self, device, dtype):
+        """Verify all parameters (including heads) are initialized with correct dtype and device."""
+        config = ViTConfig(
+            in_channels=3,
+            patch_size=(16, 16),
+            img_size=(224, 224),
+            depth=2,
+            hidden_size=64,
+            ffn_hidden_size=128,
+            num_attention_heads=4,
+            pos_enc="learnable",
+            num_register_tokens=2,
+            num_cls_tokens=1,
+            dtype=dtype,
+            heads={"cls": HeadConfig(out_features=10), "seg": HeadConfig(out_features=64)},
+        )
+        model = ViT(config, device=device)
+
+        # Check all parameters have correct dtype and device
+        for name, param in model.named_parameters():
+            assert param.dtype == dtype, f"Parameter {name} has dtype {param.dtype}, expected {dtype}"
+            assert param.device == device, f"Parameter {name} on device {param.device}, expected {device}"
+
+        # Check all buffers have correct device (buffers may have different dtypes, e.g. bool for masks)
+        for name, buf in model.named_buffers():
+            assert buf.device == device, f"Buffer {name} on device {buf.device}, expected {device}"
+            # Only check dtype for float buffers
+            if buf.dtype.is_floating_point:
+                assert buf.dtype == dtype, f"Buffer {name} has dtype {buf.dtype}, expected {dtype}"
+
+        # Verify specific components to ensure factory_kwargs propagated correctly
+        assert model.stem.patch.weight.dtype == dtype, "Stem conv weight has wrong dtype"
+        assert model.stem.patch.weight.device == device, "Stem conv weight on wrong device"
+        assert model.register_tokens.dtype == dtype, "Register tokens have wrong dtype"
+        assert model.cls_tokens.dtype == dtype, "CLS tokens have wrong dtype"
+        assert model.output_norm.weight.dtype == dtype, "Output norm weight has wrong dtype"
+
+        # Check heads explicitly
+        for head_name in ["cls", "seg"]:
+            head = model.heads[head_name]
+            for name, param in head.named_parameters():
+                assert param.dtype == dtype, f"Head {head_name} param {name} has dtype {param.dtype}, expected {dtype}"
+                assert (
+                    param.device == device
+                ), f"Head {head_name} param {name} on device {param.device}, expected {device}"
+
     def test_config_from_yaml_str(self, config):
         config_str = config.to_yaml()
         config_from_str = ViTConfig.from_yaml(config_str)
