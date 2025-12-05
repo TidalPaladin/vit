@@ -89,8 +89,8 @@ class ViTConfig:
     # Heads
     heads: Dict[str, HeadConfig] = field(default_factory=dict)
 
-    def instantiate(self) -> "ViT":
-        return ViT(self)
+    def instantiate(self, device: torch.device | None = None) -> "ViT":
+        return ViT(self, device=device)
 
     @classmethod
     def from_yaml(cls: Type[Self], path: str | Path) -> Self:
