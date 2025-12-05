@@ -245,11 +245,14 @@ class SelfAttention(nn.Module):
         eps: float = 1e-5,
         qkv_quantization_config: Any | None = None,
         out_quantization_config: Any | None = None,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
     ):
+        factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
-        self.norm = nn.RMSNorm(hidden_size, eps=eps)
-        self.qkv_proj = nn.Linear(hidden_size, 3 * hidden_size, bias=bias)
-        self.out_proj = nn.Linear(hidden_size, hidden_size, bias=bias)
+        self.norm = nn.RMSNorm(hidden_size, eps=eps, **factory_kwargs)
+        self.qkv_proj = nn.Linear(hidden_size, 3 * hidden_size, bias=bias, **factory_kwargs)
+        self.out_proj = nn.Linear(hidden_size, hidden_size, bias=bias, **factory_kwargs)
         self.dropout = nn.Dropout(hidden_dropout)
         self.attention_dropout = nn.Dropout(attention_dropout)
         self._head_dim = hidden_size // num_attention_heads
@@ -258,9 +261,6 @@ class SelfAttention(nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
-        self.qkv_proj.reset_parameters()
-        self.out_proj.reset_parameters()
-        self.norm.reset_parameters()
         nn.init.trunc_normal_(self.qkv_proj.weight, std=0.02)
         self.apply_quantization(self.qkv_quantization_config, self.out_quantization_config)
 
@@ -321,12 +321,15 @@ class CrossAttention(nn.Module):
         eps: float = 1e-5,
         qkv_quantization_config: Any | None = None,
         out_quantization_config: Any | None = None,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
     ):
+        factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
-        self.norm = nn.RMSNorm(hidden_size, eps=eps)
-        self.q_proj = nn.Linear(hidden_size, hidden_size, bias=bias)
-        self.kv_proj = nn.Linear(hidden_size, 2 * hidden_size, bias=bias)
-        self.out_proj = nn.Linear(hidden_size, hidden_size, bias=bias)
+        self.norm = nn.RMSNorm(hidden_size, eps=eps, **factory_kwargs)
+        self.q_proj = nn.Linear(hidden_size, hidden_size, bias=bias, **factory_kwargs)
+        self.kv_proj = nn.Linear(hidden_size, 2 * hidden_size, bias=bias, **factory_kwargs)
+        self.out_proj = nn.Linear(hidden_size, hidden_size, bias=bias, **factory_kwargs)
         self.dropout = nn.Dropout(hidden_dropout)
         self.attention_dropout = nn.Dropout(attention_dropout)
         self._head_dim = hidden_size // num_attention_heads
@@ -335,10 +338,6 @@ class CrossAttention(nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
-        self.q_proj.reset_parameters()
-        self.kv_proj.reset_parameters()
-        self.out_proj.reset_parameters()
-        self.norm.reset_parameters()
         nn.init.trunc_normal_(self.q_proj.weight, std=0.02)
         nn.init.trunc_normal_(self.kv_proj.weight, std=0.02)
         self.apply_quantization(self.qkv_quantization_config, self.out_quantization_config)
@@ -419,20 +418,21 @@ class AttentivePool(nn.Module):
         hidden_dropout: float = 0.0,
         attention_dropout: float = 0.0,
         bias: bool = True,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
     ):
+        factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
         self._head_dim = hidden_size // num_attention_heads
         self.dropout = nn.Dropout(hidden_dropout)
         self.attention_dropout = nn.Dropout(attention_dropout)
-        self.query = nn.Parameter(torch.empty(1, num_queries, hidden_size))
-        self.kv_proj = nn.Linear(hidden_size, 2 * hidden_size, bias=bias)
-        self.out_proj = nn.Linear(hidden_size, hidden_size, bias=bias)
+        self.query = nn.Parameter(torch.empty(1, num_queries, hidden_size, **factory_kwargs))
+        self.kv_proj = nn.Linear(hidden_size, 2 * hidden_size, bias=bias, **factory_kwargs)
+        self.out_proj = nn.Linear(hidden_size, hidden_size, bias=bias, **factory_kwargs)
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
         nn.init.normal_(self.query, std=1.0)
-        self.kv_proj.reset_parameters()
-        self.out_proj.reset_parameters()
         nn.init.trunc_normal_(self.kv_proj.weight, std=0.02)
         nn.init.trunc_normal_(self.out_proj.weight, std=0.02)
 

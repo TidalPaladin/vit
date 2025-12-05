@@ -38,7 +38,7 @@ def fourier_features_(param: Tensor, std: float = 1.0) -> None:
 
     w = param.new_empty(len(dims), hidden_size // 2)
     w.normal_(std=std)
-    grid = create_grid(dims, device=param.device, normalize=True).squeeze_(0)
+    grid = create_grid(dims, dtype=param.dtype, device=param.device, normalize=True).squeeze_(0)
     features = grid @ w
     features = torch.cat([features.sin(), features.cos()], dim=-1)
     features = features / math.sqrt(hidden_size)
@@ -89,11 +89,20 @@ def learnable_position(
 
 class LearnablePosition(nn.Module):
 
-    def __init__(self, hidden_size: int, spatial_size: Sequence[int], fourier_init: bool = True, dropout: float = 0.0):
+    def __init__(
+        self,
+        hidden_size: int,
+        spatial_size: Sequence[int],
+        fourier_init: bool = True,
+        dropout: float = 0.0,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ):
+        factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
         total_size = math.prod(spatial_size)
         self.spatial_size = spatial_size
-        self.positions = nn.Parameter(torch.empty(total_size, hidden_size))
+        self.positions = nn.Parameter(torch.empty(total_size, hidden_size, **factory_kwargs))
         self.dropout = nn.Dropout(dropout)
         self.reset_parameters(fourier_init)
 
@@ -140,15 +149,21 @@ def fourier_position(
 
 class FourierPosition(nn.Module):
 
-    def __init__(self, hidden_size: int, spatial_size: Sequence[int]):
+    def __init__(
+        self,
+        hidden_size: int,
+        spatial_size: Sequence[int],
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ):
+        factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
         self.spatial_size = spatial_size
-        self.w_fourier = nn.Parameter(torch.empty(len(spatial_size), hidden_size // 2))
-        self.w_fc1 = nn.Linear(hidden_size, hidden_size)
+        self.w_fourier = nn.Parameter(torch.empty(len(spatial_size), hidden_size // 2, **factory_kwargs))
+        self.w_fc1 = nn.Linear(hidden_size, hidden_size, **factory_kwargs)
         self.reset_parameters()
 
     def reset_parameters(self, std: float = 1.0) -> None:
-        self.w_fc1.reset_parameters()
         nn.init.normal_(self.w_fourier, std=std)
         nn.init.zeros_(self.w_fc1.bias)
 

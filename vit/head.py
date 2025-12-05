@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+import torch
 import torch.nn as nn
 import yaml
 from torch import Tensor
@@ -58,11 +59,18 @@ class HeadConfig:
     out_features: int | None = None
     dropout: float = 0.0
 
-    def instantiate(self, backbone_config: ViTConfig) -> "Head":
+    def instantiate(
+        self,
+        backbone_config: ViTConfig,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> "Head":
         return Head(
             self.in_features or backbone_config.hidden_size,
             self.out_features or backbone_config.hidden_size,
             self.dropout,
+            device=device,
+            dtype=dtype,
         )
 
 
@@ -92,7 +100,12 @@ class TransposedConv2dHeadConfig:
     groups: int = 1
     dropout: float = 0.0
 
-    def instantiate(self, backbone_config: ViTConfig) -> "TransposedConv2dHead":
+    def instantiate(
+        self,
+        backbone_config: ViTConfig,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> "TransposedConv2dHead":
         in_features = self.in_features or backbone_config.hidden_size
         out_features = self.out_features or backbone_config.hidden_size
         return TransposedConv2dHead(
@@ -105,19 +118,28 @@ class TransposedConv2dHeadConfig:
             dilation=self.dilation,
             groups=self.groups,
             dropout=self.dropout,
+            device=device,
+            dtype=dtype,
         )
 
 
 class Head(nn.Module):
 
-    def __init__(self, in_features: int, out_features: int, dropout: float = 0.0):
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        dropout: float = 0.0,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ):
+        factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
         self.dropout = nn.Dropout(dropout)
-        self.proj = nn.Linear(in_features, out_features)
+        self.proj = nn.Linear(in_features, out_features, **factory_kwargs)
         self.reset_parameters()
 
     def reset_parameters(self, bias: float = 0.0) -> None:
-        self.proj.reset_parameters()
         nn.init.trunc_normal_(self.proj.weight, std=0.02)
         if self.proj.bias is not None:
             nn.init.constant_(self.proj.bias, bias)
@@ -150,7 +172,10 @@ class TransposedConv2dHead(nn.Module):
         dilation: int | tuple[int, int] = 1,
         groups: int = 1,
         dropout: float = 0.0,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
     ):
+        factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
         self.dropout = nn.Dropout(dropout)
         self.conv_transpose = nn.ConvTranspose2d(
@@ -162,6 +187,7 @@ class TransposedConv2dHead(nn.Module):
             output_padding=output_padding,
             dilation=dilation,
             groups=groups,
+            **factory_kwargs,
         )
         self.reset_parameters()
 
@@ -211,7 +237,12 @@ class UpsampleHeadConfig:
     num_smooth_layers: int = 2
     dropout: float = 0.0
 
-    def instantiate(self, backbone_config: ViTConfig) -> "UpsampleHead":
+    def instantiate(
+        self,
+        backbone_config: ViTConfig,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> "UpsampleHead":
         in_features = self.in_features or backbone_config.hidden_size
         hidden_features = self.hidden_features if self.hidden_features is not None else in_features
         out_features = self.out_features or backbone_config.hidden_size
@@ -222,6 +253,8 @@ class UpsampleHeadConfig:
             num_upsample_stages=self.num_upsample_stages,
             num_smooth_layers=self.num_smooth_layers,
             dropout=self.dropout,
+            device=device,
+            dtype=dtype,
         )
 
 
@@ -244,7 +277,10 @@ class UpsampleHead(nn.Module):
         num_upsample_stages: int = 4,
         num_smooth_layers: int = 2,
         dropout: float = 0.0,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
     ):
+        factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
         self.dropout = nn.Dropout(dropout)
         self.num_upsample_stages = num_upsample_stages
@@ -286,12 +322,16 @@ class UpsampleHead(nn.Module):
                 stage_out = hidden_channels_list[i]
 
             # Transposed conv for 2x upsampling
-            upsample_layers.append(nn.ConvTranspose2d(stage_in, stage_out, kernel_size=2, stride=2, padding=0))
+            upsample_layers.append(
+                nn.ConvTranspose2d(stage_in, stage_out, kernel_size=2, stride=2, padding=0, **factory_kwargs)
+            )
 
             # Smoothing convolutions to blend across patch boundaries
             smooth_modules: list[nn.Module] = []
             for j in range(num_smooth_layers):
-                smooth_modules.append(nn.Conv2d(stage_out, stage_out, kernel_size=3, stride=1, padding=1))
+                smooth_modules.append(
+                    nn.Conv2d(stage_out, stage_out, kernel_size=3, stride=1, padding=1, **factory_kwargs)
+                )
                 # Add GELU activation except after the last layer of the last stage
                 if not (i == num_upsample_stages - 1 and j == num_smooth_layers - 1):
                     smooth_modules.append(nn.GELU())

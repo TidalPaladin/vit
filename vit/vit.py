@@ -15,8 +15,24 @@ from .tokens import apply_mask, create_mask
 from .transformer import CrossAttentionTransformer, TransformerDecoderLayer, TransformerEncoderLayer
 
 
+def _parse_dtype(dtype_str: str | None) -> torch.dtype | None:
+    """Convert string dtype representation to torch.dtype."""
+    if dtype_str is None:
+        return None
+    dtype_map = {
+        "float32": torch.float32,
+        "float16": torch.float16,
+        "bfloat16": torch.bfloat16,
+        "float64": torch.float64,
+    }
+    return dtype_map.get(dtype_str, None)
+
+
 def vit_config_constructor(loader, node):
     values = loader.construct_mapping(node, deep=True)
+    # Convert dtype string to torch.dtype
+    if "dtype" in values and isinstance(values["dtype"], str):
+        values["dtype"] = _parse_dtype(values["dtype"])
     return ViTConfig(**values)
 
 
@@ -67,11 +83,14 @@ class ViTConfig:
     mlp_requires_grad: bool = True
     self_attention_requires_grad: bool = True
 
+    # Master weight dtype (default BF16)
+    dtype: torch.dtype = torch.bfloat16
+
     # Heads
     heads: Dict[str, HeadConfig] = field(default_factory=dict)
 
-    def instantiate(self) -> "ViT":
-        return ViT(self)
+    def instantiate(self, device: torch.device | None = None) -> "ViT":
+        return ViT(self, device=device)
 
     @classmethod
     def from_yaml(cls: Type[Self], path: str | Path) -> Self:
@@ -80,17 +99,22 @@ class ViTConfig:
                 raise FileNotFoundError(f"File not found: {path}")
             with open(path, "r") as f:
                 config = yaml.full_load(f)
-            return cls(**config)
-
         elif isinstance(path, str) and path.endswith(".yaml"):
             return cls.from_yaml(Path(path))
-
         else:
             config = yaml.full_load(path)
-            return cls(**config)
+
+        # Convert dtype string to torch.dtype
+        if "dtype" in config and isinstance(config["dtype"], str):
+            config["dtype"] = _parse_dtype(config["dtype"])
+        return cls(**config)
 
     def to_yaml(self) -> str:
-        return yaml.dump(self.__dict__)
+        # Convert dtype to string for YAML serialization
+        data = {**self.__dict__}
+        if "dtype" in data and isinstance(data["dtype"], torch.dtype):
+            data["dtype"] = str(data["dtype"]).replace("torch.", "")
+        return yaml.dump(data)
 
 
 class ViTFeatures:
@@ -201,7 +225,9 @@ class ViT(nn.Module):
         mlp_quantization_config: Any | None = None,
         qkv_quantization_config: Any | None = None,
         attn_quantization_config: Any | None = None,
+        device: torch.device | None = None,
     ):
+        factory_kwargs = {"device": device, "dtype": config.dtype}
         super().__init__()
         self._config = config
 
@@ -213,6 +239,7 @@ class ViT(nn.Module):
             config.patch_size,
             config.img_size,
             pos_enc=config.pos_enc if config.pos_enc != "rope" else "none",
+            **factory_kwargs,
         )
 
         if config.pos_enc == "rope":
@@ -223,17 +250,18 @@ class ViT(nn.Module):
                 rescale_coords=config.rope_rescale_coords,
                 shift_coords=config.rope_shift_coords,
                 jitter_coords=config.rope_jitter_coords,
+                **factory_kwargs,
             )
         else:
             self.rope = None
 
         # Register / CLS tokens
         self.register_tokens = nn.Parameter(
-            torch.empty(1, config.num_register_tokens, config.hidden_size),
+            torch.empty(1, config.num_register_tokens, config.hidden_size, **factory_kwargs),
             requires_grad=config.num_register_tokens > 0,
         )
         self.cls_tokens = nn.Parameter(
-            torch.empty(1, config.num_cls_tokens, config.hidden_size),
+            torch.empty(1, config.num_cls_tokens, config.hidden_size, **factory_kwargs),
             requires_grad=config.num_cls_tokens > 0,
         )
         nn.init.normal_(self.register_tokens, std=0.02)
@@ -241,17 +269,19 @@ class ViT(nn.Module):
 
         self.blocks = nn.ModuleList(
             [
-                self.create_encoder_layer(mlp_quantization_config, qkv_quantization_config, attn_quantization_config)
+                self.create_encoder_layer(
+                    mlp_quantization_config, qkv_quantization_config, attn_quantization_config, device
+                )
                 for _ in range(config.depth)
             ]
         )
-        self.output_norm = nn.RMSNorm(config.hidden_size)
+        self.output_norm = nn.RMSNorm(config.hidden_size, **factory_kwargs)
 
         self.mlp_requires_grad_(self.config.mlp_requires_grad)
         self.self_attention_requires_grad_(self.config.self_attention_requires_grad)
 
         self.heads = nn.ModuleDict(
-            {name: head_config.instantiate(config) for name, head_config in config.heads.items()}
+            {name: head_config.instantiate(config, **factory_kwargs) for name, head_config in config.heads.items()}
         )
 
     def apply_quantization(
@@ -273,6 +303,7 @@ class ViT(nn.Module):
         mlp_quantization_config: Any | None = None,
         qkv_quantization_config: Any | None = None,
         attn_quantization_config: Any | None = None,
+        device: torch.device | None = None,
     ) -> TransformerEncoderLayer:
         return TransformerEncoderLayer(
             self.config.hidden_size,
@@ -290,6 +321,8 @@ class ViT(nn.Module):
             mlp_quantization_config=mlp_quantization_config,
             qkv_quantization_config=qkv_quantization_config,
             attn_quantization_config=attn_quantization_config,
+            device=device,
+            dtype=self.config.dtype,
         )
 
     def create_decoder_layer(
@@ -297,6 +330,7 @@ class ViT(nn.Module):
         mlp_quantization_config: Any | None = None,
         qkv_quantization_config: Any | None = None,
         attn_quantization_config: Any | None = None,
+        device: torch.device | None = None,
     ) -> TransformerDecoderLayer:
         return TransformerDecoderLayer(
             self.config.hidden_size,
@@ -314,6 +348,8 @@ class ViT(nn.Module):
             mlp_quantization_config=mlp_quantization_config,
             qkv_quantization_config=qkv_quantization_config,
             attn_quantization_config=attn_quantization_config,
+            device=device,
+            dtype=self.config.dtype,
         )
 
     def create_cross_attention_layer(
@@ -321,6 +357,7 @@ class ViT(nn.Module):
         mlp_quantization_config: Any | None = None,
         qkv_quantization_config: Any | None = None,
         attn_quantization_config: Any | None = None,
+        device: torch.device | None = None,
     ) -> CrossAttentionTransformer:
         return CrossAttentionTransformer(
             self.config.hidden_size,
@@ -338,6 +375,8 @@ class ViT(nn.Module):
             mlp_quantization_config=mlp_quantization_config,
             qkv_quantization_config=qkv_quantization_config,
             attn_quantization_config=attn_quantization_config,
+            device=device,
+            dtype=self.config.dtype,
         )
 
     def get_head(self, name: str) -> Head | TransposedConv2dHead | UpsampleHead:

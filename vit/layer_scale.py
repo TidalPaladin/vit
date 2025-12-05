@@ -14,10 +14,18 @@ def layer_scale(x: Tensor, gamma: Tensor, inplace: bool = False) -> Tensor:
 
 
 class LayerScale(nn.Module):
-    def __init__(self, dim: int, init_value: float = 1e-5, inplace: bool = False):
+    def __init__(
+        self,
+        dim: int,
+        init_value: float = 1e-5,
+        inplace: bool = False,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ):
+        factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
         self.inplace = inplace
-        self.gamma = nn.Parameter(torch.empty(dim))
+        self.gamma = nn.Parameter(torch.empty(dim, **factory_kwargs))
         self.reset_parameters(init_value)
 
     def reset_parameters(self, value: float = 1e-5):
