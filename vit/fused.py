@@ -35,19 +35,20 @@ class NormLinear(nn.Module):
         eps: float = 1e-5,
         dropout: float = 0.0,
         quantization_config: Any | None = None,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
     ):
+        factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
-        self.norm = nn.RMSNorm(in_features, eps=eps)
-        self.linear = nn.Linear(in_features, out_features, bias=bias)
+        self.norm = nn.RMSNorm(in_features, eps=eps, **factory_kwargs)
+        self.linear = nn.Linear(in_features, out_features, bias=bias, **factory_kwargs)
         self.dropout = nn.Dropout(dropout)
         self.quantization_config = quantization_config
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
-        self.norm.reset_parameters()
-        self.linear.reset_parameters()
         nn.init.trunc_normal_(self.linear.weight, std=0.02)
         self.apply_quantization(self.quantization_config)
 
@@ -161,17 +162,19 @@ class NormMLP(nn.Module):
         limit: float | None = None,
         extra_bias: float | None = None,
         quantization_config: Any | None = None,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
     ):
+        factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
-        self.norm = nn.RMSNorm(hidden_size, eps=eps)
-        self.fc1 = nn.Linear(hidden_size, ffn_hidden_size, bias=bias)
+        self.norm = nn.RMSNorm(hidden_size, eps=eps, **factory_kwargs)
         if activation.endswith("glu"):
             self._is_glu = True
-            self.fc1 = nn.Linear(hidden_size, 2 * ffn_hidden_size, bias=bias)
+            self.fc1 = nn.Linear(hidden_size, 2 * ffn_hidden_size, bias=bias, **factory_kwargs)
         else:
             self._is_glu = False
-            self.fc1 = nn.Linear(hidden_size, ffn_hidden_size, bias=bias)
-        self.fc2 = nn.Linear(ffn_hidden_size, hidden_size, bias=bias)
+            self.fc1 = nn.Linear(hidden_size, ffn_hidden_size, bias=bias, **factory_kwargs)
+        self.fc2 = nn.Linear(ffn_hidden_size, hidden_size, bias=bias, **factory_kwargs)
         self.dropout = nn.Dropout(dropout)
         self.activation = get_activation(activation)
         self.limit = limit
@@ -180,9 +183,6 @@ class NormMLP(nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
-        self.norm.reset_parameters()
-        self.fc1.reset_parameters()
-        self.fc2.reset_parameters()
         nn.init.trunc_normal_(self.fc1.weight, std=0.02)
         nn.init.trunc_normal_(self.fc2.weight, std=0.02)
 

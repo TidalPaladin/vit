@@ -16,21 +16,21 @@ class PatchEmbed2d(nn.Module):
         patch_size: Sequence[int],
         img_size: Sequence[int],
         pos_enc: PositionEncoder = "fourier",
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
     ):
+        factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
         self.patch = nn.Conv2d(
             in_channels,
             hidden_size,
             cast(Any, tuple(patch_size)),
             stride=cast(Any, tuple(patch_size)),
+            **factory_kwargs,
         )
-        self.pos_enc = create_position_encoder(pos_enc, hidden_size, self.tokenized_size(tuple(img_size)))
-        self.reset_parameters()
-
-    def reset_parameters(self) -> None:
-        self.patch.reset_parameters()
-        if self.pos_enc is not None:
-            self.pos_enc.reset_parameters()
+        self.pos_enc = create_position_encoder(
+            pos_enc, hidden_size, self.tokenized_size(tuple(img_size)), **factory_kwargs
+        )
 
     @property
     def patch_size(self) -> Tuple[int, int]:
@@ -63,21 +63,21 @@ class PatchEmbed3d(nn.Module):
         patch_size: Sequence[int],
         img_size: Sequence[int],
         pos_enc: PositionEncoder = "fourier",
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
     ):
+        factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
         self.patch = nn.Conv3d(
             in_channels,
             hidden_size,
             cast(Any, tuple(patch_size)),
             stride=cast(Any, tuple(patch_size)),
+            **factory_kwargs,
         )
-        self.pos_enc = create_position_encoder(pos_enc, hidden_size, self.tokenized_size(tuple(img_size)))
-        self.reset_parameters()
-
-    def reset_parameters(self) -> None:
-        self.patch.reset_parameters()
-        if self.pos_enc is not None:
-            self.pos_enc.reset_parameters()
+        self.pos_enc = create_position_encoder(
+            pos_enc, hidden_size, self.tokenized_size(tuple(img_size)), **factory_kwargs
+        )
 
     @property
     def patch_size(self) -> Tuple[int, int, int]:

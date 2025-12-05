@@ -30,7 +30,10 @@ class TransformerEncoderLayer(nn.Module):
         mlp_quantization_config: Any | None = None,
         qkv_quantization_config: Any | None = None,
         attn_quantization_config: Any | None = None,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
     ):
+        factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
         self.drop_path_rate = drop_path_rate
         self.self_attention = SelfAttention(
@@ -42,6 +45,7 @@ class TransformerEncoderLayer(nn.Module):
             eps,
             qkv_quantization_config=qkv_quantization_config,
             out_quantization_config=attn_quantization_config,
+            **factory_kwargs,
         )
         self.mlp = NormMLP(
             hidden_size,
@@ -53,18 +57,18 @@ class TransformerEncoderLayer(nn.Module):
             glu_limit,
             glu_extra_bias,
             mlp_quantization_config,
+            **factory_kwargs,
         )
         self.layer_scale_attn = (
-            LayerScale(hidden_size, layer_scale, inplace=True) if layer_scale is not None else nn.Identity()
+            LayerScale(hidden_size, layer_scale, inplace=True, **factory_kwargs)
+            if layer_scale is not None
+            else nn.Identity()
         )
         self.layer_scale_mlp = (
-            LayerScale(hidden_size, layer_scale, inplace=True) if layer_scale is not None else nn.Identity()
+            LayerScale(hidden_size, layer_scale, inplace=True, **factory_kwargs)
+            if layer_scale is not None
+            else nn.Identity()
         )
-        self.reset_parameters()
-
-    def reset_parameters(self):
-        self.self_attention.reset_parameters()
-        self.mlp.reset_parameters()
 
     def apply_quantization(
         self,
@@ -112,7 +116,10 @@ class TransformerDecoderLayer(nn.Module):
         mlp_quantization_config: Any | None = None,
         qkv_quantization_config: Any | None = None,
         attn_quantization_config: Any | None = None,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
     ):
+        factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
         self.drop_path_rate = drop_path_rate
         self.self_attention = SelfAttention(
@@ -124,6 +131,7 @@ class TransformerDecoderLayer(nn.Module):
             eps,
             qkv_quantization_config=qkv_quantization_config,
             out_quantization_config=attn_quantization_config,
+            **factory_kwargs,
         )
         self.cross_attention = CrossAttention(
             hidden_size,
@@ -134,6 +142,7 @@ class TransformerDecoderLayer(nn.Module):
             eps,
             qkv_quantization_config=qkv_quantization_config,
             out_quantization_config=attn_quantization_config,
+            **factory_kwargs,
         )
         self.mlp = NormMLP(
             hidden_size,
@@ -145,22 +154,23 @@ class TransformerDecoderLayer(nn.Module):
             glu_limit,
             glu_extra_bias,
             mlp_quantization_config,
+            **factory_kwargs,
         )
         self.layer_scale_attn = (
-            LayerScale(hidden_size, layer_scale, inplace=True) if layer_scale is not None else nn.Identity()
+            LayerScale(hidden_size, layer_scale, inplace=True, **factory_kwargs)
+            if layer_scale is not None
+            else nn.Identity()
         )
         self.layer_scale_mlp = (
-            LayerScale(hidden_size, layer_scale, inplace=True) if layer_scale is not None else nn.Identity()
+            LayerScale(hidden_size, layer_scale, inplace=True, **factory_kwargs)
+            if layer_scale is not None
+            else nn.Identity()
         )
         self.layer_scale_cross = (
-            LayerScale(hidden_size, layer_scale, inplace=True) if layer_scale is not None else nn.Identity()
+            LayerScale(hidden_size, layer_scale, inplace=True, **factory_kwargs)
+            if layer_scale is not None
+            else nn.Identity()
         )
-        self.reset_parameters()
-
-    def reset_parameters(self):
-        self.self_attention.reset_parameters()
-        self.cross_attention.reset_parameters()
-        self.mlp.reset_parameters()
 
     def apply_quantization(
         self,
@@ -212,7 +222,10 @@ class CrossAttentionTransformer(nn.Module):
         mlp_quantization_config: Any | None = None,
         qkv_quantization_config: Any | None = None,
         attn_quantization_config: Any | None = None,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
     ):
+        factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
         self.drop_path_rate = drop_path_rate
         self.cross_attention = CrossAttention(
@@ -224,6 +237,7 @@ class CrossAttentionTransformer(nn.Module):
             eps,
             qkv_quantization_config=qkv_quantization_config,
             out_quantization_config=attn_quantization_config,
+            **factory_kwargs,
         )
         self.mlp = NormMLP(
             hidden_size,
@@ -235,18 +249,18 @@ class CrossAttentionTransformer(nn.Module):
             glu_limit,
             glu_extra_bias,
             mlp_quantization_config,
+            **factory_kwargs,
         )
         self.layer_scale_cross = (
-            LayerScale(hidden_size, layer_scale, inplace=True) if layer_scale is not None else nn.Identity()
+            LayerScale(hidden_size, layer_scale, inplace=True, **factory_kwargs)
+            if layer_scale is not None
+            else nn.Identity()
         )
         self.layer_scale_mlp = (
-            LayerScale(hidden_size, layer_scale, inplace=True) if layer_scale is not None else nn.Identity()
+            LayerScale(hidden_size, layer_scale, inplace=True, **factory_kwargs)
+            if layer_scale is not None
+            else nn.Identity()
         )
-        self.reset_parameters()
-
-    def reset_parameters(self):
-        self.cross_attention.reset_parameters()
-        self.mlp.reset_parameters()
 
     def apply_quantization(
         self,

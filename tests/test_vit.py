@@ -25,6 +25,7 @@ def config(request):
         ffn_hidden_size=256,
         num_attention_heads=128 // 16,
         pos_enc="learnable",
+        dtype=torch.float32,  # Use FP32 for test backward compatibility
     )
     return config
 
@@ -40,6 +41,43 @@ def assert_none_requires_grad(module: Any):
 
 
 class TestViT:
+
+    def test_default_dtype_is_bfloat16(self):
+        """Verify that the default master weight dtype is BF16."""
+        config = ViTConfig(
+            in_channels=3,
+            patch_size=(16, 16),
+            img_size=(224, 224),
+            depth=1,
+            hidden_size=64,
+            ffn_hidden_size=128,
+            num_attention_heads=4,
+            pos_enc="learnable",
+        )
+        assert config.dtype == torch.bfloat16
+        model = ViT(config)
+        # All parameters should be BF16
+        for name, param in model.named_parameters():
+            assert param.dtype == torch.bfloat16, f"{name} has dtype {param.dtype}, expected bfloat16"
+
+    def test_custom_dtype_float32(self):
+        """Verify that dtype can be overridden to FP32."""
+        config = ViTConfig(
+            in_channels=3,
+            patch_size=(16, 16),
+            img_size=(224, 224),
+            depth=1,
+            hidden_size=64,
+            ffn_hidden_size=128,
+            num_attention_heads=4,
+            pos_enc="learnable",
+            dtype=torch.float32,
+        )
+        assert config.dtype == torch.float32
+        model = ViT(config)
+        # All parameters should be FP32
+        for name, param in model.named_parameters():
+            assert param.dtype == torch.float32, f"{name} has dtype {param.dtype}, expected float32"
 
     def test_config_from_yaml_str(self, config):
         config_str = config.to_yaml()
