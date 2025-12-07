@@ -95,6 +95,9 @@ class ViTConfig:
     rope_dtype: torch.dtype = torch.float32
     patch_embed_dtype: torch.dtype = torch.float32
 
+    # Initialization
+    init_std: float = 0.02
+
     # Heads
     heads: Dict[str, HeadConfig] = field(default_factory=dict)
 
@@ -276,6 +279,7 @@ class ViT(nn.Module):
             device=device,
             dtype=config.patch_embed_dtype,
         )
+        self.stem.reset_parameters(std=config.init_std)
 
         if config.pos_enc == "rope":
             # NOTE: RoPE in full FP32
@@ -301,8 +305,8 @@ class ViT(nn.Module):
             torch.empty(1, config.num_cls_tokens, config.hidden_size, **factory_kwargs),
             requires_grad=config.num_cls_tokens > 0,
         )
-        nn.init.normal_(self.register_tokens, std=0.02)
-        nn.init.normal_(self.cls_tokens, std=0.02)
+        nn.init.normal_(self.register_tokens, std=config.init_std)
+        nn.init.normal_(self.cls_tokens, std=config.init_std)
 
         self.blocks = nn.ModuleList(
             [
@@ -355,6 +359,7 @@ class ViT(nn.Module):
             layer_scale=self.config.layer_scale,
             glu_limit=self.config.glu_limit,
             glu_extra_bias=self.config.glu_extra_bias,
+            init_std=self.config.init_std,
             mlp_quantization_config=mlp_quantization_config,
             qkv_quantization_config=qkv_quantization_config,
             attn_quantization_config=attn_quantization_config,
@@ -383,6 +388,7 @@ class ViT(nn.Module):
             layer_scale=self.config.layer_scale,
             glu_limit=self.config.glu_limit,
             glu_extra_bias=self.config.glu_extra_bias,
+            init_std=self.config.init_std,
             mlp_quantization_config=mlp_quantization_config,
             qkv_quantization_config=qkv_quantization_config,
             attn_quantization_config=attn_quantization_config,
@@ -411,6 +417,7 @@ class ViT(nn.Module):
             layer_scale=self.config.layer_scale,
             glu_limit=self.config.glu_limit,
             glu_extra_bias=self.config.glu_extra_bias,
+            init_std=self.config.init_std,
             mlp_quantization_config=mlp_quantization_config,
             qkv_quantization_config=qkv_quantization_config,
             attn_quantization_config=attn_quantization_config,

@@ -32,6 +32,13 @@ class PatchEmbed2d(nn.Module):
             pos_enc, hidden_size, self.tokenized_size(tuple(img_size)), **factory_kwargs
         )
 
+    def reset_parameters(self, std: float = 0.02) -> None:
+        nn.init.trunc_normal_(self.patch.weight, std=std)
+        if self.patch.bias is not None:
+            nn.init.zeros_(self.patch.bias)
+        if self.pos_enc is not None and hasattr(self.pos_enc, "reset_parameters"):
+            self.pos_enc.reset_parameters(std=std)
+
     @property
     def patch_size(self) -> Tuple[int, int]:
         return cast(Tuple[int, int], tuple(self.patch.weight.shape[2:]))
@@ -78,6 +85,13 @@ class PatchEmbed3d(nn.Module):
         self.pos_enc = create_position_encoder(
             pos_enc, hidden_size, self.tokenized_size(tuple(img_size)), **factory_kwargs
         )
+
+    def reset_parameters(self, std: float = 0.02) -> None:
+        nn.init.trunc_normal_(self.patch.weight, std=std)
+        if self.patch.bias is not None:
+            nn.init.zeros_(self.patch.bias)
+        if self.pos_enc is not None and hasattr(self.pos_enc, "reset_parameters"):
+            self.pos_enc.reset_parameters(std=std)
 
     @property
     def patch_size(self) -> Tuple[int, int, int]:

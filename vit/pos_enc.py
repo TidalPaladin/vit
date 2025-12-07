@@ -107,14 +107,14 @@ class LearnablePosition(nn.Module):
         self.reset_parameters(fourier_init)
 
     @torch.no_grad()
-    def reset_parameters(self, fourier_init: bool = True) -> None:
+    def reset_parameters(self, fourier_init: bool = True, std: float = 0.02) -> None:
         if fourier_init:
             fourier_features_(self.positions.view(*self.spatial_size, self.positions.shape[-1]))
             shift = self.positions.mean()
-            scale = 0.02 / self.positions.std()
+            scale = std / self.positions.std()
             self.positions.data.sub_(shift).mul_(scale)
         else:
-            nn.init.trunc_normal_(self.positions, std=0.02)
+            nn.init.trunc_normal_(self.positions, std=std)
 
     @torch.no_grad()
     def expand_positions(self, size: Sequence[int]) -> None:

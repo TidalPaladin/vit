@@ -243,6 +243,7 @@ class SelfAttention(nn.Module):
         attention_dropout: float = 0.1,
         bias: bool = True,
         eps: float = 1e-5,
+        init_std: float = 0.02,
         qkv_quantization_config: Any | None = None,
         out_quantization_config: Any | None = None,
         device: torch.device | None = None,
@@ -258,12 +259,12 @@ class SelfAttention(nn.Module):
         self._head_dim = hidden_size // num_attention_heads
         self.qkv_quantization_config = qkv_quantization_config
         self.out_quantization_config = out_quantization_config
-        self.reset_parameters()
+        self.reset_parameters(std=init_std)
         self.apply_quantization(self.qkv_quantization_config, self.out_quantization_config)
 
-    def reset_parameters(self) -> None:
-        nn.init.trunc_normal_(self.qkv_proj.weight, std=0.02)
-        nn.init.trunc_normal_(self.out_proj.weight, std=0.02)
+    def reset_parameters(self, std: float = 0.02) -> None:
+        nn.init.trunc_normal_(self.qkv_proj.weight, std=std)
+        nn.init.trunc_normal_(self.out_proj.weight, std=std)
         if self.qkv_proj.bias is not None:
             nn.init.zeros_(self.qkv_proj.bias)
         if self.out_proj.bias is not None:
@@ -324,6 +325,7 @@ class CrossAttention(nn.Module):
         attention_dropout: float = 0.1,
         bias: bool = True,
         eps: float = 1e-5,
+        init_std: float = 0.02,
         qkv_quantization_config: Any | None = None,
         out_quantization_config: Any | None = None,
         device: torch.device | None = None,
@@ -340,13 +342,13 @@ class CrossAttention(nn.Module):
         self._head_dim = hidden_size // num_attention_heads
         self.qkv_quantization_config = qkv_quantization_config
         self.out_quantization_config = out_quantization_config
-        self.reset_parameters()
+        self.reset_parameters(std=init_std)
         self.apply_quantization(self.qkv_quantization_config, self.out_quantization_config)
 
-    def reset_parameters(self) -> None:
-        nn.init.trunc_normal_(self.q_proj.weight, std=0.02)
-        nn.init.trunc_normal_(self.kv_proj.weight, std=0.02)
-        nn.init.trunc_normal_(self.out_proj.weight, std=0.02)
+    def reset_parameters(self, std: float = 0.02) -> None:
+        nn.init.trunc_normal_(self.q_proj.weight, std=std)
+        nn.init.trunc_normal_(self.kv_proj.weight, std=std)
+        nn.init.trunc_normal_(self.out_proj.weight, std=std)
         if self.q_proj.bias is not None:
             nn.init.zeros_(self.q_proj.bias)
         if self.kv_proj.bias is not None:
@@ -430,6 +432,7 @@ class AttentivePool(nn.Module):
         hidden_dropout: float = 0.0,
         attention_dropout: float = 0.0,
         bias: bool = True,
+        init_std: float = 0.02,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
     ):
@@ -441,12 +444,12 @@ class AttentivePool(nn.Module):
         self.query = nn.Parameter(torch.empty(1, num_queries, hidden_size, **factory_kwargs))
         self.kv_proj = nn.Linear(hidden_size, 2 * hidden_size, bias=bias, **factory_kwargs)
         self.out_proj = nn.Linear(hidden_size, hidden_size, bias=bias, **factory_kwargs)
-        self.reset_parameters()
+        self.reset_parameters(std=init_std)
 
-    def reset_parameters(self) -> None:
+    def reset_parameters(self, std: float = 0.02) -> None:
         nn.init.normal_(self.query, std=1.0)
-        nn.init.trunc_normal_(self.kv_proj.weight, std=0.02)
-        nn.init.trunc_normal_(self.out_proj.weight, std=0.02)
+        nn.init.trunc_normal_(self.kv_proj.weight, std=std)
+        nn.init.trunc_normal_(self.out_proj.weight, std=std)
 
     def forward(self, x: Tensor, rope: Tensor | None = None) -> Tensor:
         y = attention_q_kv_packed_static_query(

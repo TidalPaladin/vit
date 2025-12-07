@@ -34,6 +34,7 @@ class NormLinear(nn.Module):
         bias: bool = True,
         eps: float = 1e-5,
         dropout: float = 0.0,
+        init_std: float = 0.02,
         quantization_config: Any | None = None,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
@@ -46,11 +47,11 @@ class NormLinear(nn.Module):
         self.linear = nn.Linear(in_features, out_features, bias=bias, **factory_kwargs)
         self.dropout = nn.Dropout(dropout)
         self.quantization_config = quantization_config
-        self.reset_parameters()
+        self.reset_parameters(std=init_std)
         self.apply_quantization(self.quantization_config)
 
-    def reset_parameters(self) -> None:
-        nn.init.trunc_normal_(self.linear.weight, std=0.02)
+    def reset_parameters(self, std: float = 0.02) -> None:
+        nn.init.trunc_normal_(self.linear.weight, std=std)
         if self.linear.bias is not None:
             nn.init.zeros_(self.linear.bias)
 
@@ -163,6 +164,7 @@ class NormMLP(nn.Module):
         dropout: float = 0.1,
         limit: float | None = None,
         extra_bias: float | None = None,
+        init_std: float = 0.02,
         quantization_config: Any | None = None,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
@@ -182,12 +184,12 @@ class NormMLP(nn.Module):
         self.limit = limit
         self.extra_bias = extra_bias
         self.quantization_config = quantization_config
-        self.reset_parameters()
+        self.reset_parameters(std=init_std)
         self.apply_quantization(self.quantization_config)
 
-    def reset_parameters(self) -> None:
-        nn.init.trunc_normal_(self.fc1.weight, std=0.02)
-        nn.init.trunc_normal_(self.fc2.weight, std=0.02)
+    def reset_parameters(self, std: float = 0.02) -> None:
+        nn.init.trunc_normal_(self.fc1.weight, std=std)
+        nn.init.trunc_normal_(self.fc2.weight, std=std)
         if self.fc1.bias is not None:
             nn.init.zeros_(self.fc1.bias)
         if self.fc2.bias is not None:

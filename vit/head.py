@@ -139,8 +139,8 @@ class Head(nn.Module):
         self.proj = nn.Linear(in_features, out_features, **factory_kwargs)
         self.reset_parameters()
 
-    def reset_parameters(self, bias: float = 0.0) -> None:
-        nn.init.trunc_normal_(self.proj.weight, std=0.02)
+    def reset_parameters(self, bias: float = 0.0, std: float = 0.02) -> None:
+        nn.init.trunc_normal_(self.proj.weight, std=std)
         if self.proj.bias is not None:
             nn.init.constant_(self.proj.bias, bias)
 
@@ -191,8 +191,8 @@ class TransposedConv2dHead(nn.Module):
         )
         self.reset_parameters()
 
-    def reset_parameters(self, bias: float = 0.0) -> None:
-        nn.init.trunc_normal_(self.conv_transpose.weight, std=0.02)
+    def reset_parameters(self, bias: float = 0.0, std: float = 0.02) -> None:
+        nn.init.trunc_normal_(self.conv_transpose.weight, std=std)
         if self.conv_transpose.bias is not None:
             nn.init.constant_(self.conv_transpose.bias, bias)
 
@@ -341,10 +341,10 @@ class UpsampleHead(nn.Module):
         self.smooth_layers = nn.ModuleList(smooth_layers)
         self.reset_parameters()
 
-    def reset_parameters(self, bias: float = 0.0) -> None:
+    def reset_parameters(self, bias: float = 0.0, std: float = 0.02) -> None:
         for upsample in self.upsample_layers:
             assert isinstance(upsample, nn.ConvTranspose2d)
-            nn.init.trunc_normal_(upsample.weight, std=0.02)
+            nn.init.trunc_normal_(upsample.weight, std=std)
             if upsample.bias is not None:
                 nn.init.constant_(upsample.bias, 0.0)
         for stage_idx, smooth in enumerate(self.smooth_layers):
@@ -352,7 +352,7 @@ class UpsampleHead(nn.Module):
             is_last_stage = stage_idx == len(self.smooth_layers) - 1
             conv_modules = [m for m in smooth if isinstance(m, nn.Conv2d)]
             for conv_idx, module in enumerate(conv_modules):
-                nn.init.trunc_normal_(module.weight, std=0.02)
+                nn.init.trunc_normal_(module.weight, std=std)
                 if module.bias is not None:
                     is_final_layer = is_last_stage and conv_idx == len(conv_modules) - 1
                     nn.init.constant_(module.bias, bias if is_final_layer else 0.0)
