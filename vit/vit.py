@@ -33,6 +33,12 @@ def vit_config_constructor(loader, node):
     # Convert dtype string to torch.dtype
     if "dtype" in values and isinstance(values["dtype"], str):
         values["dtype"] = _parse_dtype(values["dtype"])
+    if "attention_dtype" in values and isinstance(values["attention_dtype"], str):
+        values["attention_dtype"] = _parse_dtype(values["attention_dtype"])
+    if "rope_dtype" in values and isinstance(values["rope_dtype"], str):
+        values["rope_dtype"] = _parse_dtype(values["rope_dtype"])
+    if "patch_embed_dtype" in values and isinstance(values["patch_embed_dtype"], str):
+        values["patch_embed_dtype"] = _parse_dtype(values["patch_embed_dtype"])
     return ViTConfig(**values)
 
 
