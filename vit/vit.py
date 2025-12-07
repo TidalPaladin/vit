@@ -92,6 +92,18 @@ class ViTConfig:
     # Heads
     heads: Dict[str, HeadConfig] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.dtype, torch.dtype):
+            raise ValueError(f"dtype must be a torch.dtype, got {self.dtype}")  # pragma: no cover
+        if not isinstance(self.attention_dtype, torch.dtype):
+            raise ValueError(f"attention_dtype must be a torch.dtype, got {self.attention_dtype}")  # pragma: no cover
+        if not isinstance(self.rope_dtype, torch.dtype):
+            raise ValueError(f"rope_dtype must be a torch.dtype, got {self.rope_dtype}")  # pragma: no cover
+        if not isinstance(self.patch_embed_dtype, torch.dtype):
+            raise ValueError(
+                f"patch_embed_dtype must be a torch.dtype, got {self.patch_embed_dtype}"
+            )  # pragma: no cover
+
     def instantiate(self, device: torch.device | None = None) -> "ViT":
         return ViT(self, device=device)
 
