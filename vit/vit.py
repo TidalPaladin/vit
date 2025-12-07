@@ -85,6 +85,9 @@ class ViTConfig:
 
     # Master weight dtype (default BF16)
     dtype: torch.dtype = torch.bfloat16
+    attention_dtype: torch.dtype = torch.float32
+    rope_dtype: torch.dtype = torch.float32
+    patch_embed_dtype: torch.dtype = torch.float32
 
     # Heads
     heads: Dict[str, HeadConfig] = field(default_factory=dict)
@@ -107,6 +110,12 @@ class ViTConfig:
         # Convert dtype string to torch.dtype
         if "dtype" in config and isinstance(config["dtype"], str):
             config["dtype"] = _parse_dtype(config["dtype"])
+        if "attention_dtype" in config and isinstance(config["attention_dtype"], str):
+            config["attention_dtype"] = _parse_dtype(config["attention_dtype"])
+        if "rope_dtype" in config and isinstance(config["rope_dtype"], str):
+            config["rope_dtype"] = _parse_dtype(config["rope_dtype"])
+        if "patch_embed_dtype" in config and isinstance(config["patch_embed_dtype"], str):
+            config["patch_embed_dtype"] = _parse_dtype(config["patch_embed_dtype"])
         return cls(**config)
 
     def to_yaml(self) -> str:
@@ -114,6 +123,12 @@ class ViTConfig:
         data = {**self.__dict__}
         if "dtype" in data and isinstance(data["dtype"], torch.dtype):
             data["dtype"] = str(data["dtype"]).replace("torch.", "")
+        if "attention_dtype" in data and isinstance(data["attention_dtype"], torch.dtype):
+            data["attention_dtype"] = str(data["attention_dtype"]).replace("torch.", "")
+        if "rope_dtype" in data and isinstance(data["rope_dtype"], torch.dtype):
+            data["rope_dtype"] = str(data["rope_dtype"]).replace("torch.", "")
+        if "patch_embed_dtype" in data and isinstance(data["patch_embed_dtype"], torch.dtype):
+            data["patch_embed_dtype"] = str(data["patch_embed_dtype"]).replace("torch.", "")
         return yaml.dump(data)
 
 
@@ -232,6 +247,7 @@ class ViT(nn.Module):
         self._config = config
 
         # Stem tokenizer
+        # NOTE: Storing tokenizer weights in full precision seems to be helpful.
         PatchEmbed = PatchEmbed2d if len(config.patch_size) == 2 else PatchEmbed3d
         self.stem = PatchEmbed(
             config.in_channels,
@@ -239,10 +255,12 @@ class ViT(nn.Module):
             config.patch_size,
             config.img_size,
             pos_enc=config.pos_enc if config.pos_enc != "rope" else "none",
-            **factory_kwargs,
+            device=device,
+            dtype=config.patch_embed_dtype,
         )
 
         if config.pos_enc == "rope":
+            # NOTE: RoPE in full FP32
             self.rope = RopePositionEmbedding(
                 config.hidden_size,
                 base=config.rope_base,
@@ -250,7 +268,8 @@ class ViT(nn.Module):
                 rescale_coords=config.rope_rescale_coords,
                 shift_coords=config.rope_shift_coords,
                 jitter_coords=config.rope_jitter_coords,
-                **factory_kwargs,
+                device=device,
+                dtype=config.rope_dtype,
             )
         else:
             self.rope = None
@@ -323,6 +342,7 @@ class ViT(nn.Module):
             attn_quantization_config=attn_quantization_config,
             device=device,
             dtype=self.config.dtype,
+            attention_dtype=self.config.attention_dtype,
         )
 
     def create_decoder_layer(
@@ -350,6 +370,7 @@ class ViT(nn.Module):
             attn_quantization_config=attn_quantization_config,
             device=device,
             dtype=self.config.dtype,
+            attention_dtype=self.config.attention_dtype,
         )
 
     def create_cross_attention_layer(
@@ -377,6 +398,7 @@ class ViT(nn.Module):
             attn_quantization_config=attn_quantization_config,
             device=device,
             dtype=self.config.dtype,
+            attention_dtype=self.config.attention_dtype,
         )
 
     def get_head(self, name: str) -> Head | TransposedConv2dHead | UpsampleHead:

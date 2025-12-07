@@ -259,10 +259,15 @@ class SelfAttention(nn.Module):
         self.qkv_quantization_config = qkv_quantization_config
         self.out_quantization_config = out_quantization_config
         self.reset_parameters()
+        self.apply_quantization(self.qkv_quantization_config, self.out_quantization_config)
 
     def reset_parameters(self) -> None:
         nn.init.trunc_normal_(self.qkv_proj.weight, std=0.02)
-        self.apply_quantization(self.qkv_quantization_config, self.out_quantization_config)
+        nn.init.trunc_normal_(self.out_proj.weight, std=0.02)
+        if self.qkv_proj.bias is not None:
+            nn.init.zeros_(self.qkv_proj.bias)
+        if self.out_proj.bias is not None:
+            nn.init.zeros_(self.out_proj.bias)
 
     def apply_quantization(
         self, qkv_quantization_config: Any | None = None, out_quantization_config: Any | None = None
@@ -336,11 +341,18 @@ class CrossAttention(nn.Module):
         self.qkv_quantization_config = qkv_quantization_config
         self.out_quantization_config = out_quantization_config
         self.reset_parameters()
+        self.apply_quantization(self.qkv_quantization_config, self.out_quantization_config)
 
     def reset_parameters(self) -> None:
         nn.init.trunc_normal_(self.q_proj.weight, std=0.02)
         nn.init.trunc_normal_(self.kv_proj.weight, std=0.02)
-        self.apply_quantization(self.qkv_quantization_config, self.out_quantization_config)
+        nn.init.trunc_normal_(self.out_proj.weight, std=0.02)
+        if self.q_proj.bias is not None:
+            nn.init.zeros_(self.q_proj.bias)
+        if self.kv_proj.bias is not None:
+            nn.init.zeros_(self.kv_proj.bias)
+        if self.out_proj.bias is not None:
+            nn.init.zeros_(self.out_proj.bias)
 
     def apply_quantization(
         self, qkv_quantization_config: Any | None = None, out_quantization_config: Any | None = None

@@ -2,7 +2,7 @@ import pytest
 import torch
 from torch.testing import assert_close
 
-from vit.rope import RopePositionEmbedding
+from vit.rope import RopePositionEmbedding, apply_rope
 
 
 class TestRopePositionEmbedding:
@@ -161,3 +161,49 @@ class TestRopePositionEmbedding:
 
         assert_close(sin1, sin2, msg=f"Normalization mode {normalize_coords} should be deterministic")
         assert_close(cos1, cos2, msg=f"Normalization mode {normalize_coords} should be deterministic")
+
+    def test_fp32_precision_under_autocast(self, device):
+        """Test that RoPE runs at FP32 precision even under bfloat16 autocast."""
+        rope = RopePositionEmbedding(
+            embed_dim=64,
+            num_heads=4,
+            base=100.0,
+            dtype=torch.float32,
+        ).to(device)
+
+        with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=True):
+            sin, cos = rope(H=8, W=8)
+
+        assert sin.dtype == torch.float32, f"Expected sin dtype to be float32, got {sin.dtype}"
+        assert cos.dtype == torch.float32, f"Expected cos dtype to be float32, got {cos.dtype}"
+
+    def test_apply_rope_fp32_precision_under_autocast(self, device):
+        """Test that apply_rope uses FP32 precision internally under bfloat16 autocast."""
+        torch.random.manual_seed(0)
+        rope = RopePositionEmbedding(
+            embed_dim=64,
+            num_heads=4,
+            base=100.0,
+            dtype=torch.float32,
+        ).to(device)
+
+        rope_embedding = rope(H=8, W=8)  # [2, HW, D] in FP32
+
+        # Create input tensor in bfloat16
+        B, num_heads, L, D = 2, 4, 64, 16
+        x = torch.randn(B, num_heads, L, D, device=device, dtype=torch.bfloat16)
+
+        with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=True):
+            result = apply_rope(x, rope_embedding)
+        with torch.autocast(device_type=device.type, dtype=torch.float32, enabled=True):
+            result2 = apply_rope(x, rope_embedding)
+
+        assert result.dtype == torch.bfloat16, f"Expected result dtype to be bfloat16, got {result.dtype}"
+        assert rope_embedding.dtype == torch.float32, f"Expected rope dtype to be float32, got {rope_embedding.dtype}"
+        assert_close(
+            result,
+            result2,
+            atol=1e-8,
+            rtol=0,
+            msg="apply_rope should produce the same result with different precisions",
+        )

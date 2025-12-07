@@ -32,6 +32,7 @@ class TransformerEncoderLayer(nn.Module):
         attn_quantization_config: Any | None = None,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
+        attention_dtype: torch.dtype | None = None,
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -45,7 +46,8 @@ class TransformerEncoderLayer(nn.Module):
             eps,
             qkv_quantization_config=qkv_quantization_config,
             out_quantization_config=attn_quantization_config,
-            **factory_kwargs,
+            device=device,
+            dtype=attention_dtype,
         )
         self.mlp = NormMLP(
             hidden_size,
@@ -118,6 +120,7 @@ class TransformerDecoderLayer(nn.Module):
         attn_quantization_config: Any | None = None,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
+        attention_dtype: torch.dtype | None = None,
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -131,7 +134,8 @@ class TransformerDecoderLayer(nn.Module):
             eps,
             qkv_quantization_config=qkv_quantization_config,
             out_quantization_config=attn_quantization_config,
-            **factory_kwargs,
+            device=device,
+            dtype=attention_dtype,
         )
         self.cross_attention = CrossAttention(
             hidden_size,
@@ -224,6 +228,7 @@ class CrossAttentionTransformer(nn.Module):
         attn_quantization_config: Any | None = None,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
+        attention_dtype: torch.dtype | None = None,
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -237,7 +242,8 @@ class CrossAttentionTransformer(nn.Module):
             eps,
             qkv_quantization_config=qkv_quantization_config,
             out_quantization_config=attn_quantization_config,
-            **factory_kwargs,
+            device=device,
+            dtype=attention_dtype,
         )
         self.mlp = NormMLP(
             hidden_size,

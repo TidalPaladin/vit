@@ -47,10 +47,12 @@ class NormLinear(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.quantization_config = quantization_config
         self.reset_parameters()
+        self.apply_quantization(self.quantization_config)
 
     def reset_parameters(self) -> None:
         nn.init.trunc_normal_(self.linear.weight, std=0.02)
-        self.apply_quantization(self.quantization_config)
+        if self.linear.bias is not None:
+            nn.init.zeros_(self.linear.bias)
 
     def apply_quantization(self, quantization_config: Any | None) -> None:
         """Apply quantization to the linear layer using torchao."""
@@ -181,13 +183,15 @@ class NormMLP(nn.Module):
         self.extra_bias = extra_bias
         self.quantization_config = quantization_config
         self.reset_parameters()
+        self.apply_quantization(self.quantization_config)
 
     def reset_parameters(self) -> None:
         nn.init.trunc_normal_(self.fc1.weight, std=0.02)
         nn.init.trunc_normal_(self.fc2.weight, std=0.02)
-
-        # Apply quantization after weight initialization
-        self.apply_quantization(self.quantization_config)
+        if self.fc1.bias is not None:
+            nn.init.zeros_(self.fc1.bias)
+        if self.fc2.bias is not None:
+            nn.init.zeros_(self.fc2.bias)
 
     def apply_quantization(self, quantization_config: Any | None) -> None:
         """Apply quantization to both linear layers using torchao."""

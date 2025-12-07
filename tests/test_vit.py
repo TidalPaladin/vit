@@ -53,6 +53,9 @@ class TestViT:
             ffn_hidden_size=128,
             num_attention_heads=4,
             pos_enc="learnable",
+            attention_dtype=torch.bfloat16,
+            rope_dtype=torch.bfloat16,
+            patch_embed_dtype=torch.bfloat16,
         )
         assert config.dtype == torch.bfloat16
         model = ViT(config)
@@ -72,6 +75,9 @@ class TestViT:
             num_attention_heads=4,
             pos_enc="learnable",
             dtype=torch.float32,
+            attention_dtype=torch.float32,
+            rope_dtype=torch.float32,
+            patch_embed_dtype=torch.float32,
         )
         assert config.dtype == torch.float32
         model = ViT(config)
@@ -94,6 +100,9 @@ class TestViT:
             num_register_tokens=2,
             num_cls_tokens=1,
             dtype=dtype,
+            attention_dtype=dtype,
+            rope_dtype=dtype,
+            patch_embed_dtype=dtype,
             heads={"cls": HeadConfig(out_features=10), "seg": HeadConfig(out_features=64)},
         )
         model = ViT(config, device=device)
