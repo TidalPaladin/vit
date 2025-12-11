@@ -1,0 +1,42 @@
+# Example ViT Configuration for Benchmarking
+# This is a ViT-Base configuration similar to the original paper
+
+# Input specifications
+in_channels: 3
+patch_size: [16, 16]
+img_size: [224, 224]  # Will be overridden by CLI --resolutions
+
+# Transformer architecture
+depth: 12
+hidden_size: 768
+ffn_hidden_size: 3072
+num_attention_heads: 12
+
+# Regularization
+hidden_dropout: 0.0  # Disable for benchmarking
+attention_dropout: 0.0  # Disable for benchmarking
+drop_path_rate: 0.0  # Disable for benchmarking
+
+# Bias options
+attention_bias: true
+mlp_bias: true
+
+# Activation function
+activation: srelu
+
+# Special tokens
+num_register_tokens: 0
+num_cls_tokens: 1
+
+# Position encoding
+pos_enc: rope
+rope_base: 10000.0
+rope_normalize_coords: separate
+
+# Master dtype
+dtype: bfloat16
+
+# Optional: Layer-specific settings
+# layer_scale: 1.0
+# glu_limit: null
+# glu_extra_bias: null

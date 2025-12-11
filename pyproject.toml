@@ -72,21 +72,27 @@ markers = [
 ]
 filterwarnings = []
 
-# Sample script config
-#[project.scripts]
-#foo = "project.cli.__main__:main"
+[project.scripts]
+vit-benchmark = "benchmark.cli:main"
 
 [dependency-groups]
+benchmarking = [
+    "matplotlib",
+    "tqdm",
+]
+
 dev = [
     "autoflake",
     "autopep8",
     "black",
     "flake8",
     "isort",
+    "pyright",
     "pytest",
     "pytest-mock",
     "pytest-cov",
     "pytest-env",
     "coverage",
     "pdbpp",
+    {include-group = "benchmarking"},
 ]

@@ -80,8 +80,8 @@ test-ci: ## runs CI-only tests
 		--cov-report=term \
 		./tests/
 
-types: node_modules
-	uv run npx --no-install pyright tests $(PROJECT)
+types: ## run static type checking
+	uv run pyright 
 
 help: ## display this help message
 	@echo "Please use \`make <target>' where <target> is one of"
