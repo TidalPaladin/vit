@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "vit"
 description = ""
-requires-python = ">=3.11,<3.14"
+requires-python = ">=3.11,<3.15"
 authors = [
     {name = "Scott Chase Waggener", email = "chase.waggener@icloud.com"},
 ]
@@ -56,7 +56,7 @@ exclude = [
   "**/_version.py",
 ]
 ignore = ["src/oldstuff"]
-pythonVersion = "3.11"
+pythonVersion = "3.14"
 pythonPlatform = "Linux"
 
 [tool.hatch.version]

@@ -39,13 +39,6 @@ init: ## pulls submodules and initializes virtual environment
 	which uv || pip install --user uv
 	uv sync --all-groups
 
-node_modules: 
-ifeq (, $(shell which npm))
-	$(error "No npm in $(PATH), please install it to run pyright type checking")
-else
-	npm install
-endif
-
 quality:
 	$(MAKE) clean
 	$(PYTHON) -m black --check $(QUALITY_DIRS)
