@@ -11,6 +11,12 @@ This library can be installed with the following command
 pip install vit @ git+https://github.com/TidalPaladin/vit.git
 ```
 
+For benchmarking capabilities, install with the benchmarking extras:
+
+```bash
+pip install "vit[benchmarking] @ git+https://github.com/TidalPaladin/vit.git"
+```
+
 ## Usage
 
 ```python
@@ -49,6 +55,32 @@ features_with_register_tokens = model(x, return_register_tokens=True)
 # Apply classification head
 logits = model.heads["cls"](features) # B, 10
 ```
+
+## Benchmarking
+
+The library includes a comprehensive benchmarking suite for measuring model performance:
+
+```bash
+# Install benchmarking dependencies
+uv sync --group benchmarking
+
+# Run benchmarks
+vit-benchmark \
+    --configs config.yaml \
+    --resolutions 224,224 384,384 \
+    --batch-size 8 \
+    --device cuda \
+    --output-dir results/
+```
+
+The benchmarking tool tracks:
+- **Inference latency** (milliseconds per batch)
+- **Peak memory usage** (MB)
+- **Computational cost** (GFLOPs)
+
+Results are saved as CSV files and visualized with publication-quality plots (PNG/SVG).
+
+See [`benchmark/README.md`](benchmark/README.md) for detailed documentation.
 
 ## References
 * [An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale](https://arxiv.org/abs/2010.11929)

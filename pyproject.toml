@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "vit"
 description = ""
-requires-python = ">=3.11,<3.14"
+requires-python = ">=3.11,<3.15"
 authors = [
     {name = "Scott Chase Waggener", email = "chase.waggener@icloud.com"},
 ]
@@ -56,7 +56,7 @@ exclude = [
   "**/_version.py",
 ]
 ignore = ["src/oldstuff"]
-pythonVersion = "3.11"
+pythonVersion = "3.14"
 pythonPlatform = "Linux"
 
 [tool.hatch.version]
@@ -72,21 +72,27 @@ markers = [
 ]
 filterwarnings = []
 
-# Sample script config
-#[project.scripts]
-#foo = "project.cli.__main__:main"
+[project.scripts]
+vit-benchmark = "benchmark.cli:main"
 
 [dependency-groups]
+benchmarking = [
+    "matplotlib",
+    "tqdm",
+]
+
 dev = [
     "autoflake",
     "autopep8",
     "black",
     "flake8",
     "isort",
+    "pyright",
     "pytest",
     "pytest-mock",
     "pytest-cov",
     "pytest-env",
     "coverage",
     "pdbpp",
+    {include-group = "benchmarking"},
 ]
