@@ -13,7 +13,6 @@ from vit.vit import ViTConfig
 
 
 class TestHeadConfig:
-
     def test_instantiate(self):
         config = HeadConfig(out_features=128)
         vit_config = ViTConfig(
@@ -48,7 +47,6 @@ class TestHeadConfig:
 
 
 class TestTransposedConv2dHeadConfig:
-
     def test_instantiate(self):
         config = TransposedConv2dHeadConfig(out_features=64, kernel_size=4, stride=2, padding=1)
         vit_config = ViTConfig(
@@ -99,7 +97,6 @@ class TestTransposedConv2dHeadConfig:
 
 
 class TestHead:
-
     @pytest.mark.parametrize("in_features", [64, 128])
     @pytest.mark.parametrize("out_features", [32, 128])
     def test_forward(self, device, in_features, out_features):
@@ -133,7 +130,6 @@ class TestHead:
 
 
 class TestTransposedConv2dHead:
-
     @pytest.mark.parametrize("in_channels", [64, 128])
     @pytest.mark.parametrize("out_channels", [32, 64])
     def test_forward(self, device, in_channels, out_channels):
@@ -231,7 +227,6 @@ class TestTransposedConv2dHead:
 
 
 class TestUpsampleHeadConfig:
-
     def test_instantiate(self):
         config = UpsampleHeadConfig(out_features=32, num_upsample_stages=4)
         vit_config = ViTConfig(
@@ -270,7 +265,6 @@ class TestUpsampleHeadConfig:
 
 
 class TestUpsampleHead:
-
     @pytest.mark.parametrize("in_channels", [64, 128])
     @pytest.mark.parametrize("out_channels", [32, 64])
     def test_forward(self, device, in_channels, out_channels):

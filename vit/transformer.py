@@ -11,7 +11,6 @@ from .layer_scale import LayerScale
 
 
 class TransformerEncoderLayer(nn.Module):
-
     def __init__(
         self,
         hidden_size: int,
@@ -97,7 +96,6 @@ class TransformerEncoderLayer(nn.Module):
 
 
 class TransformerDecoderLayer(nn.Module):
-
     def __init__(
         self,
         hidden_size: int,
@@ -203,7 +201,6 @@ class TransformerDecoderLayer(nn.Module):
 
 
 class CrossAttentionTransformer(nn.Module):
-
     def __init__(
         self,
         hidden_size: int,

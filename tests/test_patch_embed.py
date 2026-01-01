@@ -7,7 +7,6 @@ from vit.patch_embed import PatchEmbed2d, PatchEmbed3d
 
 
 class TestPatchEmbed2d:
-
     @pytest.mark.parametrize("pos_enc", ["fourier", "learnable", "none"])
     def test_forward(self, device, pos_enc):
         B, C, H, W = 2, 3, 64, 64
@@ -31,7 +30,6 @@ class TestPatchEmbed2d:
 
 
 class TestPatchEmbed3d:
-
     @pytest.mark.parametrize("pos_enc", ["fourier", "learnable", "none"])
     def test_forward(self, device, pos_enc):
         B, C, D, H, W = 2, 3, 4, 64, 64

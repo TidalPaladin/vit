@@ -6,7 +6,6 @@ from vit.pos_enc import FourierPosition, LearnablePosition, create_grid
 
 
 class TestLearnablePosition:
-
     @pytest.mark.parametrize("fourier_init", [True, False])
     def test_forward(self, device, fourier_init):
         D = 16
@@ -60,7 +59,6 @@ class TestLearnablePosition:
 
 
 class TestFourierPosition:
-
     def test_forward(self, device):
         D = 16
         torch.random.manual_seed(0)

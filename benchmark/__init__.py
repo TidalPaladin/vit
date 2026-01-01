@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 """Benchmarking tools for ViT models."""
 
 from .benchmark import (

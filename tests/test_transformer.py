@@ -6,7 +6,6 @@ from vit.transformer import CrossAttentionTransformer, TransformerDecoderLayer, 
 
 
 class TestTransformerEncoderLayer:
-
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
     @pytest.mark.parametrize("layer_scale", [None, 1e-5])
     def test_forward(self, dtype, device, layer_scale):
@@ -47,7 +46,6 @@ class TestTransformerEncoderLayer:
 
 
 class TestTransformerDecoderLayer:
-
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
     @pytest.mark.parametrize("layer_scale", [None, 1e-5])
     def test_forward(self, dtype, device, layer_scale):
@@ -91,7 +89,6 @@ class TestTransformerDecoderLayer:
 
 
 class TestCrossAttentionTransformer:
-
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
     @pytest.mark.parametrize("layer_scale", [None, 1e-5])
     def test_forward(self, dtype, device, layer_scale):

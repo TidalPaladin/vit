@@ -1,5 +1,6 @@
 import math
-from typing import TYPE_CHECKING, Literal, Sequence, Union
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Literal, Union
 
 import torch
 import torch.nn as nn
@@ -88,7 +89,6 @@ def learnable_position(
 
 
 class LearnablePosition(nn.Module):
-
     def __init__(
         self,
         hidden_size: int,
@@ -148,7 +148,6 @@ def fourier_position(
 
 
 class FourierPosition(nn.Module):
-
     def __init__(
         self,
         hidden_size: int,

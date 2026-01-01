@@ -10,7 +10,6 @@ from vit.fused import NormLinear, NormMLP
 
 
 class TestNormLinear:
-
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
     def test_forward(self, device, dtype):
         layer_norm_linear = NormLinear(10, 20).to(device)
@@ -62,7 +61,6 @@ class TestNormLinear:
 
 
 class TestNormMLP:
-
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
     @pytest.mark.parametrize("activation", ["relu", "silu", "gelu", "srelu", "reglu", "swiglu", "geglu", "openswiglu"])
     def test_forward(self, device, dtype, activation):

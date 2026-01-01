@@ -124,7 +124,6 @@ class TransposedConv2dHeadConfig:
 
 
 class Head(nn.Module):
-
     def __init__(
         self,
         in_features: int,

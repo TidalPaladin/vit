@@ -1,4 +1,5 @@
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 import torch
 import torch.nn as nn
@@ -13,7 +14,8 @@ from .helpers import get_activation
 def norm_linear(
     # fmt: off
     x: Tensor,
-    weight: Tensor, bias: Tensor | None,
+    weight: Tensor,
+    bias: Tensor | None,
     norm_weight: Tensor,
     eps: float,
     dropout: float,
@@ -26,7 +28,6 @@ def norm_linear(
 
 
 class NormLinear(nn.Module):
-
     def __init__(
         self,
         in_features: int,
@@ -87,8 +88,10 @@ class NormLinear(nn.Module):
 def norm_mlp(
     # fmt: off
     x: Tensor,
-    fc1_weight: Tensor, fc1_bias: Tensor | None,
-    fc2_weight: Tensor, fc2_bias: Tensor | None,
+    fc1_weight: Tensor,
+    fc1_bias: Tensor | None,
+    fc2_weight: Tensor,
+    fc2_bias: Tensor | None,
     norm_weight: Tensor | None,
     activation: Callable[[Tensor], Tensor],
     eps: float,
@@ -118,8 +121,10 @@ def norm_mlp(
 def norm_mlp_glu(
     # fmt: off
     x: Tensor,
-    fc1_weight: Tensor, fc1_bias: Tensor | None,
-    fc2_weight: Tensor, fc2_bias: Tensor | None,
+    fc1_weight: Tensor,
+    fc1_bias: Tensor | None,
+    fc2_weight: Tensor,
+    fc2_bias: Tensor | None,
     norm_weight: Tensor | None,
     activation: Callable[[Tensor], Tensor],
     eps: float,
@@ -150,7 +155,6 @@ def norm_mlp_glu(
 
 
 class NormMLP(nn.Module):
-
     def __init__(
         self,
         hidden_size: int,
@@ -201,8 +205,10 @@ class NormMLP(nn.Module):
             return norm_mlp_glu(
                 # fmt: off
                 x,
-                self.fc1.weight, self.fc1.bias,
-                self.fc2.weight, self.fc2.bias,
+                self.fc1.weight,
+                self.fc1.bias,
+                self.fc2.weight,
+                self.fc2.bias,
                 self.norm.weight,
                 self.activation,
                 self.norm.eps or 1e-5,
@@ -216,8 +222,10 @@ class NormMLP(nn.Module):
             return norm_mlp(
                 # fmt: off
                 x,
-                self.fc1.weight, self.fc1.bias,
-                self.fc2.weight, self.fc2.bias,
+                self.fc1.weight,
+                self.fc1.bias,
+                self.fc2.weight,
+                self.fc2.bias,
                 self.norm.weight,
                 self.activation,
                 self.norm.eps or 1e-5,

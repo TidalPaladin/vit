@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 """CLI tool for running ViT benchmarks."""
 
 import argparse

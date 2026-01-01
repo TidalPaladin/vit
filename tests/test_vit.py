@@ -41,7 +41,6 @@ def assert_none_requires_grad(module: Any):
 
 
 class TestViT:
-
     def test_default_dtype_is_bfloat16(self):
         """Verify that the default master weight dtype is BF16."""
         config = ViTConfig(
@@ -122,9 +121,9 @@ class TestViT:
             head = model.heads[head_name]
             for name, param in head.named_parameters():
                 assert param.dtype == dtype, f"Head {head_name} param {name} has dtype {param.dtype}, expected {dtype}"
-                assert (
-                    param.device == device
-                ), f"Head {head_name} param {name} on device {param.device}, expected {device}"
+                assert param.device == device, (
+                    f"Head {head_name} param {name} on device {param.device}, expected {device}"
+                )
 
     def test_config_from_yaml_str(self, config):
         config_str = config.to_yaml()
@@ -322,7 +321,6 @@ class TestViT:
 
 
 class TestViTFeatures:
-
     def test_iter(self):
         num_cls_tokens = 1
         num_register_tokens = 2
@@ -341,7 +339,7 @@ class TestViTFeatures:
 
     def test_repr(self):
         features = ViTFeatures(torch.randn(2, 33, 128), 0, 1)
-        expected = f"ViTFeatures(cls_tokens=(2, 1, 128), register_tokens=(2, 0, 128), visual_tokens=(2, 32, 128))"
+        expected = "ViTFeatures(cls_tokens=(2, 1, 128), register_tokens=(2, 0, 128), visual_tokens=(2, 32, 128))"
         assert isinstance(repr(features), str)
         assert repr(features) == expected
 

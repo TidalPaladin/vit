@@ -41,14 +41,12 @@ init: ## pulls submodules and initializes virtual environment
 
 quality:
 	$(MAKE) clean
-	$(PYTHON) -m black --check $(QUALITY_DIRS)
-	$(PYTHON) -m autopep8 -a $(QUALITY_DIRS)
+	uv run ruff check $(QUALITY_DIRS)
+	uv run ruff format --check $(QUALITY_DIRS)
 
 style:
-	$(PYTHON) -m autoflake -r -i $(QUALITY_DIRS)
-	$(PYTHON) -m isort $(QUALITY_DIRS)
-	$(PYTHON) -m autopep8 -a $(QUALITY_DIRS)
-	$(PYTHON) -m black $(QUALITY_DIRS)
+	uv run ruff check --fix $(QUALITY_DIRS)
+	uv run ruff format $(QUALITY_DIRS)
 
 test: ## run unit tests
 	$(PYTHON) -m pytest \
@@ -74,7 +72,7 @@ test-ci: ## runs CI-only tests
 		./tests/
 
 types: ## run static type checking
-	uv run pyright 
+	uv run basedpyright 
 
 help: ## display this help message
 	@echo "Please use \`make <target>' where <target> is one of"

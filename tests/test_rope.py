@@ -6,7 +6,6 @@ from vit.rope import RopePositionEmbedding
 
 
 class TestRopePositionEmbedding:
-
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
     def test_forward_basic(self, device, dtype):
         """Test basic forward pass without augmentations."""
