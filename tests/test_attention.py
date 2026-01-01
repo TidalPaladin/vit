@@ -10,7 +10,6 @@ from vit.attention import AttentivePool, CrossAttention, SelfAttention
 
 
 class TestSelfAttention:
-
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
     def test_forward(self, dtype, device):
         B, L, D = 16, 128, 128
@@ -76,7 +75,6 @@ class TestSelfAttention:
 
 
 class TestCrossAttention:
-
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
     def test_forward(self, dtype, device):
         B, L, D = 16, 128, 128
@@ -152,7 +150,6 @@ class TestCrossAttention:
 
 
 class TestAttentivePool:
-
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
     def test_forward(self, dtype, device):
         B, L, D = 16, 128, 128

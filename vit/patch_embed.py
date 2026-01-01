@@ -1,4 +1,5 @@
-from typing import Any, Sequence, Tuple, cast
+from collections.abc import Sequence
+from typing import Any, cast
 
 import torch
 import torch.nn as nn
@@ -8,7 +9,6 @@ from .pos_enc import PositionEncoder, create_position_encoder
 
 
 class PatchEmbed2d(nn.Module):
-
     def __init__(
         self,
         in_channels: int,
@@ -33,14 +33,14 @@ class PatchEmbed2d(nn.Module):
         )
 
     @property
-    def patch_size(self) -> Tuple[int, int]:
-        return cast(Tuple[int, int], tuple(self.patch.weight.shape[2:]))
+    def patch_size(self) -> tuple[int, int]:
+        return cast(tuple[int, int], tuple(self.patch.weight.shape[2:]))
 
-    def tokenized_size(self, size: Sequence[int]) -> Tuple[int, int]:
+    def tokenized_size(self, size: Sequence[int]) -> tuple[int, int]:
         ht, wt = tuple(s // p for s, p in zip(size, self.patch_size))
         return ht, wt
 
-    def original_size(self, size: Tuple[int, int]) -> Tuple[int, int]:
+    def original_size(self, size: tuple[int, int]) -> tuple[int, int]:
         ht, wt = tuple(s * p for s, p in zip(size, self.patch_size))
         return ht, wt
 
@@ -55,7 +55,6 @@ class PatchEmbed2d(nn.Module):
 
 
 class PatchEmbed3d(nn.Module):
-
     def __init__(
         self,
         in_channels: int,
@@ -80,14 +79,14 @@ class PatchEmbed3d(nn.Module):
         )
 
     @property
-    def patch_size(self) -> Tuple[int, int, int]:
-        return cast(Tuple[int, int, int], tuple(self.patch.weight.shape[2:]))
+    def patch_size(self) -> tuple[int, int, int]:
+        return cast(tuple[int, int, int], tuple(self.patch.weight.shape[2:]))
 
-    def tokenized_size(self, size: Sequence[int]) -> Tuple[int, int, int]:
+    def tokenized_size(self, size: Sequence[int]) -> tuple[int, int, int]:
         dt, ht, wt = tuple(s // p for s, p in zip(size, self.patch_size))
         return dt, ht, wt
 
-    def original_size(self, size: Sequence[int]) -> Tuple[int, int, int]:
+    def original_size(self, size: Sequence[int]) -> tuple[int, int, int]:
         dt, ht, wt = tuple(s * p for s, p in zip(size, self.patch_size))
         return dt, ht, wt
 

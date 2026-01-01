@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 """Tests for benchmarking functionality."""
 
 from pathlib import Path

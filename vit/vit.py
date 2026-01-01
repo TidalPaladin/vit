@@ -1,6 +1,7 @@
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, Literal, Self, Sequence, Type, cast
+from typing import TYPE_CHECKING, Any, Literal, Self, cast
 
 import torch
 import torch.nn as nn
@@ -87,17 +88,17 @@ class ViTConfig:
     dtype: torch.dtype = torch.bfloat16
 
     # Heads
-    heads: Dict[str, HeadConfig] = field(default_factory=dict)
+    heads: dict[str, HeadConfig] = field(default_factory=dict)
 
     def instantiate(self, device: torch.device | None = None) -> "ViT":
         return ViT(self, device=device)
 
     @classmethod
-    def from_yaml(cls: Type[Self], path: str | Path) -> Self:
+    def from_yaml(cls: type[Self], path: str | Path) -> Self:
         if isinstance(path, Path):
             if not path.is_file():
                 raise FileNotFoundError(f"File not found: {path}")
-            with open(path, "r") as f:
+            with open(path) as f:
                 config = yaml.full_load(f)
         elif isinstance(path, str) and path.endswith(".yaml"):
             return cls.from_yaml(Path(path))
@@ -118,7 +119,6 @@ class ViTConfig:
 
 
 class ViTFeatures:
-
     def __init__(
         self,
         dense_features: Tensor,
@@ -203,7 +203,7 @@ class ViTFeatures:
 
     @classmethod
     def from_separate_features(
-        cls: Type[Self],
+        cls: type[Self],
         cls_tokens: Tensor,
         register_tokens: Tensor,
         visual_tokens: Tensor,
@@ -218,7 +218,6 @@ class ViTFeatures:
 
 
 class ViT(nn.Module):
-
     def __init__(
         self,
         config: ViTConfig,
@@ -505,14 +504,14 @@ class ViT(nn.Module):
         w = w[..., self.config.num_register_tokens :].view(B, H, Lq, *tokenized_size)
         return w.contiguous()
 
-    def forward_attention_weights(self, x: Tensor) -> Dict[str, Tensor]:
+    def forward_attention_weights(self, x: Tensor) -> dict[str, Tensor]:
         # Prepare transformer input
         tokenized_size = self.stem.tokenized_size(x.shape[2:])
         x = self.stem(x)
         x = self.add_prefix_tokens(x)
 
         # Apply transformer
-        weights: Dict[str, Tensor] = {}
+        weights: dict[str, Tensor] = {}
         for i, block in enumerate(self.blocks):
             assert isinstance(block, TransformerEncoderLayer)
             w_i = block.self_attention.forward_weights(x)

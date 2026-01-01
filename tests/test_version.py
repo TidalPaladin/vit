@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 from vit import __version__
 from vit._version import __version__ as __version__2
 

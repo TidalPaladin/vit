@@ -57,7 +57,6 @@ def test_unapply():
 
 
 class TestCreateMask:
-
     @pytest.mark.parametrize(
         "size, exp",
         [

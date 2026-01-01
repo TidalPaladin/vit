@@ -1,4 +1,5 @@
-from typing import Sequence, cast
+from collections.abc import Sequence
+from typing import cast
 
 import torch
 import torch.nn.functional as F
