@@ -14,9 +14,9 @@ make init              # Initialize environment and install all dependencies (us
 
 # Development
 make check             # Full check: style + quality + types + tests
-make style             # Auto-format code (autoflake, isort, autopep8, black)
+make style             # Auto-format code with ruff
 make quality           # Check formatting without changes
-make types             # Static type checking with pyright
+make types             # Static type checking with basedpyright
 make test              # Run unit tests with coverage
 make test-<pattern>    # Run tests matching pattern (e.g., make test-attention)
 make test-pdb-<pattern> # Debug tests with PDB
@@ -57,3 +57,55 @@ Key modules in `vit/`:
 - **torch.compile friendly**: Custom implementations avoid einops; designed for compilation
 - **No CLS token**: All token pooling happens in heads, not the transformer
 - **Position encoding**: Default is RoPE; configurable via `pos_enc` parameter
+
+## Rust CLI (rust/)
+
+Rust workspace for ViT model validation, summarization, and inference. Uses AOTInductor for compiled model inference.
+
+```bash
+# Build without inference (no external dependencies)
+make rust-release             # Build release binary
+make rust-test                # Run Rust tests
+
+# Build with inference support (requires libtorch)
+make libtorch                 # Download libtorch with CUDA support
+make libtorch-cpu             # Download CPU-only libtorch
+export LIBTORCH=$(pwd)/libtorch
+make rust-ffi                 # Build with FFI/inference support
+
+# Create portable distribution (self-contained, ~471MB)
+make rust-install             # Creates dist/vit/ with all dependencies bundled
+
+# CLI commands
+./rust/target/release/vit validate config.yaml
+./rust/target/release/vit summarize config.yaml
+./rust/target/release/vit infer --model model.so --config config.yaml --shape 1,3,224,224
+
+# Export model to AOTInductor format (.so shared library)
+make export-model CONFIG=config.yaml OUTPUT=model.so DEVICE=cpu
+```
+
+**Crates:**
+- `vit-core` - Config parsing and model summary (mirrors Python `ViTConfig`)
+- `vit-ffi` - FFI bindings to C++ AOTInductor runtime (optional, requires libtorch)
+- `vit-cli` - CLI binary with validate/summarize/infer commands
+
+**Build Notes:**
+- CUDA builds require CUDA toolkit with nvcc in PATH and GCC ≤13 (CUDA 12.x limitation)
+- Use CPU-only libtorch if you encounter compiler compatibility issues
+- The Makefile automatically sets `LIBTORCH_CXX11_ABI=1` for correct C++ ABI compatibility
+
+## AOT Export Gotchas
+
+When exporting models for Rust inference, be aware of these issues:
+
+1. **torch.compile conflicts with torch.export**: The `@torch.compile` decorators throughout the codebase conflict with `torch.export` tracing, causing `FakeTensorMode` mismatch errors. The Makefile's `export-model` target automatically sets `TORCH_COMPILE_DISABLE=1` to resolve this. If running manually:
+   ```bash
+   TORCH_COMPILE_DISABLE=1 python scripts/export_aot.py --config config.yaml --output model.so
+   ```
+
+2. **Output format is .so, not .pt2**: The export produces a shared library (`.so`) file, not a ZIP package. The C++ AOTInductor runtime loads these directly.
+
+3. **C++ ABI compatibility**: libtorch uses the new CXX11 ABI (`std::__cxx11::basic_string`). The FFI build must use `LIBTORCH_CXX11_ABI=1` to match. Symbol errors like `undefined symbol: ...basic_string...` indicate ABI mismatch.
+
+4. **Static shapes**: Dynamic batch sizes may fail during export if the model specializes shapes. The export script automatically falls back to static shapes when this occurs.
