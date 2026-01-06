@@ -412,3 +412,69 @@ class TestViTFeatures:
         assert features.tokenized_size == tokenized_size
         grid = features.visual_tokens_as_grid
         assert grid.shape == (2, 8, 8, 128)
+
+
+class TestCompile:
+    """Dedicated tests for torch.compile functionality."""
+
+    def test_compile_is_disabled_by_default(self):
+        """Verify that torch.compile is disabled in test environment."""
+        import os
+
+        import torch._dynamo
+
+        assert os.environ.get("TORCHDYNAMO_DISABLE") == "1", "TORCHDYNAMO_DISABLE env var not set"
+        assert torch._dynamo.config.disable is True, "torch._dynamo.config.disable is not True"
+
+    @pytest.mark.compile
+    @pytest.mark.cuda
+    def test_compile_forward(self):
+        """End-to-end test with torch.compile enabled (forward pass)."""
+        config = ViTConfig(
+            in_channels=3,
+            patch_size=(16, 16),
+            img_size=(224, 224),
+            depth=3,
+            hidden_size=128,
+            ffn_hidden_size=256,
+            num_attention_heads=8,
+            pos_enc="learnable",
+            dtype=torch.float32,
+        )
+        model = ViT(config).cuda()
+        x = torch.randn(2, 3, 224, 224, device="cuda")
+        # Run forward pass multiple times to trigger and verify compilation
+        for _ in range(3):
+            out = model(x)
+        assert out.visual_tokens.shape == (2, 196, 128)
+
+    @pytest.mark.compile
+    @pytest.mark.cuda
+    def test_compile_backward(self):
+        """End-to-end test with torch.compile enabled (backward pass)."""
+        config = ViTConfig(
+            in_channels=3,
+            patch_size=(16, 16),
+            img_size=(224, 224),
+            depth=3,
+            hidden_size=128,
+            ffn_hidden_size=256,
+            num_attention_heads=8,
+            pos_enc="learnable",
+            dtype=torch.float32,
+        )
+        model = ViT(config).cuda()
+        x = torch.randn(2, 3, 224, 224, device="cuda", requires_grad=True)
+        # Run forward+backward multiple times to trigger and verify compilation
+        for _ in range(3):
+            out = model(x)
+            out.dense_features.sum().backward()
+            model.zero_grad()
+            if x.grad is not None:
+                x.grad = None
+        # Verify gradients computed successfully
+        out = model(x)
+        out.dense_features.sum().backward()
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                assert param.grad is not None, f"{name} has no gradient"
