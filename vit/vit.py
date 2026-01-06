@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import yaml
 from torch import Tensor
+from torch.utils.checkpoint import checkpoint
 
 from .head import Head, HeadConfig, TransposedConv2dHead, UpsampleHead
 from .patch_embed import PatchEmbed2d, PatchEmbed3d
@@ -83,6 +84,9 @@ class ViTConfig:
     # Trainable blocks
     mlp_requires_grad: bool = True
     self_attention_requires_grad: bool = True
+
+    # Memory optimization
+    activation_checkpointing: bool = False
 
     # Master weight dtype (default BF16)
     dtype: torch.dtype = torch.bfloat16
@@ -480,7 +484,10 @@ class ViT(nn.Module):
         # Apply transformer
         for block in self.blocks:
             assert isinstance(block, TransformerEncoderLayer)
-            x = block(x, rope=rope)
+            if self.config.activation_checkpointing and self.training:
+                x = cast(Tensor, checkpoint(block, x, rope, use_reentrant=False))
+            else:
+                x = block(x, rope=rope)
 
         # Prepare output
         x = self.output_norm(x) if output_norm else x
