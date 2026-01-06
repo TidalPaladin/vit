@@ -57,3 +57,4 @@ Key modules in `vit/`:
 - **torch.compile friendly**: Custom implementations avoid einops; designed for compilation
 - **No CLS token**: All token pooling happens in heads, not the transformer
 - **Position encoding**: Default is RoPE; configurable via `pos_enc` parameter
+- **Activation checkpointing**: Enable via `ViTConfig(activation_checkpointing=True)` to reduce memory ~50% at cost of ~40% latency overhead (for deep models with large batches)

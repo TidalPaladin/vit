@@ -56,6 +56,32 @@ features_with_register_tokens = model(x, return_register_tokens=True)
 logits = model.heads["cls"](features) # B, 10
 ```
 
+## Activation Checkpointing
+
+Enable activation checkpointing to reduce memory usage during training at the cost of additional compute:
+
+```python
+config = ViTConfig(
+    # ... other params ...
+    activation_checkpointing=True,  # Enable gradient checkpointing
+)
+```
+
+Memory savings scale with batch size and model depth:
+
+| Depth | Hidden | Batch | Memory Savings | Latency Overhead |
+|-------|--------|-------|----------------|------------------|
+| 12    | 768    | 4     | 24%            | 132%             |
+| 12    | 768    | 8     | 49%            | 114%             |
+| 24    | 768    | 4     | 26%            | 36%              |
+| 24    | 768    | 8     | 52%            | 44%              |
+
+Run the checkpointing benchmark to measure savings on your hardware:
+
+```bash
+uv run python -m benchmark.checkpoint_memory --depths 12 24 --hidden-sizes 768 --batch-sizes 4 8
+```
+
 ## Benchmarking
 
 The library includes a comprehensive benchmarking suite for measuring model performance:
