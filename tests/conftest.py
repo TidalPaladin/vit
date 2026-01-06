@@ -20,6 +20,7 @@ torch.backends.cudnn.conv.fp32_precision = "high"  # type: ignore
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "compile: mark test to run with torch.compile enabled")
+    config.addinivalue_line("markers", "cuda: mark test as requiring CUDA")
 
 
 def cuda_available():

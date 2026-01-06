@@ -49,7 +49,7 @@ Key modules in `vit/`:
 - Type checking: basedpyright with Python 3.14 target
 - Linting and formatting: ruff (replaces black, isort, flake8, autopep8, autoflake)
 - Always run `make style` before committing
-- Test markers: `@pytest.mark.ci_skip` (skip in CI), `@pytest.mark.cuda` (requires GPU)
+- Test markers: `@pytest.mark.cuda` (requires GPU, skipped in CI), `@pytest.mark.compile` (requires torch.compile, skipped in CI)
 
 ## Key Patterns
 
