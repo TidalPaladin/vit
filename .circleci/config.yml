@@ -31,7 +31,7 @@ jobs:
 
     run_tests:
         docker:
-            - image: cimg/python:3.14
+            - image: cimg/python:3.12
         steps:
             - checkout
             - restore_cache:
@@ -48,9 +48,6 @@ jobs:
             - run:
                 name: Run tests
                 command: make test-ci
-            - run:
-                name: Install static type checker
-                command: npm ci
             - run:
                 name: Run static type checking
                 command: make types
@@ -70,5 +67,4 @@ workflows:
     build_and_test:
         jobs:
             - check_code_quality
-            # Tests cannot be run on free tier due to OOM at build/install
-            #- run_tests 
+            - run_tests

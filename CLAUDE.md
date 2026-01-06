@@ -17,8 +17,8 @@ make check             # Full check: style + quality + types + tests
 make style             # Auto-format code (autoflake, isort, autopep8, black)
 make quality           # Check formatting without changes
 make types             # Static type checking with pyright
-make test              # Run unit tests with coverage
-make test-<pattern>    # Run tests matching pattern (e.g., make test-attention)
+make test              # Run unit tests with coverage (~370 tests, ~30s)
+make test-<pattern>    # Run tests matching pattern (e.g., make test-attention) - PREFER THIS
 make test-pdb-<pattern> # Debug tests with PDB
 
 # Benchmarking
@@ -49,7 +49,7 @@ Key modules in `vit/`:
 - Type checking: basedpyright with Python 3.14 target
 - Linting and formatting: ruff (replaces black, isort, flake8, autopep8, autoflake)
 - Always run `make style` before committing
-- Test markers: `@pytest.mark.ci_skip` (skip in CI), `@pytest.mark.cuda` (requires GPU)
+- Test markers: `@pytest.mark.cuda` (requires GPU, skipped in CI), `@pytest.mark.compile` (requires torch.compile, skipped in CI)
 
 ## Key Patterns
 
