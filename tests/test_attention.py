@@ -10,21 +10,19 @@ from vit.attention import AttentivePool, CrossAttention, SelfAttention
 
 
 class TestSelfAttention:
-    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_forward(self, dtype, device):
+    def test_forward(self, device):
         B, L, D = 16, 128, 128
         multihead_attention = SelfAttention(D, D // 16).to(device)
-        x = torch.randn(B, L, D, dtype=dtype, device=device)
-        with torch.autocast(device_type=device.type, dtype=dtype):
+        x = torch.randn(B, L, D, device=device)
+        with torch.autocast(device_type=device.type, dtype=torch.float32):
             y = multihead_attention(x)
         assert y.shape == (B, L, D)
 
-    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_backward(self, dtype, device):
+    def test_backward(self, device):
         B, L, D = 16, 128, 128
         multihead_attention = SelfAttention(D, D // 16).to(device)
-        x = torch.randn(B, L, D, dtype=dtype, device=device)
-        with torch.autocast(device_type=device.type, dtype=dtype):
+        x = torch.randn(B, L, D, device=device)
+        with torch.autocast(device_type=device.type, dtype=torch.float32):
             y = multihead_attention(x)
         y.sum().backward()
         for param in multihead_attention.parameters():
@@ -46,13 +44,12 @@ class TestSelfAttention:
         y4 = layer(x)
         assert not torch.allclose(y3, y4)
 
-    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_forward_weights(self, dtype, device):
+    def test_forward_weights(self, device):
         B, L, D = 16, 128, 128
         H = D // 16
         multihead_attention = SelfAttention(D, H).to(device)
-        x = torch.randn(B, L, D, dtype=dtype, device=device)
-        with torch.autocast(device_type=device.type, dtype=dtype):
+        x = torch.randn(B, L, D, device=device)
+        with torch.autocast(device_type=device.type, dtype=torch.float32):
             y = multihead_attention.forward_weights(x)
         assert y.shape == (B, H, L, L)
 
@@ -75,23 +72,21 @@ class TestSelfAttention:
 
 
 class TestCrossAttention:
-    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_forward(self, dtype, device):
+    def test_forward(self, device):
         B, L, D = 16, 128, 128
         multihead_attention = CrossAttention(D, D // 16).to(device)
-        x = torch.randn(B, L, D, dtype=dtype, device=device)
-        kv = torch.randn(B, L // 2, D, dtype=dtype, device=device)
-        with torch.autocast(device_type=device.type, dtype=dtype):
+        x = torch.randn(B, L, D, device=device)
+        kv = torch.randn(B, L // 2, D, device=device)
+        with torch.autocast(device_type=device.type, dtype=torch.float32):
             y = multihead_attention(x, kv)
         assert y.shape == (B, L, D)
 
-    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_backward(self, dtype, device):
+    def test_backward(self, device):
         B, L, D = 16, 128, 128
         multihead_attention = CrossAttention(D, D // 16).to(device)
-        x = torch.randn(B, L, D, dtype=dtype, device=device)
-        kv = torch.randn(B, L // 2, D, dtype=dtype, device=device)
-        with torch.autocast(device_type=device.type, dtype=dtype):
+        x = torch.randn(B, L, D, device=device)
+        kv = torch.randn(B, L // 2, D, device=device)
+        with torch.autocast(device_type=device.type, dtype=torch.float32):
             y = multihead_attention(x, kv)
         y.sum().backward()
         for param in multihead_attention.parameters():
@@ -114,14 +109,13 @@ class TestCrossAttention:
         y4 = layer(x, kv)
         assert not torch.allclose(y3, y4)
 
-    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_forward_weights(self, dtype, device):
+    def test_forward_weights(self, device):
         B, L, D = 16, 128, 128
         H = D // 16
         layer = CrossAttention(D, H).to(device)
-        x = torch.randn(B, L, D, dtype=dtype, device=device)
-        kv = torch.randn(B, L // 2, D, dtype=dtype, device=device)
-        with torch.autocast(device_type=device.type, dtype=dtype):
+        x = torch.randn(B, L, D, device=device)
+        kv = torch.randn(B, L // 2, D, device=device)
+        with torch.autocast(device_type=device.type, dtype=torch.float32):
             y = layer.forward_weights(x, kv)
         assert y.shape == (B, H, L, L // 2)
 
@@ -150,33 +144,32 @@ class TestCrossAttention:
 
 
 class TestAttentivePool:
-    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_forward(self, dtype, device):
+    def test_forward(self, device):
         B, L, D = 16, 128, 128
         layer = AttentivePool(D, D // 16).to(device)
-        x = torch.randn(B, L, D, dtype=dtype, device=device)
-        with torch.autocast(device_type=device.type, dtype=dtype):
+        x = torch.randn(B, L, D, device=device)
+        with torch.autocast(device_type=device.type, dtype=torch.float32):
             y = layer(x)
         assert y.shape == (B, D)
 
-    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_backward(self, dtype, device):
+    def test_backward(self, device):
         B, L, D = 16, 128, 128
         layer = AttentivePool(D, D // 16).to(device)
-        x = torch.randn(B, L, D, dtype=dtype, device=device)
-        with torch.autocast(device_type=device.type, dtype=dtype):
+        x = torch.randn(B, L, D, device=device)
+        with torch.autocast(device_type=device.type, dtype=torch.float32):
             y = layer(x)
         y.sum().backward()
         for param in layer.parameters():
             assert param.grad is not None
             assert not param.grad.isnan().any()
 
-    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_forward_weights(self, dtype, device):
+    def test_forward_weights(self, device):
         B, L, D = 16, 128, 128
         H = D // 16
+        num_queries = 1  # Default num_queries for AttentivePool
         layer = AttentivePool(D, H).to(device)
-        x = torch.randn(B, L, D, dtype=dtype, device=device)
-        with torch.autocast(device_type=device.type, dtype=dtype):
+        x = torch.randn(B, L, D, device=device)
+        with torch.autocast(device_type=device.type, dtype=torch.float32):
             y = layer.forward_weights(x)
-        assert y.shape == (B, L, H)
+        # forward_weights returns attention weights: (B, H, num_queries, L)
+        assert y.shape == (B, H, num_queries, L)

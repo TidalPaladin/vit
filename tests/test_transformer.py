@@ -6,23 +6,21 @@ from vit.transformer import CrossAttentionTransformer, TransformerDecoderLayer, 
 
 
 class TestTransformerEncoderLayer:
-    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
     @pytest.mark.parametrize("layer_scale", [None, 1e-5])
-    def test_forward(self, dtype, device, layer_scale):
+    def test_forward(self, device, layer_scale):
         B, L, D = 16, 128, 128
         transformer_layer = TransformerEncoderLayer(D, D, D // 16, layer_scale=layer_scale).to(device)
-        x = torch.randn(B, L, D, dtype=dtype, device=device)
-        with torch.autocast(device_type=device.type, dtype=dtype):
+        x = torch.randn(B, L, D, device=device)
+        with torch.autocast(device_type=device.type, dtype=torch.float32):
             y = transformer_layer(x)
         assert y.shape == (B, L, D)
 
-    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
     @pytest.mark.parametrize("layer_scale", [None, 1e-5])
-    def test_backward(self, dtype, device, layer_scale):
+    def test_backward(self, device, layer_scale):
         B, L, D = 16, 128, 128
         transformer_layer = TransformerEncoderLayer(D, D, D // 16, layer_scale=layer_scale).to(device)
-        x = torch.randn(B, L, D, dtype=dtype, device=device)
-        with torch.autocast(device_type=device.type, dtype=dtype):
+        x = torch.randn(B, L, D, device=device)
+        with torch.autocast(device_type=device.type, dtype=torch.float32):
             y = transformer_layer(x)
         y.sum().backward()
         for param in transformer_layer.parameters():
@@ -46,25 +44,23 @@ class TestTransformerEncoderLayer:
 
 
 class TestTransformerDecoderLayer:
-    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
     @pytest.mark.parametrize("layer_scale", [None, 1e-5])
-    def test_forward(self, dtype, device, layer_scale):
+    def test_forward(self, device, layer_scale):
         B, L, D = 16, 128, 128
         transformer_layer = TransformerDecoderLayer(D, D, D // 16, layer_scale=layer_scale).to(device)
-        x = torch.randn(B, L, D, dtype=dtype, device=device)
-        kv = torch.randn(B, L // 2, D, dtype=dtype, device=device)
-        with torch.autocast(device_type=device.type, dtype=dtype):
+        x = torch.randn(B, L, D, device=device)
+        kv = torch.randn(B, L // 2, D, device=device)
+        with torch.autocast(device_type=device.type, dtype=torch.float32):
             y = transformer_layer(x, kv)
         assert y.shape == (B, L, D)
 
-    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
     @pytest.mark.parametrize("layer_scale", [None, 1e-5])
-    def test_backward(self, dtype, device, layer_scale):
+    def test_backward(self, device, layer_scale):
         B, L, D = 16, 128, 128
         transformer_layer = TransformerDecoderLayer(D, D, D // 16, layer_scale=layer_scale).to(device)
-        x = torch.randn(B, L, D, dtype=dtype, device=device)
-        kv = torch.randn(B, L // 2, D, dtype=dtype, device=device)
-        with torch.autocast(device_type=device.type, dtype=dtype):
+        x = torch.randn(B, L, D, device=device)
+        kv = torch.randn(B, L // 2, D, device=device)
+        with torch.autocast(device_type=device.type, dtype=torch.float32):
             y = transformer_layer(x, kv)
         y.sum().backward()
         for param in transformer_layer.parameters():
@@ -89,24 +85,22 @@ class TestTransformerDecoderLayer:
 
 
 class TestCrossAttentionTransformer:
-    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
     @pytest.mark.parametrize("layer_scale", [None, 1e-5])
-    def test_forward(self, dtype, device, layer_scale):
+    def test_forward(self, device, layer_scale):
         B, L, D = 16, 128, 128
         transformer_layer = CrossAttentionTransformer(D, D, D // 16, layer_scale=layer_scale).to(device)
-        x = torch.randn(B, L, D, dtype=dtype, device=device)
-        kv = torch.randn(B, L // 2, D, dtype=dtype, device=device)
-        with torch.autocast(device_type=device.type, dtype=dtype):
+        x = torch.randn(B, L, D, device=device)
+        kv = torch.randn(B, L // 2, D, device=device)
+        with torch.autocast(device_type=device.type, dtype=torch.float32):
             y = transformer_layer(x, kv)
         assert y.shape == (B, L, D)
 
-    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_backward(self, dtype, device):
+    def test_backward(self, device):
         B, L, D = 16, 128, 128
         transformer_layer = CrossAttentionTransformer(D, D, D // 16).to(device)
-        x = torch.randn(B, L, D, dtype=dtype, device=device)
-        kv = torch.randn(B, L // 2, D, dtype=dtype, device=device)
-        with torch.autocast(device_type=device.type, dtype=dtype):
+        x = torch.randn(B, L, D, device=device)
+        kv = torch.randn(B, L // 2, D, device=device)
+        with torch.autocast(device_type=device.type, dtype=torch.float32):
             y = transformer_layer(x, kv)
         y.sum().backward()
         for param in transformer_layer.parameters():

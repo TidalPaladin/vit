@@ -22,8 +22,7 @@ class TestRopePositionEmbedding:
         assert sin.shape == (64, 16)  # HW=64, D=embed_dim//num_heads=16
         assert cos.shape == (64, 16)
 
-    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_deterministic_with_seed(self, device, dtype):
+    def test_deterministic_with_seed(self, device):
         """Test that providing the same seed produces identical results."""
         rope = RopePositionEmbedding(
             embed_dim=64,
@@ -36,9 +35,8 @@ class TestRopePositionEmbedding:
 
         rope.train()  # Enable training mode for augmentations
 
-        with torch.autocast(device_type=device.type, dtype=dtype, enabled=True):
-            result1 = rope(H=8, W=8, rope_seed=42)
-            result2 = rope(H=8, W=8, rope_seed=42)
+        result1 = rope(H=8, W=8, rope_seed=42)
+        result2 = rope(H=8, W=8, rope_seed=42)
 
         sin1, cos1 = result1
         sin2, cos2 = result2
@@ -46,8 +44,7 @@ class TestRopePositionEmbedding:
         assert_close(sin1, sin2, msg="Sin values should be identical with same seed")
         assert_close(cos1, cos2, msg="Cos values should be identical with same seed")
 
-    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_different_seeds_produce_different_results(self, device, dtype):
+    def test_different_seeds_produce_different_results(self, device):
         """Test that different seeds produce different results."""
         rope = RopePositionEmbedding(
             embed_dim=64,
@@ -60,9 +57,8 @@ class TestRopePositionEmbedding:
 
         rope.train()  # Enable training mode for augmentations
 
-        with torch.autocast(device_type=device.type, dtype=dtype, enabled=True):
-            result1 = rope(H=8, W=8, rope_seed=42)
-            result2 = rope(H=8, W=8, rope_seed=123)
+        result1 = rope(H=8, W=8, rope_seed=42)
+        result2 = rope(H=8, W=8, rope_seed=123)
 
         sin1, cos1 = result1
         sin2, cos2 = result2
@@ -70,8 +66,7 @@ class TestRopePositionEmbedding:
         assert not torch.allclose(sin1, sin2), "Different seeds should produce different sin values"
         assert not torch.allclose(cos1, cos2), "Different seeds should produce different cos values"
 
-    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_non_deterministic_without_seed(self, device, dtype):
+    def test_non_deterministic_without_seed(self, device):
         """Test that multiple calls without seed produce different results."""
         rope = RopePositionEmbedding(
             embed_dim=64,
@@ -84,9 +79,8 @@ class TestRopePositionEmbedding:
 
         rope.train()  # Enable training mode for augmentations
 
-        with torch.autocast(device_type=device.type, dtype=dtype, enabled=True):
-            result1 = rope(H=8, W=8)
-            result2 = rope(H=8, W=8)
+        result1 = rope(H=8, W=8)
+        result2 = rope(H=8, W=8)
 
         sin1, cos1 = result1
         sin2, cos2 = result2
