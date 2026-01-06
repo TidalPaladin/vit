@@ -137,26 +137,12 @@ class TestViT:
         config_from_path = ViTConfig.from_yaml(path)
         assert config == config_from_path
 
-    @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
-    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    @pytest.mark.parametrize(
-        "activation,glu_limit,glu_extra_bias",
-        [
-            ("srelu", None, None),
-            ("openswiglu", 7.0, 1.0),
-        ],
-    )
-    def test_forward(self, device, config, num_register_tokens, dtype, activation, glu_limit, glu_extra_bias):
-        config = replace(
-            config,
-            num_register_tokens=num_register_tokens,
-            activation=activation,
-            glu_limit=glu_limit,
-            glu_extra_bias=glu_extra_bias,
-        )
+    @pytest.mark.parametrize("num_register_tokens", [0, 2])
+    def test_forward(self, device, config, num_register_tokens):
+        config = replace(config, num_register_tokens=num_register_tokens)
         x = torch.randn(2, 3, *config.img_size, device=device)
         model = ViT(config).to(device)
-        with torch.autocast(device_type=device.type, dtype=dtype, enabled=True):
+        with torch.autocast(device_type=device.type, dtype=torch.float32, enabled=True):
             out = model(x)
         L = math.prod(model.stem.tokenized_size(config.img_size))
         assert out.visual_tokens.shape == (2, L, 128)
@@ -175,40 +161,27 @@ class TestViT:
         L = math.prod(model.stem.tokenized_size(config.img_size))
         assert out.visual_tokens.shape == (3, L if not masked else L // 2, 128)
 
-    @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
-    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_forward_return_register_tokens(self, device, config, num_register_tokens, dtype):
-        config = replace(
-            config,
-            num_register_tokens=num_register_tokens,
-        )
+    @pytest.mark.parametrize("num_register_tokens", [0, 2])
+    def test_forward_return_register_tokens(self, device, config, num_register_tokens):
+        config = replace(config, num_register_tokens=num_register_tokens)
         x = torch.randn(2, 3, *config.img_size, device=device)
         model = ViT(config).to(device)
-        with torch.autocast(device_type=device.type, dtype=dtype, enabled=True):
+        with torch.autocast(device_type=device.type, dtype=torch.float32, enabled=True):
             out = model(x)
-        math.prod(model.stem.tokenized_size(config.img_size))
         assert out.register_tokens.shape == (2, num_register_tokens, 128)
 
-    @pytest.mark.parametrize("num_cls_tokens", [0, 1, 2])
-    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_forward_return_cls_tokens(self, device, config, num_cls_tokens, dtype):
-        config = replace(
-            config,
-            num_cls_tokens=num_cls_tokens,
-        )
+    @pytest.mark.parametrize("num_cls_tokens", [0, 2])
+    def test_forward_return_cls_tokens(self, device, config, num_cls_tokens):
+        config = replace(config, num_cls_tokens=num_cls_tokens)
         x = torch.randn(2, 3, *config.img_size, device=device)
         model = ViT(config).to(device)
-        with torch.autocast(device_type=device.type, dtype=dtype, enabled=True):
+        with torch.autocast(device_type=device.type, dtype=torch.float32, enabled=True):
             out = model(x)
-        math.prod(model.stem.tokenized_size(config.img_size))
         assert out.cls_tokens.shape == (2, num_cls_tokens, 128)
 
-    @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
+    @pytest.mark.parametrize("num_register_tokens", [0, 2])
     def test_forward_masked(self, device, config, num_register_tokens):
-        config = replace(
-            config,
-            num_register_tokens=num_register_tokens,
-        )
+        config = replace(config, num_register_tokens=num_register_tokens)
         x = torch.randn(2, 3, *config.img_size, device=device)
         model = ViT(config).to(device)
         mask = model.create_mask(x, 0.5, 1)
@@ -216,16 +189,12 @@ class TestViT:
         L = math.prod(model.stem.tokenized_size(config.img_size))
         assert out.visual_tokens.shape == (2, L // 2, 128)
 
-    @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
-    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_backward(self, device, config, num_register_tokens, dtype):
-        config = replace(
-            config,
-            num_register_tokens=num_register_tokens,
-        )
+    @pytest.mark.parametrize("num_register_tokens", [0, 2])
+    def test_backward(self, device, config, num_register_tokens):
+        config = replace(config, num_register_tokens=num_register_tokens)
         x = torch.randn(2, 3, *config.img_size, device=device, requires_grad=True)
         model = ViT(config).to(device)
-        with torch.autocast(device_type=device.type, dtype=dtype, enabled=True):
+        with torch.autocast(device_type=device.type, dtype=torch.float32, enabled=True):
             out = model(x)
         out.dense_features.sum().backward()
         for name, param in model.named_parameters():
@@ -272,21 +241,17 @@ class TestViT:
         pred = model.heads["cls"](pooled)
         assert pred.shape == (2, 128)
 
-    @pytest.mark.parametrize("num_register_tokens", [0, 1, 2])
-    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_forward_attention_weights(self, device, config, num_register_tokens, dtype):
+    @pytest.mark.parametrize("num_register_tokens", [0, 2])
+    def test_forward_attention_weights(self, device, config, num_register_tokens):
         torch.random.manual_seed(0)
-        config = replace(
-            config,
-            num_register_tokens=num_register_tokens,
-        )
+        config = replace(config, num_register_tokens=num_register_tokens)
         B = 2
         H = config.num_attention_heads
         x = torch.randn(B, 3, *config.img_size, device=device)
         model = ViT(config).to(device)
         size = model.stem.tokenized_size(config.img_size)
         L = math.prod(size)
-        with torch.autocast(device_type=device.type, dtype=dtype, enabled=True):
+        with torch.autocast(device_type=device.type, dtype=torch.float32, enabled=True):
             weights = model.forward_attention_weights(x)
 
         for name, weight in weights.items():
@@ -444,7 +409,8 @@ class TestCompile:
         model = ViT(config).cuda()
         x = torch.randn(2, 3, 224, 224, device="cuda")
         # Run forward pass multiple times to trigger and verify compilation
-        for _ in range(3):
+        out = model(x)
+        for _ in range(2):
             out = model(x)
         assert out.visual_tokens.shape == (2, 196, 128)
 

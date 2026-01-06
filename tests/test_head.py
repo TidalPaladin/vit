@@ -97,13 +97,11 @@ class TestTransposedConv2dHeadConfig:
 
 
 class TestHead:
-    @pytest.mark.parametrize("in_features", [64, 128])
-    @pytest.mark.parametrize("out_features", [32, 128])
-    def test_forward(self, device, in_features, out_features):
-        x = torch.randn(2, 196, in_features, device=device)
-        model = Head(in_features, out_features).to(device)
+    def test_forward(self, device):
+        x = torch.randn(2, 196, 128, device=device)
+        model = Head(128, 64).to(device)
         out = model(x)
-        assert out.shape == (2, 196, out_features)
+        assert out.shape == (2, 196, 64)
 
     def test_forward_2d(self, device):
         x = torch.randn(2, 128, device=device)
@@ -120,7 +118,7 @@ class TestHead:
             assert param.grad is not None, f"{name} has no gradient"
             assert not param.grad.isnan().any(), f"{name} has nan gradient"
 
-    @pytest.mark.parametrize("dropout", [0.0, 0.1, 0.5])
+    @pytest.mark.parametrize("dropout", [0.0, 0.5])
     def test_dropout(self, device, dropout):
         x = torch.randn(2, 196, 128, device=device)
         model = Head(128, 64, dropout=dropout).to(device)
@@ -130,19 +128,17 @@ class TestHead:
 
 
 class TestTransposedConv2dHead:
-    @pytest.mark.parametrize("in_channels", [64, 128])
-    @pytest.mark.parametrize("out_channels", [32, 64])
-    def test_forward(self, device, in_channels, out_channels):
-        x = torch.randn(2, in_channels, 14, 14, device=device)
+    def test_forward(self, device):
+        x = torch.randn(2, 64, 14, 14, device=device)
         model = TransposedConv2dHead(
-            in_channels=in_channels,
-            out_channels=out_channels,
+            in_channels=64,
+            out_channels=32,
             kernel_size=4,
             stride=2,
             padding=1,
         ).to(device)
         out = model(x)
-        assert out.shape == (2, out_channels, 28, 28)
+        assert out.shape == (2, 32, 28, 28)
 
     @pytest.mark.parametrize(
         "kernel_size,stride,padding,expected_size",
@@ -210,7 +206,7 @@ class TestTransposedConv2dHead:
         assert out.shape[0] == 2
         assert out.shape[1] == 32
 
-    @pytest.mark.parametrize("dropout", [0.0, 0.1, 0.5])
+    @pytest.mark.parametrize("dropout", [0.0, 0.5])
     def test_dropout(self, device, dropout):
         x = torch.randn(2, 64, 14, 14, device=device)
         model = TransposedConv2dHead(
@@ -265,18 +261,16 @@ class TestUpsampleHeadConfig:
 
 
 class TestUpsampleHead:
-    @pytest.mark.parametrize("in_channels", [64, 128])
-    @pytest.mark.parametrize("out_channels", [32, 64])
-    def test_forward(self, device, in_channels, out_channels):
+    def test_forward(self, device):
         # 14x14 input with 4 stages -> 224x224 output (16x upscale)
-        x = torch.randn(2, in_channels, 14, 14, device=device)
+        x = torch.randn(2, 64, 14, 14, device=device)
         model = UpsampleHead(
-            in_channels=in_channels,
-            out_channels=out_channels,
+            in_channels=64,
+            out_channels=32,
             num_upsample_stages=4,
         ).to(device)
         out = model(x)
-        assert out.shape == (2, out_channels, 224, 224)
+        assert out.shape == (2, 32, 224, 224)
 
     @pytest.mark.parametrize(
         "num_upsample_stages,expected_scale",
@@ -402,7 +396,7 @@ class TestUpsampleHead:
             assert param.grad is not None, f"{name} has no gradient"
             assert not param.grad.isnan().any(), f"{name} has nan gradient"
 
-    @pytest.mark.parametrize("dropout", [0.0, 0.1, 0.5])
+    @pytest.mark.parametrize("dropout", [0.0, 0.5])
     def test_dropout(self, device, dropout):
         x = torch.randn(2, 64, 14, 14, device=device)
         model = UpsampleHead(

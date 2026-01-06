@@ -17,11 +17,9 @@ make check             # Full check: style + quality + types + tests
 make style             # Auto-format code (autoflake, isort, autopep8, black)
 make quality           # Check formatting without changes
 make types             # Static type checking with pyright
-make test              # Run unit tests with coverage (NOTE: full suite can be slow)
+make test              # Run unit tests with coverage (~370 tests, ~30s)
 make test-<pattern>    # Run tests matching pattern (e.g., make test-attention) - PREFER THIS
 make test-pdb-<pattern> # Debug tests with PDB
-
-**Testing note**: The full test suite can take a long time to run. Prefer targeting specific tests with `make test-<pattern>` when working on specific functionality.
 
 # Benchmarking
 uv sync --group benchmarking
