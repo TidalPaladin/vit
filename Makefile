@@ -142,6 +142,10 @@ endif
 	@for lib in $(TORCH_PATH)/lib/*.so*; do \
 		cp -L "$$lib" $(RUST_INSTALL_DIR)/lib/ 2>/dev/null || true; \
 	done
+	@# Copy NVIDIA CUDA libraries from pip packages (cuda_runtime, cublas, etc.)
+	@for lib in $(TORCH_PATH)/../nvidia/*/lib/*.so*; do \
+		cp -L "$$lib" $(RUST_INSTALL_DIR)/lib/ 2>/dev/null || true; \
+	done
 	@# Calculate size
 	@echo ""
 	@echo "Portable distribution created:"
