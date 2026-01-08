@@ -62,6 +62,12 @@ Key modules in `vit/`:
 
 Rust workspace for ViT model validation, summarization, and inference. Uses AOTInductor for compiled model inference.
 
+**Why a custom bridge instead of tch-rs?**
+
+The bridge (`rust/bridge/`) exists specifically to load AOTInductor-compiled models (`.so` shared libraries), which tch-rs does not support. The bridge wraps `torch::inductor::AOTIModelContainerRunner` - a specialized runtime for executing models compiled via `torch.export` + AOTInductor. tch-rs provides general PyTorch bindings but lacks AOTInductor model loading, `.so` artifact support, and the specialized inference timing/memory tracking APIs we need.
+
+<!-- TODO: Check if tch-rs adds AOTInductor support in the future (https://github.com/LaurentMazare/tch-rs) -->
+
 ```bash
 # Build without inference (no external dependencies)
 make rust-release             # Build release binary

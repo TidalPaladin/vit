@@ -82,6 +82,31 @@ Results are saved as CSV files and visualized with publication-quality plots (PN
 
 See [`benchmark/README.md`](benchmark/README.md) for detailed documentation.
 
+## Rust CLI
+
+A Rust CLI is available for config validation, model summarization, and high-performance inference using AOTInductor-compiled models.
+
+```bash
+# Build without inference (no external dependencies)
+make rust-release
+
+# Build with inference support (requires libtorch)
+make libtorch                 # Download libtorch with CUDA support
+export LIBTORCH=$(pwd)/libtorch
+make rust-ffi                 # Build with FFI/inference support
+
+# CLI commands
+./rust/target/release/vit validate config.yaml
+./rust/target/release/vit summarize config.yaml
+./rust/target/release/vit infer --model model.so --config config.yaml --shape 1,3,224,224
+```
+
+**Why a custom FFI bridge instead of tch-rs?**
+
+The Rust CLI uses a custom C++/FFI bridge rather than [tch-rs](https://github.com/LaurentMazare/tch-rs) because it needs to load AOTInductor-compiled models (`.so` shared libraries). The bridge wraps PyTorch's `AOTIModelContainerRunner` - a specialized runtime for models compiled via `torch.export` + AOTInductor. tch-rs provides general PyTorch bindings but does not support loading AOTInductor artifacts or the specialized memory/latency tracking APIs needed for inference benchmarking.
+
+See [`rust/README.md`](rust/README.md) for detailed documentation.
+
 ## References
 * [An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale](https://arxiv.org/abs/2010.11929)
 
