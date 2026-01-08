@@ -73,11 +73,7 @@ The bridge (`rust/bridge/`) exists specifically to load AOTInductor-compiled mod
 make rust-release             # Build release binary
 make rust-test                # Run Rust tests
 
-# Build with inference support (requires libtorch)
-make libtorch                 # Download libtorch with CUDA support
-make libtorch-cpu             # Download CPU-only libtorch
-make libtorch-rocm            # Download libtorch with ROCm support (AMD GPUs)
-export LIBTORCH=$(pwd)/libtorch
+# Build with inference support (auto-detects PyTorch from virtualenv)
 make rust-ffi                 # Build with FFI/inference support (CUDA)
 make rust-ffi-rocm            # Build with FFI/inference support (ROCm)
 
@@ -95,13 +91,14 @@ make export-model CONFIG=config.yaml OUTPUT=model.so DEVICE=cpu
 
 **Crates:**
 - `vit-core` - Config parsing and model summary (mirrors Python `ViTConfig`)
-- `vit-ffi` - FFI bindings to C++ AOTInductor runtime (optional, requires libtorch)
+- `vit-ffi` - FFI bindings to C++ AOTInductor runtime (auto-detects PyTorch from virtualenv)
 - `vit-cli` - CLI binary with validate/summarize/infer commands
 
 **Build Notes:**
-- CUDA builds require CUDA toolkit with nvcc in PATH and GCC ≤13 (CUDA 12.x limitation)
+- FFI builds auto-detect PyTorch from the uv-managed virtualenv (no manual libtorch download needed)
+- CUDA builds require matching CUDA toolkit version (e.g., PyTorch cu128 requires CUDA 12.8+)
+- CUDA builds require GCC ≤13 (auto-detected if `/usr/bin/gcc-13` exists)
 - ROCm builds require ROCm toolkit (Linux only, ROCm 5.7+)
-- Use CPU-only libtorch if you encounter compiler compatibility issues
 - The Makefile automatically sets `LIBTORCH_CXX11_ABI=1` for correct C++ ABI compatibility
 - PyTorch uses `cuda` device strings for both NVIDIA and AMD GPUs
 

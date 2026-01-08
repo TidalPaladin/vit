@@ -1,5 +1,5 @@
 .PHONY: clean clean-env check quality style tag-version test env upload upload-test
-.PHONY: rust rust-release rust-ffi rust-ffi-rocm rust-install rust-test rust-test-ffi rust-clean rust-check libtorch libtorch-rocm
+.PHONY: rust rust-release rust-ffi rust-ffi-rocm rust-install rust-test rust-test-ffi rust-clean rust-check
 
 PROJECT=vit
 QUALITY_DIRS=$(PROJECT) tests benchmark scripts
@@ -90,30 +90,32 @@ rust: ## build Rust CLI (debug)
 rust-release: ## build Rust CLI (release)
 	cd rust && $(CARGO) build --release
 
-rust-ffi: ## build Rust CLI with FFI/inference support (requires LIBTORCH)
-ifndef LIBTORCH
-	$(error LIBTORCH is not set. Set it to your libtorch installation path)
+TORCH_PATH := $(shell uv run python -c "import torch; print(torch.__path__[0])" 2>/dev/null)
+
+rust-ffi: ## build Rust CLI with FFI/inference support (auto-detects PyTorch from virtualenv)
+ifndef TORCH_PATH
+	$(error PyTorch not found. Run 'make init' first or set LIBTORCH manually)
 endif
-	cd rust && LIBTORCH="$(LIBTORCH)" LIBTORCH_CXX11_ABI=1 $(CARGO) build --release --features ffi
+	cd rust && PATH="/usr/local/cuda/bin:$(PATH)" LIBTORCH="$(TORCH_PATH)" LIBTORCH_CXX11_ABI=1 $(CARGO) build --release --features ffi
 	@# Copy libraries next to binary for RPATH to work (symlinks for dev)
 	@mkdir -p rust/target/release/lib
 	@find rust/target/release/build -name "libvit_bridge.so" -exec cp {} rust/target/release/lib/ \;
-	@for lib in $(LIBTORCH)/lib/*.so*; do ln -sf "$$lib" rust/target/release/lib/; done
+	@for lib in $(TORCH_PATH)/lib/*.so*; do ln -sf "$$lib" rust/target/release/lib/; done
 	@echo ""
 	@echo "Build complete! The CLI is ready to use:"
 	@echo "  ./rust/target/release/vit --help"
 	@echo ""
 	@echo "For a portable distribution, run: make rust-install"
 
-rust-ffi-rocm: ## build Rust CLI with FFI/inference support for ROCm (requires LIBTORCH with ROCm)
-ifndef LIBTORCH
-	$(error LIBTORCH is not set. Set it to your libtorch installation path)
+rust-ffi-rocm: ## build Rust CLI with FFI/inference support for ROCm (auto-detects PyTorch from virtualenv)
+ifndef TORCH_PATH
+	$(error PyTorch not found. Run 'make init' first or set LIBTORCH manually)
 endif
-	cd rust && LIBTORCH="$(LIBTORCH)" LIBTORCH_CXX11_ABI=1 $(CARGO) build --release --features "ffi,vit-ffi/rocm"
+	cd rust && PATH="/usr/local/cuda/bin:$(PATH)" LIBTORCH="$(TORCH_PATH)" LIBTORCH_CXX11_ABI=1 $(CARGO) build --release --features "ffi,vit-ffi/rocm"
 	@# Copy libraries next to binary for RPATH to work (symlinks for dev)
 	@mkdir -p rust/target/release/lib
 	@find rust/target/release/build -name "libvit_bridge.so" -exec cp {} rust/target/release/lib/ \;
-	@for lib in $(LIBTORCH)/lib/*.so*; do ln -sf "$$lib" rust/target/release/lib/; done
+	@for lib in $(TORCH_PATH)/lib/*.so*; do ln -sf "$$lib" rust/target/release/lib/; done
 	@echo ""
 	@echo "Build complete! The CLI is ready to use with ROCm:"
 	@echo "  ./rust/target/release/vit --help"
@@ -123,6 +125,9 @@ endif
 RUST_INSTALL_DIR ?= dist/vit
 
 rust-install: ## create portable distribution (set RUST_INSTALL_DIR to customize)
+ifndef TORCH_PATH
+	$(error PyTorch not found. Run 'make init' first)
+endif
 	@if [ ! -f rust/target/release/vit ]; then \
 		echo "Error: Build first with 'make rust-ffi'"; exit 1; \
 	fi
@@ -133,8 +138,8 @@ rust-install: ## create portable distribution (set RUST_INSTALL_DIR to customize
 	@cp rust/target/release/vit $(RUST_INSTALL_DIR)/
 	@# Copy bridge library
 	@find rust/target/release/build -name "libvit_bridge.so" -exec cp {} $(RUST_INSTALL_DIR)/lib/ \;
-	@# Copy libtorch libraries (resolve symlinks, only .so files)
-	@for lib in $(LIBTORCH)/lib/*.so*; do \
+	@# Copy PyTorch libraries (resolve symlinks, only .so files)
+	@for lib in $(TORCH_PATH)/lib/*.so*; do \
 		cp -L "$$lib" $(RUST_INSTALL_DIR)/lib/ 2>/dev/null || true; \
 	done
 	@# Calculate size
@@ -150,11 +155,11 @@ rust-install: ## create portable distribution (set RUST_INSTALL_DIR to customize
 rust-test: ## run Rust tests (vit-core only; use rust-test-ffi for FFI tests)
 	cd rust && $(CARGO) test --package vit-core
 
-rust-test-ffi: ## run Rust FFI tests (requires LIBTORCH)
-ifndef LIBTORCH
-	$(error LIBTORCH is not set. Set it to your libtorch installation path)
+rust-test-ffi: ## run Rust FFI tests (auto-detects PyTorch from virtualenv)
+ifndef TORCH_PATH
+	$(error PyTorch not found. Run 'make init' first or set LIBTORCH manually)
 endif
-	cd rust && LIBTORCH="$(LIBTORCH)" LIBTORCH_CXX11_ABI=1 $(CARGO) test --package vit-ffi
+	cd rust && PATH="/usr/local/cuda/bin:$(PATH)" LIBTORCH="$(TORCH_PATH)" LIBTORCH_CXX11_ABI=1 $(CARGO) test --package vit-ffi
 
 rust-check: ## run Rust build and tests (vit-core only)
 	cd rust && $(CARGO) build --package vit-core && $(CARGO) test --package vit-core
@@ -167,29 +172,6 @@ rust-fmt: ## format Rust code
 
 rust-clippy: ## run Rust linter
 	cd rust && $(CARGO) clippy -- -D warnings
-
-# ============================================================================
-# Libtorch / FFI setup
-# ============================================================================
-
-LIBTORCH_DIR ?= $(CURDIR)/libtorch
-CUDA_VERSION ?= 12.8
-ROCM_VERSION ?= 6.2
-
-libtorch: ## download libtorch with CUDA support (set CUDA_VERSION=11.8|12.1|12.4|12.8|13.0|cpu)
-	./scripts/download_libtorch.sh --cuda $(CUDA_VERSION) --output $(LIBTORCH_DIR)
-	@echo ""
-	@echo "Now run: export LIBTORCH=$(LIBTORCH_DIR)"
-	@echo "Then:    make rust-ffi"
-
-libtorch-cpu: ## download libtorch CPU-only version
-	./scripts/download_libtorch.sh --cuda cpu --output $(LIBTORCH_DIR)
-
-libtorch-rocm: ## download libtorch with ROCm support (set ROCM_VERSION=5.7|6.0|6.1|6.2)
-	./scripts/download_libtorch.sh --rocm $(ROCM_VERSION) --output $(LIBTORCH_DIR)
-	@echo ""
-	@echo "Now run: export LIBTORCH=$(LIBTORCH_DIR)"
-	@echo "Then:    make rust-ffi-rocm"
 
 # ============================================================================
 # Export targets

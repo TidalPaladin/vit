@@ -4,13 +4,35 @@
 //!
 //! # Environment Variables
 //!
-//! - `LIBTORCH`: Path to libtorch installation (required)
+//! - `LIBTORCH`: Path to libtorch installation (optional, auto-detected from Python if not set)
 //! - `LIBTORCH_CXX11_ABI`: Set to "1" to use the CXX11 ABI (default: "0")
 //! - `VIT_BRIDGE_SKIP_BUILD`: Set to "1" to skip building (for development)
 //! - `ROCM_PATH`: Path to ROCm installation (optional, for ROCm builds)
 
 use std::env;
 use std::path::PathBuf;
+use std::process::Command;
+
+/// Detect libtorch from the current Python environment.
+///
+/// This queries `python -c "import torch; print(torch.__path__[0])"` to find
+/// the torch installation in site-packages.
+fn detect_libtorch_from_python() -> Option<PathBuf> {
+    let output = Command::new("python")
+        .args(["-c", "import torch; print(torch.__path__[0])"])
+        .output()
+        .ok()?;
+
+    if output.status.success() {
+        let path = String::from_utf8(output.stdout).ok()?.trim().to_string();
+        let torch_path = PathBuf::from(&path);
+        // Verify it has the cmake config we need
+        if torch_path.join("share/cmake/Torch/TorchConfig.cmake").exists() {
+            return Some(torch_path);
+        }
+    }
+    None
+}
 
 fn main() {
     // Check if we should skip the build
@@ -19,20 +41,22 @@ fn main() {
         return;
     }
 
-    // Get libtorch path
-    let libtorch = match env::var("LIBTORCH") {
-        Ok(path) => PathBuf::from(path),
-        Err(_) => {
-            println!("cargo:warning=LIBTORCH environment variable not set");
-            println!("cargo:warning=Set LIBTORCH to your libtorch installation path");
-            println!("cargo:warning=Example: export LIBTORCH=/path/to/libtorch");
-            println!("cargo:warning=Skipping C++ bridge build");
-            return;
-        }
+    // Get libtorch path: try LIBTORCH env var first, then auto-detect from Python
+    let libtorch = if let Ok(path) = env::var("LIBTORCH") {
+        PathBuf::from(path)
+    } else if let Some(path) = detect_libtorch_from_python() {
+        println!("cargo:warning=Auto-detected PyTorch from Python: {}", path.display());
+        path
+    } else {
+        println!("cargo:warning=Could not find PyTorch installation");
+        println!("cargo:warning=Ensure PyTorch is installed: pip install torch");
+        println!("cargo:warning=Or set LIBTORCH environment variable manually");
+        println!("cargo:warning=Skipping C++ bridge build");
+        return;
     };
 
     if !libtorch.exists() {
-        println!("cargo:warning=LIBTORCH path does not exist: {}", libtorch.display());
+        println!("cargo:warning=Libtorch path does not exist: {}", libtorch.display());
         println!("cargo:warning=Skipping C++ bridge build");
         return;
     }
@@ -84,9 +108,10 @@ fn main() {
 
     // Check if libtorch has CUDA support by looking for CUDA cmake files
     let libtorch_has_cuda = libtorch.join("share/cmake/Caffe2/public/cuda.cmake").exists();
-    // Check if libtorch has HIP/ROCm support
-    let libtorch_has_hip = libtorch.join("share/cmake/Caffe2/public/LoadHIP.cmake").exists()
-        || libtorch.join("share/cmake/Caffe2/Caffe2HIPConfig.cmake").exists();
+    // Check if libtorch has HIP/ROCm support - use actual library presence, not just cmake files
+    // (PyTorch CUDA wheels include LoadHIP.cmake but not the actual ROCm libraries)
+    let libtorch_has_hip = libtorch.join("lib/libtorch_hip.so").exists()
+        || cfg!(feature = "rocm");
 
     // Set CUDA architectures if libtorch has CUDA support (not ROCm)
     if libtorch_has_cuda && !libtorch_has_hip && std::path::Path::new("/usr/local/cuda").exists() {
