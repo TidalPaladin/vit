@@ -1,5 +1,5 @@
 .PHONY: clean clean-env check quality style tag-version test env upload upload-test
-.PHONY: rust rust-release rust-ffi rust-ffi-rocm rust-ffi-docker rust-install rust-test rust-test-ffi rust-clean rust-check
+.PHONY: rust rust-release rust-ffi rust-ffi-rocm rust-ffi-docker rust-ffi-docker-rocm rust-install rust-test rust-test-ffi rust-clean rust-check
 
 PROJECT=vit
 QUALITY_DIRS=$(PROJECT) tests benchmark scripts
@@ -146,6 +146,13 @@ endif
 	@for lib in $(TORCH_PATH)/../nvidia/*/lib/*.so*; do \
 		cp -L "$$lib" $(RUST_INSTALL_DIR)/lib/ 2>/dev/null || true; \
 	done
+	@# Copy ROCm libraries if this is a ROCm/HIP build
+	@if [ -f $(TORCH_PATH)/lib/libtorch_hip.so ]; then \
+		echo "Detected ROCm/HIP build, copying ROCm libraries..."; \
+		for lib in /opt/rocm/lib/*.so*; do \
+			cp -L "$$lib" $(RUST_INSTALL_DIR)/lib/ 2>/dev/null || true; \
+		done; \
+	fi
 	@# Calculate size
 	@echo ""
 	@echo "Portable distribution created:"
@@ -187,6 +194,14 @@ rust-ffi-docker: ## build rust-ffi in Docker (for systems with CUDA/glibc incomp
 	docker run --rm -v $(CURDIR)/dist:/dist vit-rust-ffi
 	@echo ""
 	@echo "Build complete! Portable distribution at: dist/vit/"
+	@echo "Run: dist/vit/vit --help"
+
+rust-ffi-docker-rocm: ## build rust-ffi in Docker with ROCm support
+	docker build -f docker/Dockerfile.rust-ffi-rocm -t vit-rust-ffi-rocm .
+	mkdir -p dist
+	docker run --rm -v $(CURDIR)/dist:/dist vit-rust-ffi-rocm
+	@echo ""
+	@echo "Build complete! Portable ROCm distribution at: dist/vit/"
 	@echo "Run: dist/vit/vit --help"
 
 # ============================================================================

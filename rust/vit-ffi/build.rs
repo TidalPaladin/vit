@@ -152,6 +152,9 @@ fn main() {
         println!("cargo:rustc-link-lib=dylib=c10_hip");
     }
 
+    // Link C++ standard library (needed for libtorch dependencies)
+    println!("cargo:rustc-link-lib=dylib=stdc++");
+
     // Set rpath for runtime library loading
     // Use $ORIGIN for portable binary (looks in ./lib relative to binary)
     println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/lib");

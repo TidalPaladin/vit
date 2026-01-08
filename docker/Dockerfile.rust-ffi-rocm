@@ -1,0 +1,57 @@
+# Dockerfile for building vit rust-ffi with ROCm/HIP support
+# Uses official ROCm PyTorch image with PyTorch pre-installed
+#
+# Usage:
+#   docker build -f docker/Dockerfile.rust-ffi-rocm -t vit-rust-ffi-rocm .
+#   docker run --rm -v $(pwd)/dist:/dist vit-rust-ffi-rocm
+#
+# This creates dist/vit/ with the portable binary and libraries.
+
+FROM rocm/pytorch:rocm6.4_ubuntu24.04_py3.12_pytorch_release_2.6.0
+
+# Install build dependencies (PyTorch and ROCm libs already present)
+RUN apt-get update && apt-get install -y \
+    curl \
+    build-essential \
+    cmake \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Install uv
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:${PATH}"
+
+WORKDIR /build
+
+# Copy project files
+COPY pyproject.toml uv.lock README.md ./
+COPY vit/ ./vit/
+COPY rust/ ./rust/
+COPY Makefile ./
+
+# Install Python dependencies
+# Note: We install PyTorch in uv venv for rust-ffi build compatibility (needs TORCH_PATH)
+# The base image's conda PyTorch ensures ROCm libs are compatible
+ENV SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0
+# Increase timeout for large PyTorch downloads (ROCm wheel is ~4.2GB)
+ENV UV_HTTP_TIMEOUT=600
+RUN uv sync --frozen --no-dev
+RUN uv pip install --reinstall torch --index-url https://download.pytorch.org/whl/rocm6.4
+
+# Build rust-ffi with ROCm feature
+ENV ROCM_PATH=/opt/rocm
+ENV LIBTORCH_CXX11_ABI=1
+# Set ROCm GPU architectures for portable builds (CDNA + RDNA2/3)
+ENV PYTORCH_ROCM_ARCH="gfx906;gfx908;gfx90a;gfx942;gfx1030;gfx1100"
+RUN uv run python -c "import torch; print(f'PyTorch: {torch.__version__}')"
+RUN make rust-ffi-rocm
+
+# Create portable distribution
+RUN make rust-install RUST_INSTALL_DIR=/build/dist/vit
+
+# Copy to output volume on run
+CMD cp -r /build/dist/vit /dist/ && echo "Build artifacts copied to /dist/vit/"

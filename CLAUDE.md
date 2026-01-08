@@ -77,6 +77,7 @@ make rust-test                # Run Rust tests
 make rust-ffi                 # Build with FFI/inference support (CUDA)
 make rust-ffi-rocm            # Build with FFI/inference support (ROCm)
 make rust-ffi-docker          # Build in Docker (for CUDA/glibc issues)
+make rust-ffi-docker-rocm     # Build in Docker with ROCm support
 
 # Create portable distribution (self-contained, ~5.7GB with CUDA libs)
 make rust-install             # Creates dist/vit/ with all dependencies bundled
@@ -109,14 +110,16 @@ make export-model CONFIG=config.yaml OUTPUT=model.so DEVICE=cpu
 
 **Docker Build:**
 - `make rust-ffi-docker` builds in a CUDA 12.8 container and extracts artifacts to `dist/vit/`
+- `make rust-ffi-docker-rocm` builds in a ROCm 6.4 container for AMD GPU support
 - The Docker build context uses an allowlist `.dockerignore` (~500KB context vs 7GB without)
 - Container sets `SETUPTOOLS_SCM_PRETEND_VERSION` since `.git` is excluded from context
 
 **Portable Distribution:**
 - `make rust-install` creates a self-contained distribution in `dist/vit/`
-- Includes PyTorch libs and NVIDIA CUDA libraries (~5.7GB total)
+- Includes PyTorch libs and GPU libraries (NVIDIA CUDA ~5.7GB, ROCm ~8-10GB)
+- Auto-detects ROCm/HIP builds and bundles appropriate libraries
 - Run with: `LD_LIBRARY_PATH=dist/vit/lib dist/vit/vit --help`
-- No system CUDA installation required when using the portable distribution
+- No system CUDA/ROCm installation required when using the portable distribution
 
 ## AOT Export Gotchas
 
