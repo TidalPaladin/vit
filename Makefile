@@ -1,5 +1,5 @@
 .PHONY: clean clean-env check quality style tag-version test env upload upload-test
-.PHONY: rust rust-release rust-ffi rust-ffi-rocm rust-install rust-test rust-clean rust-check libtorch libtorch-rocm
+.PHONY: rust rust-release rust-ffi rust-ffi-rocm rust-install rust-test rust-test-ffi rust-clean rust-check libtorch libtorch-rocm
 
 PROJECT=vit
 QUALITY_DIRS=$(PROJECT) tests benchmark scripts
@@ -147,11 +147,17 @@ rust-install: ## create portable distribution (set RUST_INSTALL_DIR to customize
 	@echo "To use: $(RUST_INSTALL_DIR)/vit --help"
 	@echo "This directory can be moved anywhere or packaged as a tarball."
 
-rust-test: ## run Rust tests
-	cd rust && $(CARGO) test
+rust-test: ## run Rust tests (vit-core only; use rust-test-ffi for FFI tests)
+	cd rust && $(CARGO) test --package vit-core
 
-rust-check: ## run Rust build and tests
-	cd rust && $(CARGO) build && $(CARGO) test
+rust-test-ffi: ## run Rust FFI tests (requires LIBTORCH)
+ifndef LIBTORCH
+	$(error LIBTORCH is not set. Set it to your libtorch installation path)
+endif
+	cd rust && LIBTORCH="$(LIBTORCH)" LIBTORCH_CXX11_ABI=1 $(CARGO) test --package vit-ffi
+
+rust-check: ## run Rust build and tests (vit-core only)
+	cd rust && $(CARGO) build --package vit-core && $(CARGO) test --package vit-core
 
 rust-clean: ## clean Rust build artifacts
 	cd rust && $(CARGO) clean

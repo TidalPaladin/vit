@@ -407,6 +407,8 @@ impl Drop for Model {
 mod tests {
     use super::*;
 
+    // ==================== Device Parsing Tests ====================
+
     #[test]
     fn test_parse_device_cpu() {
         assert_eq!(Device::parse("cpu").unwrap(), Device::Cpu);
@@ -432,5 +434,257 @@ mod tests {
         assert_eq!(Device::Cpu.to_string(), "cpu");
         assert_eq!(Device::Cuda(0).to_string(), "cuda:0");
         assert_eq!(Device::Cuda(1).to_string(), "cuda:1");
+    }
+
+    #[test]
+    fn test_device_parse_with_whitespace() {
+        assert_eq!(Device::parse("  cpu  ").unwrap(), Device::Cpu);
+        assert_eq!(Device::parse("\tcuda:0\n").unwrap(), Device::Cuda(0));
+    }
+
+    #[test]
+    fn test_device_parse_cuda_high_index() {
+        // High indices should parse (validation happens at use time)
+        assert_eq!(Device::parse("cuda:99").unwrap(), Device::Cuda(99));
+        assert_eq!(Device::parse("cuda:255").unwrap(), Device::Cuda(255));
+    }
+
+    #[test]
+    fn test_device_parse_invalid_formats() {
+        // Empty string
+        assert!(Device::parse("").is_err());
+        // Unknown device type
+        assert!(Device::parse("tpu").is_err());
+        assert!(Device::parse("mps").is_err());
+        // Malformed cuda
+        assert!(Device::parse("cuda:").is_err());
+        assert!(Device::parse("cuda::0").is_err());
+        assert!(Device::parse("cuda:-1").is_err());
+        assert!(Device::parse("cudaa").is_err());
+    }
+
+    #[test]
+    fn test_device_display_roundtrip() {
+        // Parse -> Display -> Parse should be idempotent
+        let devices = vec![Device::Cpu, Device::Cuda(0), Device::Cuda(7)];
+        for device in devices {
+            let s = device.to_string();
+            let parsed = Device::parse(&s).unwrap();
+            assert_eq!(device, parsed);
+        }
+    }
+
+    #[test]
+    fn test_device_equality() {
+        assert_eq!(Device::Cpu, Device::Cpu);
+        assert_eq!(Device::Cuda(0), Device::Cuda(0));
+        assert_ne!(Device::Cpu, Device::Cuda(0));
+        assert_ne!(Device::Cuda(0), Device::Cuda(1));
+    }
+
+    #[test]
+    fn test_device_clone() {
+        let d1 = Device::Cuda(5);
+        let d2 = d1;
+        assert_eq!(d1, d2);
+    }
+
+    #[test]
+    fn test_device_debug() {
+        let d = Device::Cuda(3);
+        let debug_str = format!("{:?}", d);
+        assert!(debug_str.contains("Cuda"));
+        assert!(debug_str.contains("3"));
+    }
+
+    // ==================== Error Type Tests ====================
+
+    #[test]
+    fn test_error_display_not_available() {
+        let err = Error::NotAvailable("bridge not linked".to_string());
+        let msg = format!("{}", err);
+        assert!(msg.contains("not available"));
+        assert!(msg.contains("bridge not linked"));
+    }
+
+    #[test]
+    fn test_error_display_load_model() {
+        let err = Error::LoadModel("file not found".to_string());
+        let msg = format!("{}", err);
+        assert!(msg.contains("load model"));
+        assert!(msg.contains("file not found"));
+    }
+
+    #[test]
+    fn test_error_display_inference() {
+        let err = Error::Inference("out of memory".to_string());
+        let msg = format!("{}", err);
+        assert!(msg.contains("inference"));
+        assert!(msg.contains("out of memory"));
+    }
+
+    #[test]
+    fn test_error_display_invalid_device() {
+        let err = Error::InvalidDevice("xyz".to_string());
+        let msg = format!("{}", err);
+        assert!(msg.contains("invalid device"));
+        assert!(msg.contains("xyz"));
+    }
+
+    #[test]
+    fn test_error_display_null_pointer() {
+        let err = Error::NullPointer("tensor creation failed".to_string());
+        let msg = format!("{}", err);
+        assert!(msg.contains("null pointer"));
+        assert!(msg.contains("tensor creation failed"));
+    }
+
+    #[test]
+    fn test_error_display_invalid_path() {
+        let err = Error::InvalidPath("/bad/path".to_string());
+        let msg = format!("{}", err);
+        assert!(msg.contains("invalid path"));
+        assert!(msg.contains("/bad/path"));
+    }
+
+    #[test]
+    fn test_error_debug_impl() {
+        let err = Error::LoadModel("test error".to_string());
+        let debug_str = format!("{:?}", err);
+        assert!(debug_str.contains("LoadModel"));
+        assert!(debug_str.contains("test error"));
+    }
+
+    // ==================== Conditional FFI Tests ====================
+    // These tests skip gracefully when FFI is not available
+
+    fn require_ffi() -> bool {
+        if !is_available() {
+            eprintln!("Skipping: FFI bridge not available (LIBTORCH not set)");
+            false
+        } else {
+            true
+        }
+    }
+
+    #[test]
+    fn test_cuda_available_returns_bool() {
+        if !require_ffi() {
+            return;
+        }
+        // Should not panic, returns a boolean
+        let _ = cuda_available();
+    }
+
+    #[test]
+    fn test_cuda_device_count_non_negative() {
+        if !require_ffi() {
+            return;
+        }
+        let count = cuda_device_count();
+        // Count is always >= 0 (it's usize)
+        assert!(count < 1000); // Sanity check
+    }
+
+    #[test]
+    fn test_tensor_create_cpu() {
+        if !require_ffi() {
+            return;
+        }
+        let data = vec![1.0f32, 2.0, 3.0, 4.0];
+        let shape = vec![2i64, 2];
+        let tensor = Tensor::from_slice(&data, &shape, Device::Cpu);
+        assert!(tensor.is_ok(), "Failed to create tensor: {:?}", tensor.err());
+        let t = tensor.unwrap();
+        assert_eq!(t.shape(), vec![2, 2]);
+        assert_eq!(t.ndim(), 2);
+        assert_eq!(t.numel(), 4);
+    }
+
+    #[test]
+    fn test_tensor_randn_cpu() {
+        if !require_ffi() {
+            return;
+        }
+        let shape = vec![2i64, 3, 4];
+        let tensor = Tensor::randn(&shape, Device::Cpu);
+        assert!(tensor.is_ok(), "Failed to create randn tensor: {:?}", tensor.err());
+        let t = tensor.unwrap();
+        assert_eq!(t.shape(), shape);
+        assert_eq!(t.ndim(), 3);
+        assert_eq!(t.numel(), 24);
+    }
+
+    #[test]
+    fn test_tensor_to_vec_roundtrip() {
+        if !require_ffi() {
+            return;
+        }
+        let data = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let shape = vec![2i64, 3];
+        let tensor = Tensor::from_slice(&data, &shape, Device::Cpu).unwrap();
+        let extracted = tensor.to_vec().unwrap();
+        assert_eq!(extracted, data);
+    }
+
+    #[test]
+    fn test_tensor_scalar() {
+        if !require_ffi() {
+            return;
+        }
+        let data = vec![42.0f32];
+        let shape = vec![1i64];
+        let tensor = Tensor::from_slice(&data, &shape, Device::Cpu);
+        assert!(tensor.is_ok());
+        let t = tensor.unwrap();
+        assert_eq!(t.numel(), 1);
+    }
+
+    #[test]
+    fn test_tensor_1d() {
+        if !require_ffi() {
+            return;
+        }
+        let data: Vec<f32> = (0..100).map(|i| i as f32).collect();
+        let shape = vec![100i64];
+        let tensor = Tensor::from_slice(&data, &shape, Device::Cpu).unwrap();
+        assert_eq!(tensor.shape(), vec![100]);
+        assert_eq!(tensor.ndim(), 1);
+        assert_eq!(tensor.numel(), 100);
+        let extracted = tensor.to_vec().unwrap();
+        assert_eq!(extracted, data);
+    }
+
+    #[test]
+    fn test_tensor_on_available_device() {
+        if !require_ffi() {
+            return;
+        }
+        // Use GPU if available, otherwise CPU
+        let device = if cuda_available() && cuda_device_count() > 0 {
+            Device::Cuda(0)
+        } else {
+            Device::Cpu
+        };
+
+        let shape = vec![4i64, 4];
+        let tensor = Tensor::randn(&shape, device);
+        assert!(tensor.is_ok(), "Failed to create tensor on {:?}: {:?}", device, tensor.err());
+    }
+
+    #[test]
+    fn test_model_load_nonexistent_path() {
+        if !require_ffi() {
+            return;
+        }
+        let result = Model::load("/nonexistent/path/to/model.so", Device::Cpu);
+        assert!(result.is_err());
+        match result {
+            Err(err) => {
+                let msg = format!("{}", err);
+                assert!(!msg.is_empty(), "Error message should not be empty");
+            }
+            Ok(_) => panic!("Expected error but got Ok"),
+        }
     }
 }

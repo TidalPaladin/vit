@@ -504,6 +504,8 @@ fn strip_python_tags(content: &str) -> String {
 mod tests {
     use super::*;
 
+    // ==================== Config Parsing Tests ====================
+
     #[test]
     fn test_parse_minimal_config() {
         let yaml = r#"
@@ -537,6 +539,82 @@ num_attention_heads: 12
     }
 
     #[test]
+    fn test_strip_python_tags() {
+        let input = "!!python/object:vit.vit.ViTConfig\nkey: value";
+        let output = strip_python_tags(input);
+        assert!(!output.contains("!!python/object"));
+        assert!(output.contains("key: value"));
+    }
+
+    #[test]
+    fn test_parse_with_all_activations() {
+        let activations = ["relu", "gelu", "silu", "srelu", "swiglu", "geglu", "reglu", "openswiglu"];
+        for act in activations {
+            let yaml = format!(
+                r#"
+in_channels: 3
+patch_size: [16, 16]
+img_size: [224, 224]
+depth: 12
+hidden_size: 768
+ffn_hidden_size: 3072
+num_attention_heads: 12
+activation: {}
+"#,
+                act
+            );
+            let config = ViTConfig::from_yaml_str(&yaml);
+            assert!(config.is_ok(), "Failed to parse activation: {}", act);
+        }
+    }
+
+    #[test]
+    fn test_parse_with_all_position_encodings() {
+        let pos_encs = ["rope", "fourier", "learnable", "none"];
+        for pos_enc in pos_encs {
+            let yaml = format!(
+                r#"
+in_channels: 3
+patch_size: [16, 16]
+img_size: [224, 224]
+depth: 12
+hidden_size: 768
+ffn_hidden_size: 3072
+num_attention_heads: 12
+pos_enc: {}
+"#,
+                pos_enc
+            );
+            let config = ViTConfig::from_yaml_str(&yaml);
+            assert!(config.is_ok(), "Failed to parse pos_enc: {}", pos_enc);
+        }
+    }
+
+    #[test]
+    fn test_parse_with_all_dtypes() {
+        let dtypes = ["float32", "float16", "bfloat16", "float64"];
+        for dtype in dtypes {
+            let yaml = format!(
+                r#"
+in_channels: 3
+patch_size: [16, 16]
+img_size: [224, 224]
+depth: 12
+hidden_size: 768
+ffn_hidden_size: 3072
+num_attention_heads: 12
+dtype: {}
+"#,
+                dtype
+            );
+            let config = ViTConfig::from_yaml_str(&yaml);
+            assert!(config.is_ok(), "Failed to parse dtype: {}", dtype);
+        }
+    }
+
+    // ==================== Validation Tests ====================
+
+    #[test]
     fn test_validate_mismatched_dims() {
         let yaml = r#"
 in_channels: 3
@@ -550,6 +628,8 @@ num_attention_heads: 12
         let config = ViTConfig::from_yaml_str(yaml).unwrap();
         let result = config.validate();
         assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("dimensions"));
     }
 
     #[test]
@@ -566,7 +646,251 @@ num_attention_heads: 12
         let config = ViTConfig::from_yaml_str(yaml).unwrap();
         let result = config.validate();
         assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("divisible"));
     }
+
+    #[test]
+    fn test_validate_zero_depth() {
+        let yaml = r#"
+in_channels: 3
+patch_size: [16, 16]
+img_size: [224, 224]
+depth: 0
+hidden_size: 768
+ffn_hidden_size: 3072
+num_attention_heads: 12
+"#;
+        let config = ViTConfig::from_yaml_str(yaml).unwrap();
+        let result = config.validate();
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("depth"));
+    }
+
+    #[test]
+    fn test_validate_head_dim_divisibility() {
+        let yaml = r#"
+in_channels: 3
+patch_size: [16, 16]
+img_size: [224, 224]
+depth: 12
+hidden_size: 768
+ffn_hidden_size: 3072
+num_attention_heads: 7
+"#;
+        let config = ViTConfig::from_yaml_str(yaml).unwrap();
+        let result = config.validate();
+        assert!(result.is_err()); // 768 % 7 != 0
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("divisible") || err_msg.contains("attention_heads"));
+    }
+
+    #[test]
+    fn test_validate_valid_config() {
+        let yaml = r#"
+in_channels: 3
+patch_size: [16, 16]
+img_size: [224, 224]
+depth: 12
+hidden_size: 768
+ffn_hidden_size: 3072
+num_attention_heads: 12
+"#;
+        let config = ViTConfig::from_yaml_str(yaml).unwrap();
+        let result = config.validate();
+        assert!(result.is_ok());
+    }
+
+    // ==================== Activation Tests ====================
+
+    #[test]
+    fn test_activation_is_glu_all_variants() {
+        // Non-GLU activations
+        assert!(!Activation::Relu.is_glu());
+        assert!(!Activation::Gelu.is_glu());
+        assert!(!Activation::Silu.is_glu());
+        assert!(!Activation::Srelu.is_glu());
+
+        // GLU activations
+        assert!(Activation::Swiglu.is_glu());
+        assert!(Activation::Geglu.is_glu());
+        assert!(Activation::Reglu.is_glu());
+        assert!(Activation::Openswiglu.is_glu());
+    }
+
+    #[test]
+    fn test_activation_default() {
+        let default = Activation::default();
+        assert_eq!(default, Activation::Srelu);
+    }
+
+    // ==================== DType Tests ====================
+
+    #[test]
+    fn test_dtype_size_bytes() {
+        assert_eq!(DType::Float16.size_bytes(), 2);
+        assert_eq!(DType::Bfloat16.size_bytes(), 2);
+        assert_eq!(DType::Float32.size_bytes(), 4);
+        assert_eq!(DType::Float64.size_bytes(), 8);
+    }
+
+    #[test]
+    fn test_dtype_default() {
+        let default = DType::default();
+        assert_eq!(default, DType::Bfloat16);
+    }
+
+    // ==================== Position Encoding Tests ====================
+
+    #[test]
+    fn test_position_encoding_default() {
+        let default = PositionEncoding::default();
+        assert_eq!(default, PositionEncoding::Rope);
+    }
+
+    // ==================== Computed Properties Tests ====================
+
+    #[test]
+    fn test_num_patches_calculation() {
+        let yaml = r#"
+in_channels: 3
+patch_size: [16, 16]
+img_size: [224, 224]
+depth: 12
+hidden_size: 768
+ffn_hidden_size: 3072
+num_attention_heads: 12
+"#;
+        let config = ViTConfig::from_yaml_str(yaml).unwrap();
+        assert_eq!(config.num_patches(), 196); // (224/16) * (224/16) = 14 * 14 = 196
+    }
+
+    #[test]
+    fn test_num_patches_non_square() {
+        let yaml = r#"
+in_channels: 3
+patch_size: [16, 16]
+img_size: [224, 448]
+depth: 12
+hidden_size: 768
+ffn_hidden_size: 3072
+num_attention_heads: 12
+"#;
+        let config = ViTConfig::from_yaml_str(yaml).unwrap();
+        assert_eq!(config.num_patches(), 392); // (224/16) * (448/16) = 14 * 28 = 392
+    }
+
+    #[test]
+    fn test_num_patches_different_patch_size() {
+        let yaml = r#"
+in_channels: 3
+patch_size: [14, 14]
+img_size: [224, 224]
+depth: 12
+hidden_size: 768
+ffn_hidden_size: 3072
+num_attention_heads: 12
+"#;
+        let config = ViTConfig::from_yaml_str(yaml).unwrap();
+        assert_eq!(config.num_patches(), 256); // (224/14) * (224/14) = 16 * 16 = 256
+    }
+
+    #[test]
+    fn test_seq_length_basic() {
+        let yaml = r#"
+in_channels: 3
+patch_size: [16, 16]
+img_size: [224, 224]
+depth: 12
+hidden_size: 768
+ffn_hidden_size: 3072
+num_attention_heads: 12
+"#;
+        let config = ViTConfig::from_yaml_str(yaml).unwrap();
+        assert_eq!(config.seq_length(), 196); // Just patches, no register/cls tokens
+    }
+
+    #[test]
+    fn test_seq_length_with_register_tokens() {
+        let yaml = r#"
+in_channels: 3
+patch_size: [16, 16]
+img_size: [224, 224]
+depth: 12
+hidden_size: 768
+ffn_hidden_size: 3072
+num_attention_heads: 12
+num_register_tokens: 8
+"#;
+        let config = ViTConfig::from_yaml_str(yaml).unwrap();
+        assert_eq!(config.seq_length(), 204); // 196 patches + 8 register tokens
+    }
+
+    #[test]
+    fn test_seq_length_with_cls_tokens() {
+        let yaml = r#"
+in_channels: 3
+patch_size: [16, 16]
+img_size: [224, 224]
+depth: 12
+hidden_size: 768
+ffn_hidden_size: 3072
+num_attention_heads: 12
+num_cls_tokens: 1
+"#;
+        let config = ViTConfig::from_yaml_str(yaml).unwrap();
+        assert_eq!(config.seq_length(), 197); // 196 patches + 1 cls token
+    }
+
+    #[test]
+    fn test_seq_length_with_all_tokens() {
+        let yaml = r#"
+in_channels: 3
+patch_size: [16, 16]
+img_size: [224, 224]
+depth: 12
+hidden_size: 768
+ffn_hidden_size: 3072
+num_attention_heads: 12
+num_register_tokens: 8
+num_cls_tokens: 1
+"#;
+        let config = ViTConfig::from_yaml_str(yaml).unwrap();
+        assert_eq!(config.seq_length(), 205); // 196 + 8 + 1
+    }
+
+    #[test]
+    fn test_head_dim() {
+        let yaml = r#"
+in_channels: 3
+patch_size: [16, 16]
+img_size: [224, 224]
+depth: 12
+hidden_size: 768
+ffn_hidden_size: 3072
+num_attention_heads: 12
+"#;
+        let config = ViTConfig::from_yaml_str(yaml).unwrap();
+        assert_eq!(config.head_dim(), 64); // 768 / 12 = 64
+    }
+
+    #[test]
+    fn test_head_dim_vit_large() {
+        let yaml = r#"
+in_channels: 3
+patch_size: [16, 16]
+img_size: [224, 224]
+depth: 24
+hidden_size: 1024
+ffn_hidden_size: 4096
+num_attention_heads: 16
+"#;
+        let config = ViTConfig::from_yaml_str(yaml).unwrap();
+        assert_eq!(config.head_dim(), 64); // 1024 / 16 = 64
+    }
+
+    // ==================== Model Summary Tests ====================
 
     #[test]
     fn test_compute_summary() {
@@ -588,10 +912,113 @@ num_attention_heads: 12
     }
 
     #[test]
-    fn test_strip_python_tags() {
-        let input = "!!python/object:vit.vit.ViTConfig\nkey: value";
-        let output = strip_python_tags(input);
-        assert!(!output.contains("!!python/object"));
-        assert!(output.contains("key: value"));
+    fn test_compute_summary_glu_ffn_multiplier() {
+        // Non-GLU config
+        let yaml_non_glu = r#"
+in_channels: 3
+patch_size: [16, 16]
+img_size: [224, 224]
+depth: 1
+hidden_size: 768
+ffn_hidden_size: 3072
+num_attention_heads: 12
+activation: gelu
+"#;
+        // GLU config
+        let yaml_glu = r#"
+in_channels: 3
+patch_size: [16, 16]
+img_size: [224, 224]
+depth: 1
+hidden_size: 768
+ffn_hidden_size: 3072
+num_attention_heads: 12
+activation: swiglu
+"#;
+        let config_non_glu = ViTConfig::from_yaml_str(yaml_non_glu).unwrap();
+        let config_glu = ViTConfig::from_yaml_str(yaml_glu).unwrap();
+
+        let summary_non_glu = config_non_glu.compute_summary();
+        let summary_glu = config_glu.compute_summary();
+
+        // GLU should have more parameters due to 2x multiplier on up projection
+        assert!(summary_glu.params_per_layer > summary_non_glu.params_per_layer);
+    }
+
+    #[test]
+    fn test_compute_summary_learnable_pos_enc() {
+        let yaml_rope = r#"
+in_channels: 3
+patch_size: [16, 16]
+img_size: [224, 224]
+depth: 12
+hidden_size: 768
+ffn_hidden_size: 3072
+num_attention_heads: 12
+pos_enc: rope
+"#;
+        let yaml_learnable = r#"
+in_channels: 3
+patch_size: [16, 16]
+img_size: [224, 224]
+depth: 12
+hidden_size: 768
+ffn_hidden_size: 3072
+num_attention_heads: 12
+pos_enc: learnable
+"#;
+        let config_rope = ViTConfig::from_yaml_str(yaml_rope).unwrap();
+        let config_learnable = ViTConfig::from_yaml_str(yaml_learnable).unwrap();
+
+        let summary_rope = config_rope.compute_summary();
+        let summary_learnable = config_learnable.compute_summary();
+
+        // Learnable pos enc adds num_patches * hidden_size params
+        assert_eq!(summary_rope.pos_enc_params, 0);
+        assert_eq!(summary_learnable.pos_enc_params, 196 * 768); // num_patches * hidden_size
+        assert!(summary_learnable.total_params > summary_rope.total_params);
+    }
+
+    #[test]
+    fn test_model_summary_param_memory_bytes() {
+        let yaml = r#"
+in_channels: 3
+patch_size: [16, 16]
+img_size: [224, 224]
+depth: 12
+hidden_size: 768
+ffn_hidden_size: 3072
+num_attention_heads: 12
+dtype: float32
+"#;
+        let config = ViTConfig::from_yaml_str(yaml).unwrap();
+        let summary = config.compute_summary();
+
+        // Float32 = 4 bytes per param
+        assert_eq!(summary.param_memory_bytes(), summary.total_params * 4);
+    }
+
+    #[test]
+    fn test_model_summary_display() {
+        let yaml = r#"
+in_channels: 3
+patch_size: [16, 16]
+img_size: [224, 224]
+depth: 12
+hidden_size: 768
+ffn_hidden_size: 3072
+num_attention_heads: 12
+"#;
+        let config = ViTConfig::from_yaml_str(yaml).unwrap();
+        let summary = config.compute_summary();
+        let display = summary.display();
+
+        // Check that display contains key information
+        assert!(display.contains("Depth"));
+        assert!(display.contains("12"));
+        assert!(display.contains("Hidden Size"));
+        assert!(display.contains("768"));
+        assert!(display.contains("Num Patches"));
+        assert!(display.contains("196"));
     }
 }
