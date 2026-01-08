@@ -1,0 +1,21 @@
+# Ignore everything by default
+*
+
+# Allow only what the Dockerfile needs
+!pyproject.toml
+!uv.lock
+!Makefile
+!README.md
+
+# Allow vit package
+!vit/
+!vit/**
+
+# Allow rust workspace
+!rust/
+!rust/**
+
+# Exclude build artifacts within allowed directories
+rust/target/
+**/__pycache__/
+**/*.pyc

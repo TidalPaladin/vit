@@ -33,13 +33,15 @@ ENV PATH="/root/.local/bin:${PATH}"
 WORKDIR /build
 
 # Copy project files
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml uv.lock README.md ./
 COPY vit/ ./vit/
 COPY rust/ ./rust/
 COPY Makefile ./
 
 # Install Python dependencies with PyTorch cu126
 # (cu126 runtime is compatible with cu128 build toolkit)
+# Set version for setuptools-scm since .git is excluded from build context
+ENV SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0
 RUN uv sync --frozen --no-dev
 RUN uv pip install torch==2.9.1+cu126 --index-url https://download.pytorch.org/whl/cu126
 
