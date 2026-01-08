@@ -1,5 +1,5 @@
 .PHONY: clean clean-env check quality style tag-version test env upload upload-test
-.PHONY: rust rust-release rust-ffi rust-ffi-rocm rust-install rust-test rust-test-ffi rust-clean rust-check
+.PHONY: rust rust-release rust-ffi rust-ffi-rocm rust-ffi-docker rust-install rust-test rust-test-ffi rust-clean rust-check
 
 PROJECT=vit
 QUALITY_DIRS=$(PROJECT) tests benchmark scripts
@@ -172,6 +172,18 @@ rust-fmt: ## format Rust code
 
 rust-clippy: ## run Rust linter
 	cd rust && $(CARGO) clippy -- -D warnings
+
+# ============================================================================
+# Docker targets
+# ============================================================================
+
+rust-ffi-docker: ## build rust-ffi in Docker (for systems with CUDA/glibc incompatibilities)
+	docker build -f docker/Dockerfile.rust-ffi -t vit-rust-ffi .
+	mkdir -p dist
+	docker run --rm -v $(CURDIR)/dist:/dist vit-rust-ffi
+	@echo ""
+	@echo "Build complete! Portable distribution at: dist/vit/"
+	@echo "Run: dist/vit/vit --help"
 
 # ============================================================================
 # Export targets

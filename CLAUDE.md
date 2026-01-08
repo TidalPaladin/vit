@@ -98,6 +98,7 @@ make export-model CONFIG=config.yaml OUTPUT=model.so DEVICE=cpu
 - FFI builds auto-detect PyTorch from the uv-managed virtualenv (no manual libtorch download needed)
 - CUDA builds require matching CUDA toolkit version (e.g., PyTorch cu128 requires CUDA 12.8+)
 - CUDA builds require GCC ≤13 (auto-detected if `/usr/bin/gcc-13` exists)
+- **CUDA/glibc incompatibility**: If you see `cospi`/`sinpi` errors, use `make rust-ffi-docker` instead
 - ROCm builds require ROCm toolkit (Linux only, ROCm 5.7+)
 - The Makefile automatically sets `LIBTORCH_CXX11_ABI=1` for correct C++ ABI compatibility
 - PyTorch uses `cuda` device strings for both NVIDIA and AMD GPUs

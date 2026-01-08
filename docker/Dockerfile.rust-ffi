@@ -1,0 +1,55 @@
+# Dockerfile for building vit rust-ffi with CUDA support
+# Uses CUDA 12.8 toolkit for compilation (compatible with newer glibc)
+#
+# Usage:
+#   docker build -f docker/Dockerfile.rust-ffi -t vit-rust-ffi .
+#   docker run --rm -v $(pwd)/dist:/dist vit-rust-ffi
+#
+# This creates dist/vit/ with the portable binary and libraries.
+
+FROM nvidia/cuda:12.8.0-devel-ubuntu24.04
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    build-essential \
+    cmake \
+    pkg-config \
+    gcc-13 \
+    g++-13 \
+    python3 \
+    python3-pip \
+    python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Install uv
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:${PATH}"
+
+WORKDIR /build
+
+# Copy project files
+COPY pyproject.toml uv.lock ./
+COPY vit/ ./vit/
+COPY rust/ ./rust/
+COPY Makefile ./
+
+# Install Python dependencies with PyTorch cu126
+# (cu126 runtime is compatible with cu128 build toolkit)
+RUN uv sync --frozen --no-dev
+RUN uv pip install torch==2.9.1+cu126 --index-url https://download.pytorch.org/whl/cu126
+
+# Build rust-ffi
+ENV LIBTORCH_CXX11_ABI=1
+RUN uv run python -c "import torch; print(f'PyTorch: {torch.__version__}')"
+RUN make rust-ffi
+
+# Create portable distribution
+RUN make rust-install RUST_INSTALL_DIR=/build/dist/vit
+
+# Copy to output volume on run
+CMD cp -r /build/dist/vit /dist/ && echo "Build artifacts copied to /dist/vit/"
