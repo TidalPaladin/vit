@@ -1,0 +1,20 @@
+[package]
+name = "vit-ffi"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "FFI bindings to C++ AOTInductor runtime for ViT inference"
+build = "build.rs"
+
+[dependencies]
+thiserror = { workspace = true }
+
+[build-dependencies]
+cmake = "0.1"
+pkg-config = "0.3"
+
+[features]
+default = []
+# Enable CUDA support (requires CUDA toolkit)
+cuda = []

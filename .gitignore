@@ -133,6 +133,18 @@ dmypy.json
 .ruff_cache/
 node_modules/
 
+# Rust
+rust/target/
+rust/Cargo.lock
+rust/**/Cargo.lock
+rust/bridge/build/
+
+# AOTInductor exports
+*.pt2
+
+# Libtorch
+libtorch/
+
 **/*@neomake*.py
 
 coverage.xml
@@ -142,4 +154,5 @@ coverage.xml
 **/version.py
 .pdm-python
 .vscode/*.code-workspace
-*/_version.py
+*/_version.pydist/
+**/_version.py

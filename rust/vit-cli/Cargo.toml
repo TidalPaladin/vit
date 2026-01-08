@@ -1,0 +1,23 @@
+[package]
+name = "vit-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "CLI for ViT model validation, summarization, and inference"
+
+[[bin]]
+name = "vit"
+path = "src/main.rs"
+
+[dependencies]
+vit-core = { workspace = true }
+vit-ffi = { workspace = true, optional = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+
+[features]
+default = []
+# Enable full inference (requires LIBTORCH and C++ bridge)
+ffi = ["dep:vit-ffi"]
