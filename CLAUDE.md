@@ -76,9 +76,13 @@ make rust-test                # Run Rust tests
 # Build with inference support (auto-detects PyTorch from virtualenv)
 make rust-ffi                 # Build with FFI/inference support (CUDA)
 make rust-ffi-rocm            # Build with FFI/inference support (ROCm)
+make rust-ffi-docker          # Build in Docker (for CUDA/glibc issues)
 
-# Create portable distribution (self-contained, ~471MB)
+# Create portable distribution (self-contained, ~5.7GB with CUDA libs)
 make rust-install             # Creates dist/vit/ with all dependencies bundled
+
+# Run portable binary
+LD_LIBRARY_PATH=dist/vit/lib dist/vit/vit --help
 
 # CLI commands
 ./rust/target/release/vit validate config.yaml
@@ -102,6 +106,17 @@ make export-model CONFIG=config.yaml OUTPUT=model.so DEVICE=cpu
 - ROCm builds require ROCm toolkit (Linux only, ROCm 5.7+)
 - The Makefile automatically sets `LIBTORCH_CXX11_ABI=1` for correct C++ ABI compatibility
 - PyTorch uses `cuda` device strings for both NVIDIA and AMD GPUs
+
+**Docker Build:**
+- `make rust-ffi-docker` builds in a CUDA 12.8 container and extracts artifacts to `dist/vit/`
+- The Docker build context uses an allowlist `.dockerignore` (~500KB context vs 7GB without)
+- Container sets `SETUPTOOLS_SCM_PRETEND_VERSION` since `.git` is excluded from context
+
+**Portable Distribution:**
+- `make rust-install` creates a self-contained distribution in `dist/vit/`
+- Includes PyTorch libs and NVIDIA CUDA libraries (~5.7GB total)
+- Run with: `LD_LIBRARY_PATH=dist/vit/lib dist/vit/vit --help`
+- No system CUDA installation required when using the portable distribution
 
 ## AOT Export Gotchas
 

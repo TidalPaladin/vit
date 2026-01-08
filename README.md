@@ -90,10 +90,17 @@ A Rust CLI is available for config validation, model summarization, and high-per
 # Build without inference (no external dependencies)
 make rust-release
 
-# Build with inference support (requires libtorch)
-make libtorch                 # Download libtorch with CUDA support
-export LIBTORCH=$(pwd)/libtorch
+# Build with inference support (auto-detects PyTorch from virtualenv)
 make rust-ffi                 # Build with FFI/inference support
+
+# Docker build (for CUDA/glibc incompatibility issues)
+make rust-ffi-docker          # Build in container, extract to dist/vit/
+
+# Create portable distribution with all dependencies
+make rust-install             # Creates dist/vit/ (~5.7GB with CUDA libs)
+
+# Run portable binary
+LD_LIBRARY_PATH=dist/vit/lib dist/vit/vit --help
 
 # CLI commands
 ./rust/target/release/vit validate config.yaml
