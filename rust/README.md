@@ -33,14 +33,15 @@ cargo build --release
 
 ## Inference Setup
 
-To run inference, you need to build with the `ffi` feature which requires libtorch:
+To run inference, you need to build with the `ffi` feature which requires libtorch.
 
-1. **Install libtorch** (must match your PyTorch version):
+### For NVIDIA GPUs (CUDA)
+
+1. **Download libtorch with CUDA** (from project root):
 
    ```bash
-   # Download from https://pytorch.org/get-started/locally/
-   # Or use the libtorch bundled with your PyTorch installation
-   export LIBTORCH=/path/to/libtorch
+   make libtorch CUDA_VERSION=12.8
+   export LIBTORCH=$(pwd)/libtorch
    ```
 
 2. **Export the model** from Python using AOTInductor:
@@ -49,7 +50,7 @@ To run inference, you need to build with the `ffi` feature which requires libtor
    python scripts/export_aot.py \
        --config config.yaml \
        --weights weights.safetensors \
-       --output model.pt2 \
+       --output model.so \
        --shape 1,3,224,224 \
        --device cuda
    ```
@@ -57,19 +58,59 @@ To run inference, you need to build with the `ffi` feature which requires libtor
 3. **Build with FFI support**:
 
    ```bash
-   cd rust
-   cargo build --release --features ffi
+   make rust-ffi
    ```
 
 4. **Run inference**:
 
    ```bash
-   ./target/release/vit infer \
-       --model model.pt2 \
+   ./rust/target/release/vit infer \
+       --model model.so \
        --config config.yaml \
        --device cuda:0 \
        --shape 1,3,224,224
    ```
+
+### For AMD GPUs (ROCm)
+
+ROCm support is available on Linux with AMD GPUs (gfx900+).
+
+1. **Download libtorch with ROCm** (from project root):
+
+   ```bash
+   make libtorch-rocm ROCM_VERSION=6.2
+   export LIBTORCH=$(pwd)/libtorch
+   ```
+
+2. **Export the model** from Python using AOTInductor:
+
+   ```bash
+   # Ensure PyTorch is installed with ROCm support
+   python scripts/export_aot.py \
+       --config config.yaml \
+       --weights weights.safetensors \
+       --output model.so \
+       --shape 1,3,224,224 \
+       --device cuda  # PyTorch uses "cuda" for ROCm devices too
+   ```
+
+3. **Build with FFI support for ROCm**:
+
+   ```bash
+   make rust-ffi-rocm
+   ```
+
+4. **Run inference**:
+
+   ```bash
+   ./rust/target/release/vit infer \
+       --model model.so \
+       --config config.yaml \
+       --device cuda:0 \
+       --shape 1,3,224,224
+   ```
+
+**Note:** PyTorch uses `cuda` device strings for both NVIDIA and AMD GPUs. The actual backend (CUDA or HIP) is determined by how libtorch was built.
 
 ## Requirements
 
@@ -81,7 +122,8 @@ To run inference, you need to build with the `ffi` feature which requires libtor
 - libtorch (matching your PyTorch version)
 - CMake 3.18+
 - C++17 compiler
-- CUDA toolkit (optional, for GPU support)
+- **For NVIDIA GPUs**: CUDA toolkit (nvcc in PATH, GCC ≤13 for CUDA 12.x)
+- **For AMD GPUs**: ROCm toolkit (Linux only, ROCm 5.7+)
 
 ## Configuration
 

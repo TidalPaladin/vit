@@ -16,5 +16,7 @@ pkg-config = "0.3"
 
 [features]
 default = []
-# Enable CUDA support (requires CUDA toolkit)
+# Enable CUDA support (requires CUDA toolkit and NVIDIA GPU)
 cuda = []
+# Enable ROCm support (requires ROCm toolkit and AMD GPU)
+rocm = []

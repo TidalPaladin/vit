@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
 #
-# Download and install libtorch with CUDA support.
+# Download and install libtorch with CUDA or ROCm support.
 #
 # Usage:
 #   ./scripts/download_libtorch.sh [OPTIONS]
 #
 # Options:
-#   --cuda VERSION    CUDA version (11.8, 12.1, 12.4, cpu) [default: 12.4]
+#   --cuda VERSION    CUDA version (11.8, 12.1, 12.4, 12.8, 13.0, cpu) [default: 12.8]
+#   --rocm VERSION    ROCm version (5.7, 6.0, 6.1, 6.2) [Linux only]
 #   --output DIR      Output directory [default: ./libtorch]
 #   --cxx11-abi       Use CXX11 ABI (Pre-cxx11 ABI is default)
 #   --help            Show this help message
 #
 # Examples:
-#   ./scripts/download_libtorch.sh --cuda 12.4
+#   ./scripts/download_libtorch.sh --cuda 12.8
+#   ./scripts/download_libtorch.sh --rocm 6.2
 #   ./scripts/download_libtorch.sh --cuda cpu --output /opt/libtorch
 #
 # After installation, set LIBTORCH environment variable:
@@ -23,6 +25,7 @@ set -euo pipefail
 
 # Default values
 CUDA_VERSION="12.8"
+ROCM_VERSION=""
 OUTPUT_DIR="./libtorch"
 CXX11_ABI=false
 PYTORCH_VERSION="2.9.1"  # Update as needed
@@ -46,7 +49,7 @@ log_error() {
 }
 
 show_help() {
-    head -25 "$0" | tail -22 | sed 's/^# //' | sed 's/^#//'
+    head -22 "$0" | tail -21 | sed 's/^# //' | sed 's/^#//'
     exit 0
 }
 
@@ -55,6 +58,11 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         --cuda)
             CUDA_VERSION="$2"
+            shift 2
+            ;;
+        --rocm)
+            ROCM_VERSION="$2"
+            CUDA_VERSION=""  # ROCm and CUDA are mutually exclusive
             shift 2
             ;;
         --output)
@@ -83,7 +91,11 @@ case "$OS" in
         ;;
     Darwin*)
         PLATFORM="macos"
-        if [[ "$CUDA_VERSION" != "cpu" ]]; then
+        if [[ -n "$ROCM_VERSION" ]]; then
+            log_error "ROCm is not supported on macOS"
+            exit 1
+        fi
+        if [[ -n "$CUDA_VERSION" && "$CUDA_VERSION" != "cpu" ]]; then
             log_warn "CUDA is not supported on macOS, forcing CPU version"
             CUDA_VERSION="cpu"
         fi
@@ -102,7 +114,11 @@ case "$ARCH" in
         ;;
     aarch64|arm64)
         ARCH="arm64"
-        if [[ "$CUDA_VERSION" != "cpu" ]]; then
+        if [[ -n "$ROCM_VERSION" ]]; then
+            log_error "ROCm builds not available for ARM64"
+            exit 1
+        fi
+        if [[ -n "$CUDA_VERSION" && "$CUDA_VERSION" != "cpu" ]]; then
             log_warn "CUDA builds not available for ARM64, forcing CPU version"
             CUDA_VERSION="cpu"
         fi
@@ -115,7 +131,7 @@ esac
 
 # Build download URL
 # PyTorch download URLs follow this pattern:
-# https://download.pytorch.org/libtorch/{cu|cpu}/{variant}/libtorch-{abi}-{version}%2B{cuda}.zip
+# https://download.pytorch.org/libtorch/{cu|cpu|rocm}/{variant}/libtorch-{abi}-{version}%2B{backend}.zip
 
 if [[ "$CXX11_ABI" == true ]]; then
     ABI_VARIANT="cxx11-abi-shared-with-deps"
@@ -123,37 +139,73 @@ else
     ABI_VARIANT="shared-with-deps"
 fi
 
-case "$CUDA_VERSION" in
-    cpu)
-        CUDA_TAG="cpu"
-        DOWNLOAD_PATH="cpu"
-        ;;
-    11.8)
-        CUDA_TAG="cu118"
-        DOWNLOAD_PATH="cu118"
-        ;;
-    12.1)
-        CUDA_TAG="cu121"
-        DOWNLOAD_PATH="cu121"
-        ;;
-    12.4)
-        CUDA_TAG="cu124"
-        DOWNLOAD_PATH="cu124"
-        ;;
-    12.8)
-        CUDA_TAG="cu128"
-        DOWNLOAD_PATH="cu128"
-        ;;
-    13.0)
-        CUDA_TAG="cu130"
-        DOWNLOAD_PATH="cu130"
-        ;;
-    *)
-        log_error "Unsupported CUDA version: $CUDA_VERSION"
-        log_error "Supported versions: cpu, 11.8, 12.1, 12.4, 12.8, 13.0"
-        exit 1
-        ;;
-esac
+# Determine backend (CUDA, ROCm, or CPU)
+BACKEND_TAG=""
+DOWNLOAD_PATH=""
+
+if [[ -n "$ROCM_VERSION" ]]; then
+    # ROCm backend
+    case "$ROCM_VERSION" in
+        5.7)
+            BACKEND_TAG="rocm5.7"
+            DOWNLOAD_PATH="rocm5.7"
+            ;;
+        6.0)
+            BACKEND_TAG="rocm6.0"
+            DOWNLOAD_PATH="rocm6.0"
+            ;;
+        6.1)
+            BACKEND_TAG="rocm6.1"
+            DOWNLOAD_PATH="rocm6.1"
+            ;;
+        6.2)
+            BACKEND_TAG="rocm6.2"
+            DOWNLOAD_PATH="rocm6.2"
+            ;;
+        *)
+            log_error "Unsupported ROCm version: $ROCM_VERSION"
+            log_error "Supported versions: 5.7, 6.0, 6.1, 6.2"
+            exit 1
+            ;;
+    esac
+elif [[ -n "$CUDA_VERSION" ]]; then
+    # CUDA backend
+    case "$CUDA_VERSION" in
+        cpu)
+            BACKEND_TAG="cpu"
+            DOWNLOAD_PATH="cpu"
+            ;;
+        11.8)
+            BACKEND_TAG="cu118"
+            DOWNLOAD_PATH="cu118"
+            ;;
+        12.1)
+            BACKEND_TAG="cu121"
+            DOWNLOAD_PATH="cu121"
+            ;;
+        12.4)
+            BACKEND_TAG="cu124"
+            DOWNLOAD_PATH="cu124"
+            ;;
+        12.8)
+            BACKEND_TAG="cu128"
+            DOWNLOAD_PATH="cu128"
+            ;;
+        13.0)
+            BACKEND_TAG="cu130"
+            DOWNLOAD_PATH="cu130"
+            ;;
+        *)
+            log_error "Unsupported CUDA version: $CUDA_VERSION"
+            log_error "Supported versions: cpu, 11.8, 12.1, 12.4, 12.8, 13.0"
+            exit 1
+            ;;
+    esac
+else
+    # Default to CPU if nothing specified
+    BACKEND_TAG="cpu"
+    DOWNLOAD_PATH="cpu"
+fi
 
 if [[ "$PLATFORM" == "macos" ]]; then
     if [[ "$ARCH" == "arm64" ]]; then
@@ -163,13 +215,19 @@ if [[ "$PLATFORM" == "macos" ]]; then
     fi
     DOWNLOAD_URL="https://download.pytorch.org/libtorch/cpu/${FILENAME}"
 else
-    FILENAME="libtorch-${ABI_VARIANT}-${PYTORCH_VERSION}%2B${CUDA_TAG}.zip"
+    FILENAME="libtorch-${ABI_VARIANT}-${PYTORCH_VERSION}%2B${BACKEND_TAG}.zip"
     DOWNLOAD_URL="https://download.pytorch.org/libtorch/${DOWNLOAD_PATH}/${FILENAME}"
 fi
 
 log_info "Configuration:"
 log_info "  Platform:      $PLATFORM ($ARCH)"
-log_info "  CUDA version:  $CUDA_VERSION"
+if [[ -n "$ROCM_VERSION" ]]; then
+    log_info "  ROCm version:  $ROCM_VERSION"
+elif [[ -n "$CUDA_VERSION" ]]; then
+    log_info "  CUDA version:  $CUDA_VERSION"
+else
+    log_info "  Backend:       CPU"
+fi
 log_info "  CXX11 ABI:     $CXX11_ABI"
 log_info "  PyTorch:       $PYTORCH_VERSION"
 log_info "  Output:        $OUTPUT_DIR"

@@ -17,6 +17,11 @@
 #include <torch/csrc/inductor/aoti_runner/model_container_runner_cuda.h>
 #include <c10/cuda/CUDACachingAllocator.h>
 #endif
+#ifdef USE_HIP
+// HIP uses the same AOTInductor runner as CUDA
+#include <torch/csrc/inductor/aoti_runner/model_container_runner_cuda.h>
+#include <c10/hip/HIPCachingAllocator.h>
+#endif
 
 /* Thread-local error message */
 static thread_local std::string g_last_error;
@@ -86,10 +91,11 @@ VitModel* vit_model_load(const char* pt2_path, const char* device_str) {
         std::unique_ptr<torch::inductor::AOTIModelContainerRunner> runner;
 
         if (device.is_cuda()) {
-#ifdef USE_CUDA
+#if defined(USE_CUDA) || defined(USE_HIP)
+            // Both CUDA and HIP use the same AOTIModelContainerRunnerCuda
             runner = std::make_unique<torch::inductor::AOTIModelContainerRunnerCuda>(path);
 #else
-            set_error("CUDA support not compiled in");
+            set_error("GPU support not compiled in (no CUDA or ROCm)");
             return nullptr;
 #endif
         } else {
@@ -211,12 +217,18 @@ VitInferenceResult* vit_model_infer(VitModel* model, VitTensor* input) {
         // Prepare inputs
         std::vector<torch::Tensor> inputs = {input_tensor};
 
-        // Get memory before (CUDA only)
+        // Get memory before (GPU only)
         size_t memory_before = 0;
 #ifdef USE_CUDA
         if (model->device.is_cuda()) {
             c10::cuda::CUDACachingAllocator::emptyCache();
             auto stats = c10::cuda::CUDACachingAllocator::getDeviceStats(model->device.index());
+            memory_before = stats.allocated_bytes[0].current;
+        }
+#elif defined(USE_HIP)
+        if (model->device.is_cuda()) {
+            c10::hip::HIPCachingAllocator::emptyCache();
+            auto stats = c10::hip::HIPCachingAllocator::getDeviceStats(model->device.index());
             memory_before = stats.allocated_bytes[0].current;
         }
 #endif
@@ -225,6 +237,10 @@ VitInferenceResult* vit_model_infer(VitModel* model, VitTensor* input) {
 #ifdef USE_CUDA
         if (model->device.is_cuda()) {
             c10::cuda::device_synchronize();
+        }
+#elif defined(USE_HIP)
+        if (model->device.is_cuda()) {
+            c10::hip::device_synchronize();
         }
 #endif
 
@@ -237,16 +253,25 @@ VitInferenceResult* vit_model_infer(VitModel* model, VitTensor* input) {
         if (model->device.is_cuda()) {
             c10::cuda::device_synchronize();
         }
+#elif defined(USE_HIP)
+        if (model->device.is_cuda()) {
+            c10::hip::device_synchronize();
+        }
 #endif
 
         auto end = std::chrono::high_resolution_clock::now();
         double latency_ms = std::chrono::duration<double, std::milli>(end - start).count();
 
-        // Get memory after (CUDA only)
+        // Get memory after (GPU only)
         size_t memory_after = 0;
 #ifdef USE_CUDA
         if (model->device.is_cuda()) {
             auto stats = c10::cuda::CUDACachingAllocator::getDeviceStats(model->device.index());
+            memory_after = stats.allocated_bytes[0].peak;
+        }
+#elif defined(USE_HIP)
+        if (model->device.is_cuda()) {
+            auto stats = c10::hip::HIPCachingAllocator::getDeviceStats(model->device.index());
             memory_after = stats.allocated_bytes[0].peak;
         }
 #endif
@@ -292,7 +317,8 @@ const char* vit_get_last_error(void) {
 }
 
 int vit_cuda_available(void) {
-#ifdef USE_CUDA
+#if defined(USE_CUDA) || defined(USE_HIP)
+    // PyTorch uses the same torch::cuda API for both CUDA and HIP
     return torch::cuda::is_available() ? 1 : 0;
 #else
     return 0;
@@ -300,7 +326,7 @@ int vit_cuda_available(void) {
 }
 
 int vit_cuda_device_count(void) {
-#ifdef USE_CUDA
+#if defined(USE_CUDA) || defined(USE_HIP)
     return torch::cuda::device_count();
 #else
     return 0;
@@ -310,6 +336,8 @@ int vit_cuda_device_count(void) {
 void vit_cuda_synchronize(int device_index) {
 #ifdef USE_CUDA
     c10::cuda::device_synchronize();
+#elif defined(USE_HIP)
+    c10::hip::device_synchronize();
 #endif
     (void)device_index;
 }

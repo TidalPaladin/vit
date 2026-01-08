@@ -7,6 +7,7 @@
 //! - `LIBTORCH`: Path to libtorch installation (required)
 //! - `LIBTORCH_CXX11_ABI`: Set to "1" to use the CXX11 ABI (default: "0")
 //! - `VIT_BRIDGE_SKIP_BUILD`: Set to "1" to skip building (for development)
+//! - `ROCM_PATH`: Path to ROCm installation (optional, for ROCm builds)
 
 use std::env;
 use std::path::PathBuf;
@@ -42,6 +43,7 @@ fn main() {
     println!("cargo:rerun-if-changed=../bridge/CMakeLists.txt");
     println!("cargo:rerun-if-env-changed=LIBTORCH");
     println!("cargo:rerun-if-env-changed=LIBTORCH_CXX11_ABI");
+    println!("cargo:rerun-if-env-changed=ROCM_PATH");
 
     // Get the bridge directory
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
@@ -71,14 +73,27 @@ fn main() {
         cmake_config.define("USE_CUDA", "ON");
     }
 
+    // Check for ROCm feature
+    if cfg!(feature = "rocm") {
+        cmake_config.define("USE_HIP", "ON");
+        // Pass ROCM_PATH to CMake if set
+        if let Ok(rocm_path) = env::var("ROCM_PATH") {
+            cmake_config.define("ROCM_PATH", rocm_path);
+        }
+    }
+
     // Check if libtorch has CUDA support by looking for CUDA cmake files
     let libtorch_has_cuda = libtorch.join("share/cmake/Caffe2/public/cuda.cmake").exists();
+    // Check if libtorch has HIP/ROCm support
+    let libtorch_has_hip = libtorch.join("share/cmake/Caffe2/public/LoadHIP.cmake").exists()
+        || libtorch.join("share/cmake/Caffe2/Caffe2HIPConfig.cmake").exists();
 
-    // Set CUDA architectures if libtorch has CUDA support
-    if libtorch_has_cuda && std::path::Path::new("/usr/local/cuda").exists() {
+    // Set CUDA architectures if libtorch has CUDA support (not ROCm)
+    if libtorch_has_cuda && !libtorch_has_hip && std::path::Path::new("/usr/local/cuda").exists() {
         cmake_config.define("CMAKE_CUDA_ARCHITECTURES", "native");
 
         // Use GCC 13 if available (CUDA 12.x doesn't support GCC 14+)
+        // Note: ROCm supports newer GCC versions, so this constraint only applies to CUDA
         if std::path::Path::new("/usr/bin/gcc-13").exists() {
             cmake_config.define("CMAKE_C_COMPILER", "/usr/bin/gcc-13");
             cmake_config.define("CMAKE_CXX_COMPILER", "/usr/bin/g++-13");
@@ -104,6 +119,12 @@ fn main() {
     if cfg!(feature = "cuda") {
         println!("cargo:rustc-link-lib=dylib=torch_cuda");
         println!("cargo:rustc-link-lib=dylib=c10_cuda");
+    }
+
+    // Link ROCm/HIP libraries if available
+    if cfg!(feature = "rocm") {
+        println!("cargo:rustc-link-lib=dylib=torch_hip");
+        println!("cargo:rustc-link-lib=dylib=c10_hip");
     }
 
     // Set rpath for runtime library loading

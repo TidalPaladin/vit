@@ -18,12 +18,18 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
 # This is required to avoid symbol mismatch errors with std::string
 add_compile_definitions(_GLIBCXX_USE_CXX11_ABI=1)
 
-# Check for CUDA support
-if(TORCH_CUDA_LIBRARIES)
+# Check for CUDA or HIP/ROCm support
+# PyTorch's HIP builds use TORCH_HIP_LIBRARIES, but the AOTInductor API is the same
+if(USE_HIP OR DEFINED ENV{ROCM_PATH} OR DEFINED ROCM_PATH)
+    # ROCm/HIP build - check for HIP libraries
+    # Note: PyTorch ROCm builds may report TORCH_CUDA_LIBRARIES even though they use HIP
+    message(STATUS "HIP/ROCm support enabled")
+    add_compile_definitions(USE_HIP)
+elseif(TORCH_CUDA_LIBRARIES)
     message(STATUS "CUDA support enabled")
     add_compile_definitions(USE_CUDA)
 else()
-    message(STATUS "CUDA support disabled (CPU only)")
+    message(STATUS "GPU support disabled (CPU only)")
 endif()
 
 # Build the bridge library

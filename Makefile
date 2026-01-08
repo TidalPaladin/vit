@@ -1,5 +1,5 @@
 .PHONY: clean clean-env check quality style tag-version test env upload upload-test
-.PHONY: rust rust-release rust-ffi rust-install rust-test rust-clean rust-check libtorch
+.PHONY: rust rust-release rust-ffi rust-ffi-rocm rust-install rust-test rust-clean rust-check libtorch libtorch-rocm
 
 PROJECT=vit
 QUALITY_DIRS=$(PROJECT) tests benchmark scripts
@@ -105,6 +105,21 @@ endif
 	@echo ""
 	@echo "For a portable distribution, run: make rust-install"
 
+rust-ffi-rocm: ## build Rust CLI with FFI/inference support for ROCm (requires LIBTORCH with ROCm)
+ifndef LIBTORCH
+	$(error LIBTORCH is not set. Set it to your libtorch installation path)
+endif
+	cd rust && LIBTORCH="$(LIBTORCH)" LIBTORCH_CXX11_ABI=1 $(CARGO) build --release --features "ffi,vit-ffi/rocm"
+	@# Copy libraries next to binary for RPATH to work (symlinks for dev)
+	@mkdir -p rust/target/release/lib
+	@find rust/target/release/build -name "libvit_bridge.so" -exec cp {} rust/target/release/lib/ \;
+	@for lib in $(LIBTORCH)/lib/*.so*; do ln -sf "$$lib" rust/target/release/lib/; done
+	@echo ""
+	@echo "Build complete! The CLI is ready to use with ROCm:"
+	@echo "  ./rust/target/release/vit --help"
+	@echo ""
+	@echo "For a portable distribution, run: make rust-install"
+
 RUST_INSTALL_DIR ?= dist/vit
 
 rust-install: ## create portable distribution (set RUST_INSTALL_DIR to customize)
@@ -153,8 +168,9 @@ rust-clippy: ## run Rust linter
 
 LIBTORCH_DIR ?= $(CURDIR)/libtorch
 CUDA_VERSION ?= 12.8
+ROCM_VERSION ?= 6.2
 
-libtorch: ## download libtorch with CUDA support (set CUDA_VERSION=11.8|12.1|12.4|cpu)
+libtorch: ## download libtorch with CUDA support (set CUDA_VERSION=11.8|12.1|12.4|12.8|13.0|cpu)
 	./scripts/download_libtorch.sh --cuda $(CUDA_VERSION) --output $(LIBTORCH_DIR)
 	@echo ""
 	@echo "Now run: export LIBTORCH=$(LIBTORCH_DIR)"
@@ -162,6 +178,12 @@ libtorch: ## download libtorch with CUDA support (set CUDA_VERSION=11.8|12.1|12.
 
 libtorch-cpu: ## download libtorch CPU-only version
 	./scripts/download_libtorch.sh --cuda cpu --output $(LIBTORCH_DIR)
+
+libtorch-rocm: ## download libtorch with ROCm support (set ROCM_VERSION=5.7|6.0|6.1|6.2)
+	./scripts/download_libtorch.sh --rocm $(ROCM_VERSION) --output $(LIBTORCH_DIR)
+	@echo ""
+	@echo "Now run: export LIBTORCH=$(LIBTORCH_DIR)"
+	@echo "Then:    make rust-ffi-rocm"
 
 # ============================================================================
 # Export targets

@@ -70,8 +70,10 @@ make rust-test                # Run Rust tests
 # Build with inference support (requires libtorch)
 make libtorch                 # Download libtorch with CUDA support
 make libtorch-cpu             # Download CPU-only libtorch
+make libtorch-rocm            # Download libtorch with ROCm support (AMD GPUs)
 export LIBTORCH=$(pwd)/libtorch
-make rust-ffi                 # Build with FFI/inference support
+make rust-ffi                 # Build with FFI/inference support (CUDA)
+make rust-ffi-rocm            # Build with FFI/inference support (ROCm)
 
 # Create portable distribution (self-contained, ~471MB)
 make rust-install             # Creates dist/vit/ with all dependencies bundled
@@ -92,8 +94,10 @@ make export-model CONFIG=config.yaml OUTPUT=model.so DEVICE=cpu
 
 **Build Notes:**
 - CUDA builds require CUDA toolkit with nvcc in PATH and GCC ≤13 (CUDA 12.x limitation)
+- ROCm builds require ROCm toolkit (Linux only, ROCm 5.7+)
 - Use CPU-only libtorch if you encounter compiler compatibility issues
 - The Makefile automatically sets `LIBTORCH_CXX11_ABI=1` for correct C++ ABI compatibility
+- PyTorch uses `cuda` device strings for both NVIDIA and AMD GPUs
 
 ## AOT Export Gotchas
 
