@@ -212,7 +212,7 @@ def attention_weights_qkv_packed(
     # fmt: on
 ) -> Tensor:
     q, k, _ = project_qkv_packed(x, w_in, b_in, w_norm, head_dim, eps, rope)
-    return (q @ k.mT).softmax(dim=-1)
+    return (q @ k.mT * (head_dim**-0.5)).softmax(dim=-1)
 
 
 @torch.no_grad()
@@ -233,7 +233,7 @@ def attention_weights_q_kv_packed(
     # fmt: on
 ) -> Tensor:
     q, k, _ = project_q_kv_packed(q, kv, w_q, b_q, w_kv, b_kv, w_norm, head_dim, eps, rope_q, rope_k)
-    return (q @ k.mT).softmax(dim=-1)
+    return (q @ k.mT * (head_dim**-0.5)).softmax(dim=-1)
 
 
 @torch.no_grad()
@@ -250,7 +250,7 @@ def attention_weights_q_kv_packed_static_query(
     # fmt: on
 ) -> Tensor:
     q, k, _ = project_q_kv_packed_static_query(q, kv, w_kv, b_kv, head_dim, rope_q, rope_k)
-    return (q @ k.mT).softmax(dim=-1)
+    return (q @ k.mT * (head_dim**-0.5)).softmax(dim=-1)
 
 
 class SelfAttention(nn.Module):
