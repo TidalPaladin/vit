@@ -2,6 +2,7 @@ from copy import deepcopy
 
 import pytest
 import torch
+import torch.nn.functional as F
 from torch.testing import assert_close
 from torchao.dtypes import AffineQuantizedTensor
 from torchao.quantization import Int8WeightOnlyConfig
@@ -173,3 +174,29 @@ class TestAttentivePool:
             y = layer.forward_weights(x)
         # forward_weights returns attention weights: (B, H, num_queries, L)
         assert y.shape == (B, H, num_queries, L)
+
+
+class TestAttentionWeightsScaling:
+    """Test that forward_weights matches scaled_dot_product_attention scaling."""
+
+    def test_self_attention_weights_scaling(self, device):
+        """Verify SelfAttention.forward_weights matches SDPA scaling."""
+        B, L, D, H = 2, 16, 64, 4
+        head_dim = D // H
+        layer = SelfAttention(D, H, hidden_dropout=0, attention_dropout=0).to(device)
+        layer.eval()
+        x = torch.randn(B, L, D, device=device)
+
+        # Get weights from forward_weights
+        weights = layer.forward_weights(x)
+
+        # Manually compute expected weights using the same projections
+        qkv = F.linear(
+            F.rms_norm(x, (D,), layer.norm.weight, layer.norm.eps), layer.qkv_proj.weight, layer.qkv_proj.bias
+        )
+        q, k, v = qkv.chunk(3, dim=-1)
+        q = q.view(B, L, H, head_dim).transpose(1, 2)
+        k = k.view(B, L, H, head_dim).transpose(1, 2)
+        expected = (q @ k.mT * (head_dim**-0.5)).softmax(dim=-1)
+
+        assert_close(weights, expected, atol=1e-5, rtol=1e-5)
