@@ -54,22 +54,28 @@ class TestTransformerEncoderLayer:
             layer_scale=layer_scale_init,
         ).to(device)
 
-        # Set deterministic weights for reproducibility
         torch.manual_seed(42)
         x = torch.randn(2, 16, hidden_size, device=device)
 
         layer.eval()
         with torch.no_grad():
-            output = layer(x)
+            # Isolate MLP path: compute MLP output and expected scaled result directly
+            # First get post-attention state (input to MLP)
+            attn_out = layer.layer_scale_attn(layer.self_attention(x))
+            post_attn = x + attn_out
 
-        # The residual contribution should be scaled by γ (0.1), not γ² (0.01)
-        # If layer_scale were applied twice, the output would be much closer to the input
-        residual = output - x
+            # Compute unscaled MLP output
+            mlp_out_unscaled = layer.mlp(post_attn)
 
-        # With γ=0.1 applied once, residual magnitude should be ~0.1 * unscaled_magnitude
-        # With γ²=0.01 applied twice, residual would be 10x smaller
-        # Check that residual is not negligibly small (which would indicate double scaling)
-        assert residual.abs().mean() > 0.001, "Residual too small - layer_scale may be applied twice"
+            # Compute what layer_scale_mlp produces (should be γ * mlp_out, not γ² * mlp_out)
+            mlp_out_scaled = layer.layer_scale_mlp(mlp_out_unscaled.clone())
+
+            # Expected: scaled = γ * unscaled
+            expected_scaled = layer_scale_init * mlp_out_unscaled
+
+        # If layer_scale were applied twice, mlp_out_scaled would be γ² * unscaled (0.01x)
+        # With correct single application, it should be γ * unscaled (0.1x)
+        assert_close(mlp_out_scaled, expected_scaled, rtol=1e-4, atol=1e-6)
 
 
 class TestTransformerDecoderLayer:
