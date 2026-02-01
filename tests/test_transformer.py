@@ -42,6 +42,41 @@ class TestTransformerEncoderLayer:
         y4 = layer(x)
         assert not torch.allclose(y3, y4)
 
+    def test_encoder_layer_scale_applied_once(self, device):
+        """Regression test: verify layer_scale is applied once, not twice (issue #79)."""
+        hidden_size = 64
+        layer_scale_init = 0.1  # Use a value where γ vs γ² is easily distinguishable
+
+        layer = TransformerEncoderLayer(
+            hidden_size=hidden_size,
+            ffn_hidden_size=hidden_size * 4,
+            num_attention_heads=4,
+            layer_scale=layer_scale_init,
+        ).to(device)
+
+        torch.manual_seed(42)
+        x = torch.randn(2, 16, hidden_size, device=device)
+
+        layer.eval()
+        with torch.no_grad():
+            # Isolate MLP path: compute MLP output and expected scaled result directly
+            # First get post-attention state (input to MLP)
+            attn_out = layer.layer_scale_attn(layer.self_attention(x))
+            post_attn = x + attn_out
+
+            # Compute unscaled MLP output
+            mlp_out_unscaled = layer.mlp(post_attn)
+
+            # Compute what layer_scale_mlp produces (should be γ * mlp_out, not γ² * mlp_out)
+            mlp_out_scaled = layer.layer_scale_mlp(mlp_out_unscaled.clone())
+
+            # Expected: scaled = γ * unscaled
+            expected_scaled = layer_scale_init * mlp_out_unscaled
+
+        # If layer_scale were applied twice, mlp_out_scaled would be γ² * unscaled (0.01x)
+        # With correct single application, it should be γ * unscaled (0.1x)
+        assert_close(mlp_out_scaled, expected_scaled, rtol=1e-4, atol=1e-6)
+
 
 class TestTransformerDecoderLayer:
     @pytest.mark.parametrize("layer_scale", [None, 1e-5])
