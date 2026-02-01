@@ -275,6 +275,34 @@ class TestViT:
             y_quant = quantized_model(x)
         assert_close(y.visual_tokens, y_quant.visual_tokens, atol=1e-2, rtol=0)
 
+    def test_hidden_size_not_divisible_by_num_attention_heads_raises(self):
+        """Verify that ValueError is raised when hidden_size is not divisible by num_attention_heads."""
+        with pytest.raises(ValueError, match="hidden_size.*must be divisible by.*num_attention_heads"):
+            ViTConfig(
+                in_channels=3,
+                patch_size=(16, 16),
+                img_size=(224, 224),
+                depth=1,
+                hidden_size=100,
+                ffn_hidden_size=200,
+                num_attention_heads=8,  # 100 is not divisible by 8
+                pos_enc="learnable",
+            )
+
+    def test_fourier_pos_enc_with_odd_hidden_size_raises(self):
+        """Verify that ValueError is raised when using Fourier pos_enc with odd hidden_size."""
+        with pytest.raises(ValueError, match="hidden_size.*must be even.*Fourier"):
+            ViTConfig(
+                in_channels=3,
+                patch_size=(16, 16),
+                img_size=(224, 224),
+                depth=1,
+                hidden_size=63,  # odd number, but divisible by 9
+                ffn_hidden_size=128,
+                num_attention_heads=9,  # 63 is divisible by 9
+                pos_enc="fourier",
+            )
+
     def test_forward_returns_tokenized_size(self, device, config):
         x = torch.randn(2, 3, *config.img_size, device=device)
         model = ViT(config).to(device)

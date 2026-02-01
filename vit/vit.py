@@ -94,6 +94,16 @@ class ViTConfig:
     # Heads
     heads: dict[str, HeadConfig] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        """Validate configuration parameters."""
+        if self.hidden_size % self.num_attention_heads != 0:
+            raise ValueError(
+                f"hidden_size ({self.hidden_size}) must be divisible by "
+                f"num_attention_heads ({self.num_attention_heads})"
+            )
+        if self.pos_enc == "fourier" and self.hidden_size % 2 != 0:
+            raise ValueError(f"hidden_size ({self.hidden_size}) must be even when using Fourier positional encoding")
+
     def instantiate(self, device: torch.device | None = None) -> "ViT":
         return ViT(self, device=device)
 
