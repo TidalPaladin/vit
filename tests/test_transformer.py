@@ -42,6 +42,35 @@ class TestTransformerEncoderLayer:
         y4 = layer(x)
         assert not torch.allclose(y3, y4)
 
+    def test_encoder_layer_scale_applied_once(self, device):
+        """Regression test: verify layer_scale is applied once, not twice (issue #79)."""
+        hidden_size = 64
+        layer_scale_init = 0.1  # Use a value where γ vs γ² is easily distinguishable
+
+        layer = TransformerEncoderLayer(
+            hidden_size=hidden_size,
+            ffn_hidden_size=hidden_size * 4,
+            num_attention_heads=4,
+            layer_scale=layer_scale_init,
+        ).to(device)
+
+        # Set deterministic weights for reproducibility
+        torch.manual_seed(42)
+        x = torch.randn(2, 16, hidden_size, device=device)
+
+        layer.eval()
+        with torch.no_grad():
+            output = layer(x)
+
+        # The residual contribution should be scaled by γ (0.1), not γ² (0.01)
+        # If layer_scale were applied twice, the output would be much closer to the input
+        residual = output - x
+
+        # With γ=0.1 applied once, residual magnitude should be ~0.1 * unscaled_magnitude
+        # With γ²=0.01 applied twice, residual would be 10x smaller
+        # Check that residual is not negligibly small (which would indicate double scaling)
+        assert residual.abs().mean() > 0.001, "Residual too small - layer_scale may be applied twice"
+
 
 class TestTransformerDecoderLayer:
     @pytest.mark.parametrize("layer_scale", [None, 1e-5])

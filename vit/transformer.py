@@ -85,7 +85,7 @@ class TransformerEncoderLayer(nn.Module):
         o = self.layer_scale_attn(self.self_attention(x, rope=rope))
         x = x + drop_path(o, self.drop_path_rate, self.training)
 
-        o = self.layer_scale_mlp(self.layer_scale_mlp(self.mlp(x)))
+        o = self.layer_scale_mlp(self.mlp(x))
         x = x + drop_path(o, self.drop_path_rate, self.training)
         return x
 
