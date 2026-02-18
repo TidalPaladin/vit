@@ -1,6 +1,6 @@
 # ViT Benchmarking Tools
 
-Comprehensive benchmarking suite for Vision Transformer models.
+Comprehensive benchmarking suite for Vision Transformer models and transformer components.
 
 ## Installation
 
@@ -44,6 +44,22 @@ vit-benchmark \
     --latency-iters 200 \
     --output-dir results/
 ```
+
+### Component Benchmarking
+
+Use `vit-component-benchmark` for low-level, regression-oriented benchmarking of:
+- `mlp`
+- `self_attention`
+- `layer_scale_residual`
+- `drop_path_residual`
+
+The component benchmark CLI supports:
+- `run`
+- `compare`
+- `list-baselines`
+
+Detailed workflows, recipes, and interpretation guidance are maintained in:
+- `.agents/skills/vit-component-benchmark/SKILL.md`
 
 ### Using the Python API
 
@@ -101,6 +117,12 @@ plot_benchmark_results([result], output_dir, metric="latency")
 - `--plot-formats`: Output format(s) for plots (default: png svg)
 - `--dpi`: DPI for raster formats (default: 300)
 - `--no-plots`: Skip generating plots
+
+### Component CLI Highlights
+
+- `run`: execute component benchmark suites and save named runs
+- `compare`: compare baseline vs candidate and report regressions
+- `list-baselines`: list available runs under `benchmark_results/components/`
 
 ## Output
 

@@ -106,6 +106,12 @@ The benchmarking tool tracks:
 
 Results are saved as CSV files and visualized with publication-quality plots (PNG/SVG).
 
+For low-level optimization regression testing of core transformer components, use
+`vit-component-benchmark` (`run`, `compare`, `list-baselines`).
+Detailed workflow and recipes live in:
+- [`benchmark/README.md`](benchmark/README.md)
+- `.agents/skills/vit-component-benchmark/SKILL.md` (contributor skill documentation)
+
 See [`benchmark/README.md`](benchmark/README.md) for detailed documentation.
 
 ## References

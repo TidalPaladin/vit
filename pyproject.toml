@@ -67,6 +67,7 @@ filterwarnings = []
 
 [project.scripts]
 vit-benchmark = "benchmark.cli:main"
+vit-component-benchmark = "benchmark.component_cli:main"
 
 [dependency-groups]
 benchmarking = [
