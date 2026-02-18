@@ -11,6 +11,8 @@ from typing import Any
 
 import torch
 
+from vit.norm import NORM_TYPE_CHOICES
+
 from .component_benchmark import (
     DEFAULT_COMPONENTS,
     DEFAULT_PASS_MODES,
@@ -70,6 +72,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--autocast-dtype", choices=AUTOCAST_CHOICES, default="none")
 
     run_parser.add_argument("--activation", type=str)
+    run_parser.add_argument("--norm-type", choices=list(NORM_TYPE_CHOICES), default="rmsnorm")
     run_parser.add_argument("--use-rope", action=argparse.BooleanOptionalAction, default=None)
     run_parser.add_argument("--hidden-dropout", type=float)
     run_parser.add_argument("--attention-dropout", type=float)
@@ -163,6 +166,7 @@ def _run_command(args: argparse.Namespace) -> int:
         "num_heads": args.num_heads,
         "ffn_mults": args.ffn_mults,
         "activation": args.activation,
+        "norm_type": args.norm_type,
         "use_rope": args.use_rope,
         "hidden_dropout": args.hidden_dropout,
         "attention_dropout": args.attention_dropout,

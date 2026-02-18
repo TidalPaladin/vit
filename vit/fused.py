@@ -8,6 +8,7 @@ from torch import Tensor
 from torchao.quantization import quantize_
 
 from .helpers import get_activation
+from .norm import NormType, apply_norm, get_norm_bias, is_layer_norm, make_norm
 
 
 @torch.compile(fullgraph=True)
@@ -17,12 +18,14 @@ def norm_linear(
     weight: Tensor,
     bias: Tensor | None,
     norm_weight: Tensor,
+    norm_bias: Tensor | None,
+    use_layer_norm: bool,
     eps: float,
     dropout: float,
     training: bool,
     # fmt: on
 ) -> Tensor:
-    x = F.rms_norm(x, x.shape[-1:], weight=norm_weight, eps=eps)
+    x = apply_norm(x, norm_weight, norm_bias, eps, use_layer_norm=use_layer_norm)
     x = F.dropout(x, p=dropout, training=training)
     return F.linear(x, weight, bias)
 
@@ -33,6 +36,7 @@ class NormLinear(nn.Module):
         in_features: int,
         out_features: int,
         bias: bool = True,
+        norm_type: NormType = "rmsnorm",
         eps: float = 1e-5,
         dropout: float = 0.0,
         quantization_config: Any | None = None,
@@ -43,7 +47,8 @@ class NormLinear(nn.Module):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
-        self.norm = nn.RMSNorm(in_features, eps=eps, **factory_kwargs)
+        self.norm = make_norm(in_features, norm_type, eps=eps, **factory_kwargs)
+        self._use_layer_norm = is_layer_norm(norm_type)
         self.linear = nn.Linear(in_features, out_features, bias=bias, **factory_kwargs)
         self.dropout = nn.Dropout(dropout)
         self.quantization_config = quantization_config
@@ -65,6 +70,8 @@ class NormLinear(nn.Module):
             self.linear.weight,
             self.linear.bias,
             self.norm.weight,
+            get_norm_bias(self.norm),
+            self._use_layer_norm,
             self.norm.eps or 1e-5,
             self.dropout.p,
             self.training,
@@ -93,6 +100,8 @@ def norm_mlp(
     fc2_weight: Tensor,
     fc2_bias: Tensor | None,
     norm_weight: Tensor | None,
+    norm_bias: Tensor | None,
+    use_layer_norm: bool,
     activation: Callable[[Tensor], Tensor],
     eps: float,
     dropout: float,
@@ -100,7 +109,7 @@ def norm_mlp(
     # fmt: on
 ) -> Tensor:
     if norm_weight is not None:
-        x = F.rms_norm(x, x.shape[-1:], weight=norm_weight, eps=eps)
+        x = apply_norm(x, norm_weight, norm_bias, eps, use_layer_norm=use_layer_norm)
     x = F.linear(x, fc1_weight, fc1_bias)
     x = activation(x)
     x = F.dropout(x, p=dropout, training=training)
@@ -126,6 +135,8 @@ def norm_mlp_glu(
     fc2_weight: Tensor,
     fc2_bias: Tensor | None,
     norm_weight: Tensor | None,
+    norm_bias: Tensor | None,
+    use_layer_norm: bool,
     activation: Callable[[Tensor], Tensor],
     eps: float,
     dropout: float,
@@ -135,7 +146,7 @@ def norm_mlp_glu(
     # fmt: on
 ) -> Tensor:
     if norm_weight is not None:
-        x = F.rms_norm(x, x.shape[-1:], weight=norm_weight, eps=eps)
+        x = apply_norm(x, norm_weight, norm_bias, eps, use_layer_norm=use_layer_norm)
 
     # FC1 - GLU
     x = F.linear(x, fc1_weight, fc1_bias)
@@ -161,6 +172,7 @@ class NormMLP(nn.Module):
         ffn_hidden_size: int,
         bias: bool = True,
         activation: str = "gelu",
+        norm_type: NormType = "rmsnorm",
         eps: float = 1e-5,
         dropout: float = 0.1,
         limit: float | None = None,
@@ -171,7 +183,8 @@ class NormMLP(nn.Module):
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
-        self.norm = nn.RMSNorm(hidden_size, eps=eps, **factory_kwargs)
+        self.norm = make_norm(hidden_size, norm_type, eps=eps, **factory_kwargs)
+        self._use_layer_norm = is_layer_norm(norm_type)
         if activation.endswith("glu"):
             self._is_glu = True
             self.fc1 = nn.Linear(hidden_size, 2 * ffn_hidden_size, bias=bias, **factory_kwargs)
@@ -210,6 +223,8 @@ class NormMLP(nn.Module):
                 self.fc2.weight,
                 self.fc2.bias,
                 self.norm.weight,
+                get_norm_bias(self.norm),
+                self._use_layer_norm,
                 self.activation,
                 self.norm.eps or 1e-5,
                 self.dropout.p,
@@ -227,6 +242,8 @@ class NormMLP(nn.Module):
                 self.fc2.weight,
                 self.fc2.bias,
                 self.norm.weight,
+                get_norm_bias(self.norm),
+                self._use_layer_norm,
                 self.activation,
                 self.norm.eps or 1e-5,
                 self.dropout.p,

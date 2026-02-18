@@ -10,15 +10,17 @@ from vit.fused import NormLinear, NormMLP
 
 
 class TestNormLinear:
-    def test_forward(self, device):
-        layer_norm_linear = NormLinear(10, 20).to(device)
+    @pytest.mark.parametrize("norm_type", ["rmsnorm", "layernorm"])
+    def test_forward(self, device, norm_type):
+        layer_norm_linear = NormLinear(10, 20, norm_type=norm_type).to(device)
         x = torch.randn(10, device=device)
         with torch.autocast(device_type=device.type, dtype=torch.float32, enabled=True):
             y = layer_norm_linear(x)
         assert y.shape == (20,)
 
-    def test_backward(self, device):
-        layer_norm_linear = NormLinear(10, 20).to(device)
+    @pytest.mark.parametrize("norm_type", ["rmsnorm", "layernorm"])
+    def test_backward(self, device, norm_type):
+        layer_norm_linear = NormLinear(10, 20, norm_type=norm_type).to(device)
         x = torch.randn(10, device=device)
         with torch.autocast(device_type=device.type, dtype=torch.float32, enabled=True):
             y = layer_norm_linear(x)
@@ -60,8 +62,9 @@ class TestNormLinear:
 
 class TestNormMLP:
     @pytest.mark.parametrize("activation", ["relu", "swiglu", "srelu"])
-    def test_forward(self, device, activation):
-        layer_norm_mlp = NormMLP(10, 20, activation=activation).to(device)
+    @pytest.mark.parametrize("norm_type", ["rmsnorm", "layernorm"])
+    def test_forward(self, device, activation, norm_type):
+        layer_norm_mlp = NormMLP(10, 20, activation=activation, norm_type=norm_type).to(device)
         x = torch.randn(10, device=device)
         with torch.autocast(device_type=device.type, dtype=torch.float32, enabled=True):
             y = layer_norm_mlp(x)
@@ -82,8 +85,9 @@ class TestNormMLP:
         y4 = layer(x)
         assert not torch.allclose(y3, y4)
 
-    def test_backward(self, device):
-        layer_norm_mlp = NormMLP(10, 20).to(device)
+    @pytest.mark.parametrize("norm_type", ["rmsnorm", "layernorm"])
+    def test_backward(self, device, norm_type):
+        layer_norm_mlp = NormMLP(10, 20, norm_type=norm_type).to(device)
         x = torch.randn(10, device=device)
         with torch.autocast(device_type=device.type, dtype=torch.float32, enabled=True):
             y = layer_norm_mlp(x)

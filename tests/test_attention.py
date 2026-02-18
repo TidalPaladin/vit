@@ -1,4 +1,5 @@
 from copy import deepcopy
+from typing import cast
 
 import pytest
 import torch
@@ -11,17 +12,19 @@ from vit.attention import AttentivePool, CrossAttention, SelfAttention
 
 
 class TestSelfAttention:
-    def test_forward(self, device):
+    @pytest.mark.parametrize("norm_type", ["rmsnorm", "layernorm"])
+    def test_forward(self, device, norm_type):
         B, L, D = 16, 128, 128
-        multihead_attention = SelfAttention(D, D // 16).to(device)
+        multihead_attention = SelfAttention(D, D // 16, norm_type=norm_type).to(device)
         x = torch.randn(B, L, D, device=device)
         with torch.autocast(device_type=device.type, dtype=torch.float32):
             y = multihead_attention(x)
         assert y.shape == (B, L, D)
 
-    def test_backward(self, device):
+    @pytest.mark.parametrize("norm_type", ["rmsnorm", "layernorm"])
+    def test_backward(self, device, norm_type):
         B, L, D = 16, 128, 128
-        multihead_attention = SelfAttention(D, D // 16).to(device)
+        multihead_attention = SelfAttention(D, D // 16, norm_type=norm_type).to(device)
         x = torch.randn(B, L, D, device=device)
         with torch.autocast(device_type=device.type, dtype=torch.float32):
             y = multihead_attention(x)
@@ -45,10 +48,11 @@ class TestSelfAttention:
         y4 = layer(x)
         assert not torch.allclose(y3, y4)
 
-    def test_forward_weights(self, device):
+    @pytest.mark.parametrize("norm_type", ["rmsnorm", "layernorm"])
+    def test_forward_weights(self, device, norm_type):
         B, L, D = 16, 128, 128
         H = D // 16
-        multihead_attention = SelfAttention(D, H).to(device)
+        multihead_attention = SelfAttention(D, H, norm_type=norm_type).to(device)
         x = torch.randn(B, L, D, device=device)
         with torch.autocast(device_type=device.type, dtype=torch.float32):
             y = multihead_attention.forward_weights(x)
@@ -73,18 +77,20 @@ class TestSelfAttention:
 
 
 class TestCrossAttention:
-    def test_forward(self, device):
+    @pytest.mark.parametrize("norm_type", ["rmsnorm", "layernorm"])
+    def test_forward(self, device, norm_type):
         B, L, D = 16, 128, 128
-        multihead_attention = CrossAttention(D, D // 16).to(device)
+        multihead_attention = CrossAttention(D, D // 16, norm_type=norm_type).to(device)
         x = torch.randn(B, L, D, device=device)
         kv = torch.randn(B, L // 2, D, device=device)
         with torch.autocast(device_type=device.type, dtype=torch.float32):
             y = multihead_attention(x, kv)
         assert y.shape == (B, L, D)
 
-    def test_backward(self, device):
+    @pytest.mark.parametrize("norm_type", ["rmsnorm", "layernorm"])
+    def test_backward(self, device, norm_type):
         B, L, D = 16, 128, 128
-        multihead_attention = CrossAttention(D, D // 16).to(device)
+        multihead_attention = CrossAttention(D, D // 16, norm_type=norm_type).to(device)
         x = torch.randn(B, L, D, device=device)
         kv = torch.randn(B, L // 2, D, device=device)
         with torch.autocast(device_type=device.type, dtype=torch.float32):
@@ -110,10 +116,11 @@ class TestCrossAttention:
         y4 = layer(x, kv)
         assert not torch.allclose(y3, y4)
 
-    def test_forward_weights(self, device):
+    @pytest.mark.parametrize("norm_type", ["rmsnorm", "layernorm"])
+    def test_forward_weights(self, device, norm_type):
         B, L, D = 16, 128, 128
         H = D // 16
-        layer = CrossAttention(D, H).to(device)
+        layer = CrossAttention(D, H, norm_type=norm_type).to(device)
         x = torch.randn(B, L, D, device=device)
         kv = torch.randn(B, L // 2, D, device=device)
         with torch.autocast(device_type=device.type, dtype=torch.float32):
@@ -179,11 +186,12 @@ class TestAttentivePool:
 class TestAttentionWeightsScaling:
     """Test that forward_weights matches scaled_dot_product_attention scaling."""
 
-    def test_self_attention_weights_scaling(self, device):
+    @pytest.mark.parametrize("norm_type", ["rmsnorm", "layernorm"])
+    def test_self_attention_weights_scaling(self, device, norm_type):
         """Verify SelfAttention.forward_weights matches SDPA scaling."""
         B, L, D, H = 2, 16, 64, 4
         head_dim = D // H
-        layer = SelfAttention(D, H, hidden_dropout=0, attention_dropout=0).to(device)
+        layer = SelfAttention(D, H, hidden_dropout=0, attention_dropout=0, norm_type=norm_type).to(device)
         layer.eval()
         x = torch.randn(B, L, D, device=device)
 
@@ -191,9 +199,13 @@ class TestAttentionWeightsScaling:
         weights = layer.forward_weights(x)
 
         # Manually compute expected weights using the same projections
-        qkv = F.linear(
-            F.rms_norm(x, (D,), layer.norm.weight, layer.norm.eps), layer.qkv_proj.weight, layer.qkv_proj.bias
-        )
+        if norm_type == "layernorm":
+            layer_norm = cast(torch.nn.LayerNorm, layer.norm)
+            x_norm = F.layer_norm(x, (D,), layer_norm.weight, layer_norm.bias, layer_norm.eps)
+        else:
+            rms_norm = cast(torch.nn.RMSNorm, layer.norm)
+            x_norm = F.rms_norm(x, (D,), rms_norm.weight, rms_norm.eps)
+        qkv = F.linear(x_norm, layer.qkv_proj.weight, layer.qkv_proj.bias)
         q, k, v = qkv.chunk(3, dim=-1)
         q = q.view(B, L, H, head_dim).transpose(1, 2)
         k = k.view(B, L, H, head_dim).transpose(1, 2)

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
-import importlib.metadata
 
+from ._version import __version__
 from .head import (
     Head,
     HeadConfig,
@@ -15,9 +15,8 @@ from .vit import ViT, ViTConfig, ViTFeatures, register_constructors as register_
 
 register_vit_constructors()
 register_head_constructors()
-
-__version__ = importlib.metadata.version("vit")
 __all__ = [
+    "__version__",
     "ViT",
     "ViTConfig",
     "ViTFeatures",

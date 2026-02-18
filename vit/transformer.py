@@ -8,6 +8,7 @@ from .attention import CrossAttention, SelfAttention
 from .drop_path import drop_path
 from .fused import NormMLP
 from .layer_scale import LayerScale
+from .norm import NormType
 
 
 class TransformerEncoderLayer(nn.Module):
@@ -21,6 +22,7 @@ class TransformerEncoderLayer(nn.Module):
         attention_bias: bool = True,
         mlp_bias: bool = True,
         activation: str = "gelu",
+        norm_type: NormType = "rmsnorm",
         drop_path_rate: float = 0.0,
         eps: float = 1e-5,
         layer_scale: float | None = None,
@@ -36,26 +38,28 @@ class TransformerEncoderLayer(nn.Module):
         super().__init__()
         self.drop_path_rate = drop_path_rate
         self.self_attention = SelfAttention(
-            hidden_size,
-            num_attention_heads,
-            hidden_dropout,
-            attention_dropout,
-            attention_bias,
-            eps,
+            hidden_size=hidden_size,
+            num_attention_heads=num_attention_heads,
+            hidden_dropout=hidden_dropout,
+            attention_dropout=attention_dropout,
+            bias=attention_bias,
+            norm_type=norm_type,
+            eps=eps,
             qkv_quantization_config=qkv_quantization_config,
             out_quantization_config=attn_quantization_config,
             **factory_kwargs,
         )
         self.mlp = NormMLP(
-            hidden_size,
-            ffn_hidden_size,
-            mlp_bias,
-            activation,
-            eps,
-            hidden_dropout,
-            glu_limit,
-            glu_extra_bias,
-            mlp_quantization_config,
+            hidden_size=hidden_size,
+            ffn_hidden_size=ffn_hidden_size,
+            bias=mlp_bias,
+            activation=activation,
+            norm_type=norm_type,
+            eps=eps,
+            dropout=hidden_dropout,
+            limit=glu_limit,
+            extra_bias=glu_extra_bias,
+            quantization_config=mlp_quantization_config,
             **factory_kwargs,
         )
         self.layer_scale_attn = (
@@ -106,6 +110,7 @@ class TransformerDecoderLayer(nn.Module):
         attention_bias: bool = True,
         mlp_bias: bool = True,
         activation: str = "gelu",
+        norm_type: NormType = "rmsnorm",
         drop_path_rate: float = 0.0,
         eps: float = 1e-5,
         layer_scale: float | None = None,
@@ -121,37 +126,40 @@ class TransformerDecoderLayer(nn.Module):
         super().__init__()
         self.drop_path_rate = drop_path_rate
         self.self_attention = SelfAttention(
-            hidden_size,
-            num_attention_heads,
-            hidden_dropout,
-            attention_dropout,
-            attention_bias,
-            eps,
+            hidden_size=hidden_size,
+            num_attention_heads=num_attention_heads,
+            hidden_dropout=hidden_dropout,
+            attention_dropout=attention_dropout,
+            bias=attention_bias,
+            norm_type=norm_type,
+            eps=eps,
             qkv_quantization_config=qkv_quantization_config,
             out_quantization_config=attn_quantization_config,
             **factory_kwargs,
         )
         self.cross_attention = CrossAttention(
-            hidden_size,
-            num_attention_heads,
-            hidden_dropout,
-            attention_dropout,
-            attention_bias,
-            eps,
+            hidden_size=hidden_size,
+            num_attention_heads=num_attention_heads,
+            hidden_dropout=hidden_dropout,
+            attention_dropout=attention_dropout,
+            bias=attention_bias,
+            norm_type=norm_type,
+            eps=eps,
             qkv_quantization_config=qkv_quantization_config,
             out_quantization_config=attn_quantization_config,
             **factory_kwargs,
         )
         self.mlp = NormMLP(
-            hidden_size,
-            ffn_hidden_size,
-            mlp_bias,
-            activation,
-            eps,
-            hidden_dropout,
-            glu_limit,
-            glu_extra_bias,
-            mlp_quantization_config,
+            hidden_size=hidden_size,
+            ffn_hidden_size=ffn_hidden_size,
+            bias=mlp_bias,
+            activation=activation,
+            norm_type=norm_type,
+            eps=eps,
+            dropout=hidden_dropout,
+            limit=glu_limit,
+            extra_bias=glu_extra_bias,
+            quantization_config=mlp_quantization_config,
             **factory_kwargs,
         )
         self.layer_scale_attn = (
@@ -211,6 +219,7 @@ class CrossAttentionTransformer(nn.Module):
         attention_bias: bool = True,
         mlp_bias: bool = True,
         activation: str = "gelu",
+        norm_type: NormType = "rmsnorm",
         drop_path_rate: float = 0.0,
         eps: float = 1e-5,
         layer_scale: float | None = None,
@@ -226,26 +235,28 @@ class CrossAttentionTransformer(nn.Module):
         super().__init__()
         self.drop_path_rate = drop_path_rate
         self.cross_attention = CrossAttention(
-            hidden_size,
-            num_attention_heads,
-            hidden_dropout,
-            attention_dropout,
-            attention_bias,
-            eps,
+            hidden_size=hidden_size,
+            num_attention_heads=num_attention_heads,
+            hidden_dropout=hidden_dropout,
+            attention_dropout=attention_dropout,
+            bias=attention_bias,
+            norm_type=norm_type,
+            eps=eps,
             qkv_quantization_config=qkv_quantization_config,
             out_quantization_config=attn_quantization_config,
             **factory_kwargs,
         )
         self.mlp = NormMLP(
-            hidden_size,
-            ffn_hidden_size,
-            mlp_bias,
-            activation,
-            eps,
-            hidden_dropout,
-            glu_limit,
-            glu_extra_bias,
-            mlp_quantization_config,
+            hidden_size=hidden_size,
+            ffn_hidden_size=ffn_hidden_size,
+            bias=mlp_bias,
+            activation=activation,
+            norm_type=norm_type,
+            eps=eps,
+            dropout=hidden_dropout,
+            limit=glu_limit,
+            extra_bias=glu_extra_bias,
+            quantization_config=mlp_quantization_config,
             **factory_kwargs,
         )
         self.layer_scale_cross = (

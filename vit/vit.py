@@ -10,6 +10,7 @@ from torch import Tensor
 from torch.utils.checkpoint import checkpoint
 
 from .head import Head, HeadConfig, TransposedConv2dHead, UpsampleHead
+from .norm import NORM_TYPE_CHOICES, NormType, make_norm
 from .patch_embed import PatchEmbed2d, PatchEmbed3d
 from .pos_enc import PositionEncoder
 from .rope import RopePositionEmbedding
@@ -66,6 +67,7 @@ class ViTConfig:
     attention_bias: bool = True
     mlp_bias: bool = True
     activation: str = "srelu"
+    norm_type: NormType = "rmsnorm"
     drop_path_rate: float = 0.0
     num_register_tokens: int = 0
     num_cls_tokens: int = 0
@@ -101,6 +103,8 @@ class ViTConfig:
                 f"hidden_size ({self.hidden_size}) must be divisible by "
                 f"num_attention_heads ({self.num_attention_heads})"
             )
+        if self.norm_type not in NORM_TYPE_CHOICES:
+            raise ValueError(f"Unsupported norm_type: {self.norm_type}")
         if self.pos_enc == "fourier" and self.hidden_size % 2 != 0:
             raise ValueError(f"hidden_size ({self.hidden_size}) must be even when using Fourier positional encoding")
 
@@ -288,7 +292,7 @@ class ViT(nn.Module):
                 for _ in range(config.depth)
             ]
         )
-        self.output_norm = nn.RMSNorm(config.hidden_size, **factory_kwargs)
+        self.output_norm = make_norm(config.hidden_size, config.norm_type, device=device, dtype=config.dtype)
 
         self.mlp_requires_grad_(self.config.mlp_requires_grad)
         self.self_attention_requires_grad_(self.config.self_attention_requires_grad)
@@ -319,15 +323,16 @@ class ViT(nn.Module):
         device: torch.device | None = None,
     ) -> TransformerEncoderLayer:
         return TransformerEncoderLayer(
-            self.config.hidden_size,
-            self.config.ffn_hidden_size,
-            self.config.num_attention_heads,
-            self.config.hidden_dropout,
-            self.config.attention_dropout,
-            self.config.attention_bias,
-            self.config.mlp_bias,
-            self.config.activation,
-            self.config.drop_path_rate,
+            hidden_size=self.config.hidden_size,
+            ffn_hidden_size=self.config.ffn_hidden_size,
+            num_attention_heads=self.config.num_attention_heads,
+            hidden_dropout=self.config.hidden_dropout,
+            attention_dropout=self.config.attention_dropout,
+            attention_bias=self.config.attention_bias,
+            mlp_bias=self.config.mlp_bias,
+            activation=self.config.activation,
+            norm_type=self.config.norm_type,
+            drop_path_rate=self.config.drop_path_rate,
             layer_scale=self.config.layer_scale,
             glu_limit=self.config.glu_limit,
             glu_extra_bias=self.config.glu_extra_bias,
@@ -346,15 +351,16 @@ class ViT(nn.Module):
         device: torch.device | None = None,
     ) -> TransformerDecoderLayer:
         return TransformerDecoderLayer(
-            self.config.hidden_size,
-            self.config.ffn_hidden_size,
-            self.config.num_attention_heads,
-            self.config.hidden_dropout,
-            self.config.attention_dropout,
-            self.config.attention_bias,
-            self.config.mlp_bias,
-            self.config.activation,
-            self.config.drop_path_rate,
+            hidden_size=self.config.hidden_size,
+            ffn_hidden_size=self.config.ffn_hidden_size,
+            num_attention_heads=self.config.num_attention_heads,
+            hidden_dropout=self.config.hidden_dropout,
+            attention_dropout=self.config.attention_dropout,
+            attention_bias=self.config.attention_bias,
+            mlp_bias=self.config.mlp_bias,
+            activation=self.config.activation,
+            norm_type=self.config.norm_type,
+            drop_path_rate=self.config.drop_path_rate,
             layer_scale=self.config.layer_scale,
             glu_limit=self.config.glu_limit,
             glu_extra_bias=self.config.glu_extra_bias,
@@ -373,15 +379,16 @@ class ViT(nn.Module):
         device: torch.device | None = None,
     ) -> CrossAttentionTransformer:
         return CrossAttentionTransformer(
-            self.config.hidden_size,
-            self.config.ffn_hidden_size,
-            self.config.num_attention_heads,
-            self.config.hidden_dropout,
-            self.config.attention_dropout,
-            self.config.attention_bias,
-            self.config.mlp_bias,
-            self.config.activation,
-            self.config.drop_path_rate,
+            hidden_size=self.config.hidden_size,
+            ffn_hidden_size=self.config.ffn_hidden_size,
+            num_attention_heads=self.config.num_attention_heads,
+            hidden_dropout=self.config.hidden_dropout,
+            attention_dropout=self.config.attention_dropout,
+            attention_bias=self.config.attention_bias,
+            mlp_bias=self.config.mlp_bias,
+            activation=self.config.activation,
+            norm_type=self.config.norm_type,
+            drop_path_rate=self.config.drop_path_rate,
             layer_scale=self.config.layer_scale,
             glu_limit=self.config.glu_limit,
             glu_extra_bias=self.config.glu_extra_bias,
