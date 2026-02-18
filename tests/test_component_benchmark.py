@@ -3,6 +3,7 @@ from pathlib import Path
 
 import torch
 
+import benchmark.component_benchmark as component_benchmark
 from benchmark.component_benchmark import (
     build_component_benchmark_cases,
     compare_benchmark_runs,
@@ -74,6 +75,53 @@ def test_run_component_benchmark_case_backward_drop_path_cpu() -> None:
 
     assert result.stats.sample_count >= 1
     assert result.stats.mean_ms > 0
+
+
+def test_run_component_benchmark_case_honors_max_measurement_seconds(monkeypatch) -> None:
+    case = build_component_benchmark_cases(
+        components=["mlp"],
+        pass_modes=["forward"],
+        batch_sizes=[1],
+        seq_lens=[8],
+        hidden_sizes=[32],
+        ffn_mults=[2],
+    )[0]
+
+    monkeypatch.setattr(component_benchmark, "_build_target", lambda *_args, **_kwargs: object())
+
+    state = {"count": 0}
+
+    def fake_execute_iteration(*_args, **_kwargs):
+        state["count"] += 1
+        return 1.0
+
+    monkeypatch.setattr(component_benchmark, "_execute_iteration", fake_execute_iteration)
+
+    fake_time = {"value": 0.0}
+
+    def fake_perf_counter() -> float:
+        current = fake_time["value"]
+        fake_time["value"] += 0.03
+        return current
+
+    monkeypatch.setattr(component_benchmark.time, "perf_counter", fake_perf_counter)
+
+    min_samples = 100
+    result = run_component_benchmark_case(
+        case,
+        device=torch.device("cpu"),
+        param_dtype=torch.float32,
+        input_dtype=torch.float32,
+        autocast_dtype=None,
+        num_warmup_iters=0,
+        min_samples=min_samples,
+        min_measurement_seconds=0.0,
+        max_measurement_seconds=0.05,
+        include_memory=False,
+    )
+
+    assert result.stats.sample_count == state["count"]
+    assert result.stats.sample_count < min_samples
 
 
 def test_save_load_and_compare_component_benchmarks(tmp_path: Path) -> None:

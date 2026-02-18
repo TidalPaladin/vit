@@ -458,7 +458,9 @@ def run_component_benchmark_case(
         reached_min_duration = elapsed_seconds >= min_measurement_seconds
         reached_max_duration = elapsed_seconds >= max_measurement_seconds
 
-        if enough_samples and (reached_min_duration or reached_max_duration):
+        if reached_max_duration:
+            break
+        if enough_samples and reached_min_duration:
             break
 
     measurement_seconds = time.perf_counter() - measurement_start
