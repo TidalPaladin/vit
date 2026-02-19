@@ -129,6 +129,7 @@ loss.backward()
 Balancing loss semantics are routing-mode aware:
 - `expert_choice`: Switch-style importance/load dot-product loss (`N * sum(importance * load)`), which can naturally sit near `1.0` for balanced routing.
 - `token_choice`: V-MoE-style coefficient-of-variation loss (`cv^2(importance) + cv^2(load)`), which is non-negative with minimum `0`.
+  Token-choice routing uses batch-prioritized dispatch with per-expert capacity limits.
 
 ### Token-choice simple experts (MoE++)
 

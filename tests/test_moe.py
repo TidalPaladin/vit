@@ -169,6 +169,34 @@ class TestTokenChoiceMoE:
         else:
             assert dropped_tokens == 0
 
+    def test_batch_prioritized_routing_applies_capacity_across_topk_ranks(self, device):
+        hidden_size = 2
+        token_top_k = 2
+        num_experts = 2
+        capacity_factor = 0.5  # capacity = ceil((num_tokens * token_top_k / num_experts) * factor) = 1
+        layer = TokenChoiceMoE(
+            hidden_size=hidden_size,
+            ffn_hidden_size=8,
+            num_experts=num_experts,
+            token_top_k=token_top_k,
+            capacity_factor=capacity_factor,
+            drop_overflow_tokens=True,
+            norm_type="rmsnorm",
+            dropout=0.0,
+        ).to(device)
+        layer.eval()
+        with torch.no_grad():
+            layer.router.weight.copy_(torch.tensor([[10.0, 20.0], [9.0, -20.0]], device=device))
+            if layer.router.bias is not None:
+                layer.router.bias.zero_()
+
+        x = torch.tensor([[[1.0, 0.0], [0.0, 1.0]]], device=device)
+        _, _, expert_token_counts, dropped_token_count, capacity = layer.forward_with_aux(x)
+
+        assert int(capacity.item()) == 1
+        assert_close(expert_token_counts, torch.tensor([1, 1], device=device, dtype=torch.int64))
+        assert int(dropped_token_count.item()) == 1
+
     @pytest.mark.parametrize(("token_top_k", "num_experts"), [(0, 4), (5, 4)])
     def test_invalid_token_top_k_raises(self, token_top_k, num_experts):
         with pytest.raises(ValueError, match="token_top_k must be"):

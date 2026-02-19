@@ -478,6 +478,52 @@ class TokenChoiceMoE(_PackedExpertsMoE):
         assignments = num_tokens * token_top_k
         return max(1, math.ceil(self.expert_capacity_factor * assignments / self.num_experts))
 
+    def _batch_prioritized_assignments(
+        self,
+        *,
+        router_probs_flat: Tensor,
+        token_top_k: int,
+        capacity: int,
+    ) -> tuple[Tensor, Tensor]:
+        top_scores, top_experts = torch.topk(router_probs_flat, k=token_top_k, dim=-1, sorted=True)
+        token_priority = top_scores[:, 0]
+        num_tokens = router_probs_flat.shape[0]
+        priority_order = torch.argsort(token_priority, descending=True)
+        ordered_token_indices = torch.arange(
+            num_tokens, device=router_probs_flat.device, dtype=torch.long
+        ).index_select(0, priority_order)
+        ordered_experts = top_experts.index_select(0, priority_order)
+
+        expert_load = torch.zeros(self.num_experts, device=router_probs_flat.device, dtype=torch.int64)
+        selected_token_indices: list[Tensor] = []
+        selected_expert_indices: list[Tensor] = []
+
+        for rank_idx in range(token_top_k):
+            candidate_experts = ordered_experts[:, rank_idx]
+            one_hot = F.one_hot(candidate_experts, num_classes=self.num_experts).to(dtype=torch.int64)
+            local_positions = torch.cumsum(one_hot, dim=0) - 1
+            local_positions = local_positions.gather(1, candidate_experts.unsqueeze(-1)).squeeze(-1)
+            global_positions = expert_load.index_select(0, candidate_experts) + local_positions
+            keep_mask = global_positions < capacity
+            if not keep_mask.any():
+                continue
+
+            kept_token_indices = ordered_token_indices[keep_mask]
+            kept_expert_indices = candidate_experts[keep_mask]
+            selected_token_indices.append(kept_token_indices)
+            selected_expert_indices.append(kept_expert_indices)
+            expert_load = expert_load + torch.bincount(kept_expert_indices, minlength=self.num_experts).to(
+                dtype=torch.int64
+            )
+
+        if not selected_token_indices:
+            return (
+                torch.empty(0, device=router_probs_flat.device, dtype=torch.long),
+                torch.empty(0, device=router_probs_flat.device, dtype=torch.long),
+            )
+
+        return torch.cat(selected_token_indices, dim=0), torch.cat(selected_expert_indices, dim=0)
+
     def forward_with_aux(self, x: Tensor) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         x = self._apply_input_norm(x)
         batch_size, sequence_length, hidden_size = x.shape
@@ -493,24 +539,17 @@ class TokenChoiceMoE(_PackedExpertsMoE):
         )
         output, gate_sums, expert_token_counts = self._init_dispatch_buffers(x_flat)
 
-        top_scores, top_experts = torch.topk(router_logits_flat, k=token_top_k, dim=-1, sorted=False)
-        all_token_indices = (
-            torch.arange(num_tokens, device=x.device, dtype=torch.long).unsqueeze(1).expand(-1, token_top_k).reshape(-1)
+        selected_token_indices, selected_expert_indices = self._batch_prioritized_assignments(
+            router_probs_flat=router_probs_flat,
+            token_top_k=token_top_k,
+            capacity=capacity,
         )
-        all_expert_indices = top_experts.reshape(-1)
-        all_scores = top_scores.reshape(-1)
 
         for expert_idx in range(self.num_experts):
-            assignment_mask = all_expert_indices == expert_idx
+            assignment_mask = selected_expert_indices == expert_idx
             if not assignment_mask.any():
                 continue
-            candidate_token_indices = all_token_indices[assignment_mask]
-            candidate_scores = all_scores[assignment_mask]
-            if candidate_token_indices.numel() > capacity:
-                _, keep_indices = torch.topk(candidate_scores, k=capacity, dim=0, sorted=False)
-                token_indices = candidate_token_indices.index_select(0, keep_indices)
-            else:
-                token_indices = candidate_token_indices
+            token_indices = selected_token_indices[assignment_mask]
             self._dispatch_tokens_to_expert(
                 expert_idx=expert_idx,
                 token_indices=token_indices,
