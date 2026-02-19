@@ -105,6 +105,23 @@ class TestViT:
         out = model(x)
         assert out.visual_tokens.shape[-1] == config.hidden_size
 
+    def test_rmsnorm_output_norm_preserves_default_eps_behavior(self):
+        config = ViTConfig(
+            in_channels=3,
+            patch_size=(16, 16),
+            img_size=(224, 224),
+            depth=1,
+            hidden_size=64,
+            ffn_hidden_size=128,
+            num_attention_heads=4,
+            pos_enc="learnable",
+            norm_type="rmsnorm",
+            dtype=torch.float32,
+        )
+        model = ViT(config)
+        assert isinstance(model.output_norm, nn.RMSNorm)
+        assert model.output_norm.eps is None
+
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
     def test_all_params_initialized_with_correct_dtype_and_device(self, device, dtype):
         """Verify all parameters (including heads) are initialized with correct dtype and device."""

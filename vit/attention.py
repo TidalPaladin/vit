@@ -280,12 +280,12 @@ class SelfAttention(nn.Module):
         hidden_dropout: float = 0.1,
         attention_dropout: float = 0.1,
         bias: bool = True,
-        norm_type: NormType = "rmsnorm",
         eps: float = 1e-5,
         qkv_quantization_config: Any | None = None,
         out_quantization_config: Any | None = None,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
+        norm_type: NormType = "rmsnorm",
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -365,12 +365,12 @@ class CrossAttention(nn.Module):
         hidden_dropout: float = 0.1,
         attention_dropout: float = 0.1,
         bias: bool = True,
-        norm_type: NormType = "rmsnorm",
         eps: float = 1e-5,
         qkv_quantization_config: Any | None = None,
         out_quantization_config: Any | None = None,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
+        norm_type: NormType = "rmsnorm",
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()

@@ -22,7 +22,6 @@ class TransformerEncoderLayer(nn.Module):
         attention_bias: bool = True,
         mlp_bias: bool = True,
         activation: str = "gelu",
-        norm_type: NormType = "rmsnorm",
         drop_path_rate: float = 0.0,
         eps: float = 1e-5,
         layer_scale: float | None = None,
@@ -33,6 +32,7 @@ class TransformerEncoderLayer(nn.Module):
         attn_quantization_config: Any | None = None,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
+        norm_type: NormType = "rmsnorm",
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -110,7 +110,6 @@ class TransformerDecoderLayer(nn.Module):
         attention_bias: bool = True,
         mlp_bias: bool = True,
         activation: str = "gelu",
-        norm_type: NormType = "rmsnorm",
         drop_path_rate: float = 0.0,
         eps: float = 1e-5,
         layer_scale: float | None = None,
@@ -121,6 +120,7 @@ class TransformerDecoderLayer(nn.Module):
         attn_quantization_config: Any | None = None,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
+        norm_type: NormType = "rmsnorm",
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -219,7 +219,6 @@ class CrossAttentionTransformer(nn.Module):
         attention_bias: bool = True,
         mlp_bias: bool = True,
         activation: str = "gelu",
-        norm_type: NormType = "rmsnorm",
         drop_path_rate: float = 0.0,
         eps: float = 1e-5,
         layer_scale: float | None = None,
@@ -230,6 +229,7 @@ class CrossAttentionTransformer(nn.Module):
         attn_quantization_config: Any | None = None,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
+        norm_type: NormType = "rmsnorm",
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()

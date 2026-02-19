@@ -383,13 +383,13 @@ def run_component_benchmark_suite(
     layer_scale_init: float | None = None,
     bias: bool | None = None,
     eps: float | None = None,
-    norm_type: NormType = "rmsnorm",
     num_warmup_iters: int = 10,
     min_samples: int = 30,
     min_measurement_seconds: float = 1.0,
     max_measurement_seconds: float = 10.0,
     include_memory: bool = False,
     num_memory_iters: int = 5,
+    norm_type: NormType = "rmsnorm",
 ) -> list[ComponentBenchmarkResult]:
     """Run all benchmark cases in a configured suite."""
     cases = build_component_benchmark_cases(

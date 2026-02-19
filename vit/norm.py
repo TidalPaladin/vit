@@ -18,7 +18,7 @@ def is_layer_norm(norm_type: NormType) -> bool:
 def make_norm(
     hidden_size: int,
     norm_type: NormType,
-    eps: float = 1e-5,
+    eps: float | None = None,
     *,
     device: torch.device | None = None,
     dtype: torch.dtype | None = None,
@@ -27,7 +27,7 @@ def make_norm(
     if norm_type == "rmsnorm":
         return nn.RMSNorm(hidden_size, eps=eps, **factory_kwargs)
     if norm_type == "layernorm":
-        return nn.LayerNorm(hidden_size, eps=eps, **factory_kwargs)
+        return nn.LayerNorm(hidden_size, eps=eps if eps is not None else 1e-5, **factory_kwargs)
     raise ValueError(f"Unsupported norm_type: {norm_type}")
 
 

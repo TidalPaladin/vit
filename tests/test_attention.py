@@ -12,6 +12,10 @@ from vit.attention import AttentivePool, CrossAttention, SelfAttention
 
 
 class TestSelfAttention:
+    def test_positional_eps_argument_is_backward_compatible(self, device):
+        layer = SelfAttention(128, 8, 0.1, 0.1, True, 1e-6).to(device)
+        assert layer.norm.eps == 1e-6
+
     @pytest.mark.parametrize("norm_type", ["rmsnorm", "layernorm"])
     def test_forward(self, device, norm_type):
         B, L, D = 16, 128, 128

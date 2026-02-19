@@ -67,7 +67,6 @@ class ViTConfig:
     attention_bias: bool = True
     mlp_bias: bool = True
     activation: str = "srelu"
-    norm_type: NormType = "rmsnorm"
     drop_path_rate: float = 0.0
     num_register_tokens: int = 0
     num_cls_tokens: int = 0
@@ -92,6 +91,7 @@ class ViTConfig:
 
     # Master weight dtype (default BF16)
     dtype: torch.dtype = torch.bfloat16
+    norm_type: NormType = "rmsnorm"
 
     # Heads
     heads: dict[str, HeadConfig] = field(default_factory=dict)

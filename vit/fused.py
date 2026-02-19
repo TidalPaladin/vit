@@ -36,12 +36,12 @@ class NormLinear(nn.Module):
         in_features: int,
         out_features: int,
         bias: bool = True,
-        norm_type: NormType = "rmsnorm",
         eps: float = 1e-5,
         dropout: float = 0.0,
         quantization_config: Any | None = None,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
+        norm_type: NormType = "rmsnorm",
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -172,7 +172,6 @@ class NormMLP(nn.Module):
         ffn_hidden_size: int,
         bias: bool = True,
         activation: str = "gelu",
-        norm_type: NormType = "rmsnorm",
         eps: float = 1e-5,
         dropout: float = 0.1,
         limit: float | None = None,
@@ -180,6 +179,7 @@ class NormMLP(nn.Module):
         quantization_config: Any | None = None,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
+        norm_type: NormType = "rmsnorm",
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
