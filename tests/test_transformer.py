@@ -83,6 +83,35 @@ class TestTransformerEncoderLayer:
         # With correct single application, it should be γ * unscaled (0.1x)
         assert_close(mlp_out_scaled, expected_scaled, rtol=1e-4, atol=1e-6)
 
+    def test_forward_with_moe_tensors(self, device):
+        B, L, D = 2, 64, 64
+        layer = TransformerEncoderLayer(
+            hidden_size=D,
+            ffn_hidden_size=4 * D,
+            num_attention_heads=4,
+            use_moe=True,
+            moe_num_experts=4,
+            moe_token_top_k=2,
+        ).to(device)
+        x = torch.randn(B, L, D, device=device)
+        y, router_logits, expert_token_counts, dropped_token_count, capacity = layer.forward_with_moe_tensors(x)
+        assert y.shape == (B, L, D)
+        assert router_logits.shape == (B, L, 4)
+        assert expert_token_counts.shape == (4,)
+        assert dropped_token_count.ndim == 0
+        assert capacity.ndim == 0
+
+    def test_forward_with_moe_tensors_raises_on_dense_layer(self, device):
+        B, L, D = 2, 64, 64
+        layer = TransformerEncoderLayer(
+            hidden_size=D,
+            ffn_hidden_size=4 * D,
+            num_attention_heads=4,
+        ).to(device)
+        x = torch.randn(B, L, D, device=device)
+        with pytest.raises(RuntimeError, match="non-MoE encoder layer"):
+            layer.forward_with_moe_tensors(x)
+
 
 class TestTransformerDecoderLayer:
     @pytest.mark.parametrize("layer_scale", [None, 1e-5])

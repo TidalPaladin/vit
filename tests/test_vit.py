@@ -174,6 +174,18 @@ class TestViT:
         config_from_str = ViTConfig.from_yaml(config_str)
         assert config == config_from_str
 
+    def test_moe_config_from_yaml_str(self, config):
+        config = replace(
+            config,
+            moe_block_indices=(0, 2),
+            moe_num_experts=4,
+            moe_token_top_k=2,
+            moe_aux_loss_weight=0.01,
+        )
+        config_str = config.to_yaml()
+        config_from_str = ViTConfig.from_yaml(config_str)
+        assert config == config_from_str
+
     def test_config_from_yaml_path(self, config, tmp_path):
         path = tmp_path / "config.yaml"
         with open(path, "w") as f:
@@ -222,6 +234,47 @@ class TestViT:
         with torch.autocast(device_type=device.type, dtype=torch.float32, enabled=True):
             out = model(x)
         assert out.cls_tokens.shape == (2, num_cls_tokens, 128)
+
+    def test_forward_without_moe_has_no_moe_stats(self, device, config):
+        x = torch.randn(2, 3, *config.img_size, device=device)
+        model = ViT(config).to(device)
+        out = model(x)
+        assert out.moe is None
+
+    def test_forward_with_moe_exposes_layer_stats(self, device, config):
+        config = replace(
+            config,
+            moe_block_indices=(1,),
+            moe_num_experts=4,
+            moe_expert_capacity_factor=0.75,
+            moe_token_top_k=2,
+        )
+        x = torch.randn(2, 3, *config.img_size, device=device)
+        model = ViT(config).to(device)
+        out = model(x)
+
+        assert out.moe is not None
+        assert sorted(out.moe.layers) == [1]
+        layer_stats = out.moe.layers[1]
+        assert layer_stats.router_logits.shape == (2, out.dense_features.shape[1], config.moe_num_experts)
+        assert layer_stats.expert_token_counts.shape == (config.moe_num_experts,)
+        assert layer_stats.dropped_token_count.ndim == 0
+        assert layer_stats.capacity.ndim == 0
+        assert layer_stats.load_balancing_loss().shape == ()
+        layer_health = layer_stats.router_health_metrics()
+        assert layer_health.drop_rate.ndim == 0
+        assert layer_health.capacity_utilization_mean.ndim == 0
+        assert layer_health.capacity_utilization_peak.ndim == 0
+        assert layer_health.expert_load_cv.ndim == 0
+        assert layer_health.router_importance_cv.ndim == 0
+        assert layer_health.router_entropy.ndim == 0
+        assert layer_health.expert_usage_fraction.ndim == 0
+        assert int(layer_health.layer_count.item()) == 1
+        assert out.moe.load_balancing_loss().shape == ()
+        aggregate_health = out.moe.router_health_metrics()
+        assert aggregate_health.drop_rate.ndim == 0
+        assert int(aggregate_health.layer_count.item()) == 1
+        assert_close(aggregate_health.drop_rate, layer_health.drop_rate)
 
     @pytest.mark.parametrize("num_register_tokens", [0, 2])
     def test_forward_masked(self, device, config, num_register_tokens):
@@ -347,6 +400,42 @@ class TestViT:
                 norm_type="invalid",  # type: ignore[arg-type]
             )
 
+    def test_moe_block_indices_out_of_range_raises(self, config):
+        with pytest.raises(ValueError, match="moe_block_indices must be in"):
+            replace(config, moe_block_indices=(config.depth,), moe_num_experts=2)
+
+    def test_moe_block_indices_duplicates_raise(self, config):
+        with pytest.raises(ValueError, match="moe_block_indices must not contain duplicates"):
+            replace(config, moe_block_indices=(1, 1), moe_num_experts=2)
+
+    def test_moe_block_indices_require_positive_experts(self, config):
+        with pytest.raises(ValueError, match="moe_num_experts must be > 0"):
+            replace(config, moe_block_indices=(0,), moe_num_experts=0)
+
+    @pytest.mark.parametrize("token_top_k", [0, -1])
+    def test_token_choice_moe_top_k_must_be_positive(self, config, token_top_k):
+        with pytest.raises(ValueError, match="moe_token_top_k must be > 0"):
+            replace(
+                config,
+                moe_block_indices=(0,),
+                moe_num_experts=2,
+                moe_token_top_k=token_top_k,
+            )
+
+    def test_token_choice_moe_top_k_must_not_exceed_num_experts(self, config):
+        with pytest.raises(ValueError, match="moe_token_top_k must be <= moe_num_experts"):
+            replace(
+                config,
+                moe_block_indices=(0,),
+                moe_num_experts=2,
+                moe_token_top_k=3,
+            )
+
+    @pytest.mark.parametrize("capacity_factor", [0.0, -0.1])
+    def test_moe_capacity_factor_must_be_positive(self, config, capacity_factor):
+        with pytest.raises(ValueError, match="moe_expert_capacity_factor must be > 0"):
+            replace(config, moe_block_indices=(0,), moe_num_experts=2, moe_expert_capacity_factor=capacity_factor)
+
     def test_fourier_pos_enc_with_odd_hidden_size_raises(self):
         """Verify that ValueError is raised when using Fourier pos_enc with odd hidden_size."""
         with pytest.raises(ValueError, match="hidden_size.*must be even.*Fourier"):
@@ -452,6 +541,11 @@ class TestViTFeatures:
         features_plus_one = features.apply(lambda x: x + 1)
         assert features_plus_one.tokenized_size == tokenized_size
 
+    def test_apply_preserves_moe_stats(self):
+        features = ViTFeatures(torch.randn(2, 64, 128), 0, 0)
+        updated = features.apply(lambda x: x + 1)
+        assert updated.moe is None
+
     def test_from_separate_features_with_tokenized_size(self):
         cls_tokens = torch.randn(2, 1, 128)
         register_tokens = torch.randn(2, 2, 128)
@@ -530,3 +624,27 @@ class TestCompile:
         for name, param in model.named_parameters():
             if param.requires_grad:
                 assert param.grad is not None, f"{name} has no gradient"
+                assert not param.grad.isnan().any(), f"{name} has nan gradient"
+
+    @pytest.mark.compile
+    @pytest.mark.cuda
+    def test_compile_forward_with_moe(self):
+        config = ViTConfig(
+            in_channels=3,
+            patch_size=(16, 16),
+            img_size=(224, 224),
+            depth=2,
+            hidden_size=128,
+            ffn_hidden_size=256,
+            num_attention_heads=8,
+            pos_enc="learnable",
+            dtype=torch.float32,
+            moe_block_indices=(1,),
+            moe_num_experts=4,
+            moe_token_top_k=2,
+        )
+        model = ViT(config).cuda()
+        x = torch.randn(2, 3, 224, 224, device="cuda")
+        out = model(x)
+        assert out.moe is not None
+        assert sorted(out.moe.layers) == [1]

@@ -158,6 +158,29 @@ class TestActivationCheckpointing:
                 assert param.grad is not None, f"{name} has no gradient with mask"
                 assert not param.grad.isnan().any(), f"{name} has nan gradient with mask"
 
+    def test_checkpointing_with_moe(self, device, config):
+        """Verify checkpointing keeps MoE aux tensors usable for training loss."""
+        config = replace(
+            config,
+            activation_checkpointing=True,
+            moe_block_indices=(1,),
+            moe_num_experts=4,
+            moe_token_top_k=2,
+            moe_aux_loss_weight=0.1,
+        )
+        model = ViT(config).to(device)
+        model.train()
+        x = torch.randn(2, 3, 224, 224, device=device, requires_grad=True)
+        out = model(x)
+        assert out.moe is not None
+        loss = out.dense_features.sum() + config.moe_aux_loss_weight * out.moe.load_balancing_loss()
+        loss.backward()
+
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                assert param.grad is not None, f"{name} has no gradient with MoE checkpointing"
+                assert not param.grad.isnan().any(), f"{name} has nan gradient with MoE checkpointing"
+
     def test_checkpointing_with_drop_path(self, device, config):
         """Verify checkpointing handles stochastic depth correctly."""
         config = replace(config, activation_checkpointing=True, drop_path_rate=0.1)
