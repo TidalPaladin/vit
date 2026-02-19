@@ -8,11 +8,11 @@ from .attention import CrossAttention, SelfAttention
 from .drop_path import drop_path
 from .fused import NormMLP
 from .layer_scale import LayerScale
-from .moe import ExpertChoiceMoE, RoutingMode, TokenChoiceMoE
+from .moe import MoE
 from .norm import NormType
 
 
-MLPModule = NormMLP | ExpertChoiceMoE | TokenChoiceMoE
+MLPModule = NormMLP | MoE
 
 
 def _build_mlp(
@@ -34,51 +34,15 @@ def _build_mlp(
     moe_expert_capacity_factor: float = 1.0,
     moe_router_jitter_noise: float = 0.0,
     moe_drop_overflow_tokens: bool = True,
-    moe_routing_mode: RoutingMode = "expert_choice",
     moe_token_top_k: int = 2,
-    moe_use_simple_experts: bool = False,
-    moe_num_zero_experts: int = 0,
-    moe_num_copy_experts: int = 0,
-    moe_num_constant_experts: int = 0,
 ) -> MLPModule:
     factory_kwargs = {"device": device, "dtype": dtype}
     if use_moe:
-        if moe_routing_mode == "token_choice":
-            return TokenChoiceMoE(
-                hidden_size=hidden_size,
-                ffn_hidden_size=ffn_hidden_size,
-                num_experts=moe_num_experts,
-                token_top_k=moe_token_top_k,
-                bias=bias,
-                activation=activation,
-                norm_type=norm_type,
-                eps=eps,
-                dropout=dropout,
-                limit=limit,
-                extra_bias=extra_bias,
-                capacity_factor=moe_expert_capacity_factor,
-                router_jitter_noise=moe_router_jitter_noise,
-                drop_overflow_tokens=moe_drop_overflow_tokens,
-                quantization_config=quantization_config,
-                use_simple_experts=moe_use_simple_experts,
-                num_zero_experts=moe_num_zero_experts,
-                num_copy_experts=moe_num_copy_experts,
-                num_constant_experts=moe_num_constant_experts,
-                **factory_kwargs,
-            )
-        if (
-            moe_use_simple_experts
-            or moe_num_zero_experts > 0
-            or moe_num_copy_experts > 0
-            or moe_num_constant_experts > 0
-        ):
-            raise ValueError("simple experts are only supported for token_choice routing")
-        if moe_routing_mode != "expert_choice":
-            raise ValueError(f"Unsupported MoE routing mode: {moe_routing_mode}")
-        return ExpertChoiceMoE(
+        return MoE(
             hidden_size=hidden_size,
             ffn_hidden_size=ffn_hidden_size,
             num_experts=moe_num_experts,
+            token_top_k=moe_token_top_k,
             bias=bias,
             activation=activation,
             norm_type=norm_type,
@@ -134,12 +98,7 @@ class TransformerEncoderLayer(nn.Module):
         moe_expert_capacity_factor: float = 1.0,
         moe_router_jitter_noise: float = 0.0,
         moe_drop_overflow_tokens: bool = True,
-        moe_routing_mode: RoutingMode = "expert_choice",
         moe_token_top_k: int = 2,
-        moe_use_simple_experts: bool = False,
-        moe_num_zero_experts: int = 0,
-        moe_num_copy_experts: int = 0,
-        moe_num_constant_experts: int = 0,
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -175,12 +134,7 @@ class TransformerEncoderLayer(nn.Module):
             moe_expert_capacity_factor=moe_expert_capacity_factor,
             moe_router_jitter_noise=moe_router_jitter_noise,
             moe_drop_overflow_tokens=moe_drop_overflow_tokens,
-            moe_routing_mode=moe_routing_mode,
             moe_token_top_k=moe_token_top_k,
-            moe_use_simple_experts=moe_use_simple_experts,
-            moe_num_zero_experts=moe_num_zero_experts,
-            moe_num_copy_experts=moe_num_copy_experts,
-            moe_num_constant_experts=moe_num_constant_experts,
         )
         self.layer_scale_attn = (
             LayerScale(hidden_size, layer_scale, inplace=True, **factory_kwargs)
@@ -216,7 +170,7 @@ class TransformerEncoderLayer(nn.Module):
     def forward_with_moe_tensors(
         self, x: Tensor, rope: Tensor | None = None
     ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
-        if not isinstance(self.mlp, (ExpertChoiceMoE, TokenChoiceMoE)):
+        if not isinstance(self.mlp, MoE):
             raise RuntimeError("forward_with_moe_tensors called on a non-MoE encoder layer")
 
         o = self.layer_scale_attn(self.self_attention(x, rope=rope))
