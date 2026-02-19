@@ -1,7 +1,7 @@
 # ViT
 
 Implementation of Vision Transformer (ViT) in native PyTorch, accelerated by `torch.compile`.
-Supports modern enhancements like RMSNorm, SwiGLU, Squared ReLU, register tokens, and different positional encodings. This implementation does not incorporate a `CLS` token.
+Supports modern enhancements like RMSNorm, SwiGLU, Squared ReLU, register tokens, optional `CLS` tokens, and different positional encodings.
 
 ## Installation
 
@@ -23,38 +23,100 @@ pip install "vit[benchmarking] @ git+https://github.com/TidalPaladin/vit.git"
 import torch
 from vit import ViTConfig, HeadConfig
 
-# Create ViT-B/14, RMSNorm + SwiGLU, no biases
+# Create a ViT backbone
 config = ViTConfig(
     in_channels=3,
     patch_size=(14, 14),
-    img_size=(224, 224)
+    img_size=(224, 224),
     depth=12,
     hidden_size=768,
     ffn_hidden_size=3072,
     num_attention_heads=12,
     hidden_dropout=0.1,
     attention_dropout=0.1,
-    bias=False,
-    activation="swiglu", # or srelu, gelu, etc.
+    attention_bias=False,
+    mlp_bias=False,
+    activation="swiglu",  # or srelu, gelu, etc.
     drop_path_rate=0.1,
     num_register_tokens=16,
     pos_enc="fourier",
     layer_scale=1e-5,
     heads={
-        "cls": HeadConfig(pool_type="attentive", out_dim=10)
-    }
+        "cls": HeadConfig(out_features=10),
+    },
 )
 model = config.instantiate()
 
 # Forward pass for features
 B, C, H, W = 1, 3, 224, 224
 x = torch.randn(B, C, H, W)
-features = model(x) # B, L, D
-features_with_register_tokens = model(x, return_register_tokens=True)
+features = model(x)
 
-# Apply classification head
-logits = model.heads["cls"](features) # B, 10
+# Apply a classification head (pool first)
+pooled = features.visual_tokens.mean(dim=1)
+logits = model.heads["cls"](pooled)  # (B, 10)
 ```
+
+`model(x)` returns a `ViTFeatures` object with:
+- `dense_features`
+- `visual_tokens`
+- `register_tokens`
+- `cls_tokens`
+- `tokenized_size`
+
+## Mixture of Experts (MoE)
+
+You can convert selected encoder MLP blocks to expert-choice MoE by index via `moe_block_indices`.
+
+```python
+import torch
+from vit import ViTConfig
+
+config = ViTConfig(
+    in_channels=3,
+    patch_size=(16, 16),
+    img_size=(224, 224),
+    depth=12,
+    hidden_size=768,
+    ffn_hidden_size=3072,
+    num_attention_heads=12,
+    activation="swiglu",
+    moe_block_indices=(2, 5, 8, 11),  # encoder layer indices to convert
+    moe_num_experts=8,
+    moe_expert_capacity_factor=1.0,
+    moe_router_jitter_noise=0.01,
+    moe_drop_overflow_tokens=True,
+    moe_aux_loss_weight=0.01,
+    dtype=torch.float32,
+)
+model = config.instantiate()
+
+x = torch.randn(4, 3, 224, 224)
+features = model(x)
+```
+
+When MoE is enabled, routing diagnostics are exposed on `features.moe`:
+- `features.moe.layers[layer_idx].router_logits`
+- `features.moe.layers[layer_idx].expert_token_counts`
+- `features.moe.layers[layer_idx].dropped_token_count`
+- `features.moe.layers[layer_idx].capacity`
+
+### Applying the load-balancing loss
+
+`MoEStats` includes a built-in helper for balancing loss aggregation:
+
+```python
+# Example training step
+features = model(images)
+pooled = features.visual_tokens.mean(dim=1)
+task_loss = criterion(model.heads["cls"](pooled), labels)
+
+moe_loss = features.moe.load_balancing_loss() if features.moe is not None else task_loss.new_zeros(())
+loss = task_loss + config.moe_aux_loss_weight * moe_loss
+loss.backward()
+```
+
+MoE MLP compute paths are designed to follow the same compile-first pattern used by dense MLP blocks.
 
 ## Activation Checkpointing
 

@@ -10,6 +10,7 @@ from torch import Tensor
 from torch.utils.checkpoint import checkpoint
 
 from .head import Head, HeadConfig, TransposedConv2dHead, UpsampleHead
+from .moe import MoELayerStats, MoEStats
 from .norm import NORM_TYPE_CHOICES, NormType, make_norm
 from .patch_embed import PatchEmbed2d, PatchEmbed3d
 from .pos_enc import PositionEncoder
@@ -74,6 +75,12 @@ class ViTConfig:
     layer_scale: float | None = None
     glu_limit: float | None = None
     glu_extra_bias: float | None = None
+    moe_block_indices: tuple[int, ...] = ()
+    moe_num_experts: int = 0
+    moe_expert_capacity_factor: float = 1.0
+    moe_router_jitter_noise: float = 0.0
+    moe_drop_overflow_tokens: bool = True
+    moe_aux_loss_weight: float = 0.0
 
     # RoPE options
     rope_normalize_coords: Literal["min", "max", "separate"] = "separate"
@@ -98,6 +105,9 @@ class ViTConfig:
 
     def __post_init__(self) -> None:
         """Validate configuration parameters."""
+        block_indices = tuple(self.moe_block_indices)
+        object.__setattr__(self, "moe_block_indices", block_indices)
+
         if self.hidden_size % self.num_attention_heads != 0:
             raise ValueError(
                 f"hidden_size ({self.hidden_size}) must be divisible by "
@@ -107,6 +117,20 @@ class ViTConfig:
             raise ValueError(f"Unsupported norm_type: {self.norm_type}")
         if self.pos_enc == "fourier" and self.hidden_size % 2 != 0:
             raise ValueError(f"hidden_size ({self.hidden_size}) must be even when using Fourier positional encoding")
+        if len(set(block_indices)) != len(block_indices):
+            raise ValueError("moe_block_indices must not contain duplicates")
+        if any(i < 0 or i >= self.depth for i in block_indices):
+            raise ValueError(f"moe_block_indices must be in [0, {self.depth}), got {block_indices}")
+        if block_indices and self.moe_num_experts <= 0:
+            raise ValueError("moe_num_experts must be > 0 when moe_block_indices is not empty")
+        if self.moe_num_experts < 0:
+            raise ValueError(f"moe_num_experts must be >= 0, got {self.moe_num_experts}")
+        if self.moe_expert_capacity_factor <= 0:
+            raise ValueError(f"moe_expert_capacity_factor must be > 0, got {self.moe_expert_capacity_factor}")
+        if self.moe_router_jitter_noise < 0:
+            raise ValueError(f"moe_router_jitter_noise must be >= 0, got {self.moe_router_jitter_noise}")
+        if self.moe_aux_loss_weight < 0:
+            raise ValueError(f"moe_aux_loss_weight must be >= 0, got {self.moe_aux_loss_weight}")
 
     def instantiate(self, device: torch.device | None = None) -> "ViT":
         return ViT(self, device=device)
@@ -143,19 +167,23 @@ class ViTFeatures:
         num_register_tokens: int,
         num_cls_tokens: int,
         tokenized_size: Sequence[int] | None = None,
+        moe: MoEStats | None = None,
     ):
         self._dense_features = dense_features
         self._num_register_tokens = num_register_tokens
         self._num_cls_tokens = num_cls_tokens
         self._tokenized_size = tuple(tokenized_size) if tokenized_size is not None else None
+        self._moe = moe
 
     def __repr__(self) -> str:
-        return (
-            f"{self.__class__.__name__}("
-            f"cls_tokens={tuple(self.cls_tokens.shape)}, "
-            f"register_tokens={tuple(self.register_tokens.shape)}, "
-            f"visual_tokens={tuple(self.visual_tokens.shape)})"
-        )
+        parts = [
+            f"cls_tokens={tuple(self.cls_tokens.shape)}",
+            f"register_tokens={tuple(self.register_tokens.shape)}",
+            f"visual_tokens={tuple(self.visual_tokens.shape)}",
+        ]
+        if self._moe is not None:
+            parts.append(f"moe_layers={len(self._moe.layers)}")
+        return f"{self.__class__.__name__}({', '.join(parts)})"
 
     def __iter__(self) -> Iterator[Tensor]:
         yield self.cls_tokens
@@ -195,6 +223,10 @@ class ViTFeatures:
         return self._tokenized_size
 
     @property
+    def moe(self) -> MoEStats | None:
+        return self._moe
+
+    @property
     def visual_tokens_as_grid(self) -> Tensor:
         """Returns visual tokens reshaped to spatial grid.
 
@@ -216,7 +248,11 @@ class ViTFeatures:
 
     def apply(self: Self, func: Callable[[Tensor], Tensor]) -> Self:
         return self.__class__(
-            func(self.dense_features), self.num_register_tokens, self.num_cls_tokens, self._tokenized_size
+            func(self.dense_features),
+            self.num_register_tokens,
+            self.num_cls_tokens,
+            self._tokenized_size,
+            self._moe,
         )
 
     @classmethod
@@ -226,12 +262,14 @@ class ViTFeatures:
         register_tokens: Tensor,
         visual_tokens: Tensor,
         tokenized_size: Sequence[int] | None = None,
+        moe: MoEStats | None = None,
     ) -> Self:
         return cls(
             dense_features=torch.cat([cls_tokens, register_tokens, visual_tokens], dim=1),
             num_register_tokens=register_tokens.shape[1],
             num_cls_tokens=cls_tokens.shape[1],
             tokenized_size=tokenized_size,
+            moe=moe,
         )
 
 
@@ -287,9 +325,13 @@ class ViT(nn.Module):
         self.blocks = nn.ModuleList(
             [
                 self.create_encoder_layer(
-                    mlp_quantization_config, qkv_quantization_config, attn_quantization_config, device
+                    i,
+                    mlp_quantization_config,
+                    qkv_quantization_config,
+                    attn_quantization_config,
+                    device,
                 )
-                for _ in range(config.depth)
+                for i in range(config.depth)
             ]
         )
         self.output_norm = make_norm(config.hidden_size, config.norm_type, device=device, dtype=config.dtype)
@@ -317,11 +359,13 @@ class ViT(nn.Module):
 
     def create_encoder_layer(
         self,
+        layer_index: int,
         mlp_quantization_config: Any | None = None,
         qkv_quantization_config: Any | None = None,
         attn_quantization_config: Any | None = None,
         device: torch.device | None = None,
     ) -> TransformerEncoderLayer:
+        use_moe = layer_index in self.config.moe_block_indices
         return TransformerEncoderLayer(
             hidden_size=self.config.hidden_size,
             ffn_hidden_size=self.config.ffn_hidden_size,
@@ -341,6 +385,11 @@ class ViT(nn.Module):
             attn_quantization_config=attn_quantization_config,
             device=device,
             dtype=self.config.dtype,
+            use_moe=use_moe,
+            moe_num_experts=self.config.moe_num_experts,
+            moe_expert_capacity_factor=self.config.moe_expert_capacity_factor,
+            moe_router_jitter_noise=self.config.moe_router_jitter_noise,
+            moe_drop_overflow_tokens=self.config.moe_drop_overflow_tokens,
         )
 
     def create_decoder_layer(
@@ -499,16 +548,35 @@ class ViT(nn.Module):
         rope = self.prepare_rope(tokenized_size, mask, rope_seed) if self.rope is not None else None
 
         # Apply transformer
-        for block in self.blocks:
+        use_checkpoint = self.config.activation_checkpointing and self.training
+        moe_layer_stats: dict[int, MoELayerStats] = {}
+        for i, block in enumerate(self.blocks):
             assert isinstance(block, TransformerEncoderLayer)
-            if self.config.activation_checkpointing and self.training:
+            if block.is_moe_layer:
+                if use_checkpoint:
+                    x, router_logits, expert_token_counts, dropped_token_count, capacity = cast(
+                        tuple[Tensor, Tensor, Tensor, Tensor, Tensor],
+                        checkpoint(block.forward_with_moe_tensors, x, rope, use_reentrant=False),
+                    )
+                else:
+                    x, router_logits, expert_token_counts, dropped_token_count, capacity = (
+                        block.forward_with_moe_tensors(x, rope=rope)
+                    )
+                moe_layer_stats[i] = MoELayerStats(
+                    router_logits=router_logits,
+                    expert_token_counts=expert_token_counts,
+                    dropped_token_count=dropped_token_count,
+                    capacity=capacity,
+                )
+            elif use_checkpoint:
                 x = cast(Tensor, checkpoint(block, x, rope, use_reentrant=False))
             else:
                 x = block(x, rope=rope)
 
         # Prepare output
         x = self.output_norm(x) if output_norm else x
-        return ViTFeatures(x, self.config.num_register_tokens, self.config.num_cls_tokens, tokenized_size)
+        moe_stats = MoEStats(moe_layer_stats) if moe_layer_stats else None
+        return ViTFeatures(x, self.config.num_register_tokens, self.config.num_cls_tokens, tokenized_size, moe_stats)
 
     if TYPE_CHECKING:
 

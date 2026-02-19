@@ -10,6 +10,7 @@ from .head import (
     UpsampleHeadConfig,
     register_constructors as register_head_constructors,
 )
+from .moe import MoELayerStats, MoEStats
 from .vit import ViT, ViTConfig, ViTFeatures, register_constructors as register_vit_constructors
 
 
@@ -20,6 +21,8 @@ __all__ = [
     "ViT",
     "ViTConfig",
     "ViTFeatures",
+    "MoELayerStats",
+    "MoEStats",
     "HeadConfig",
     "Head",
     "TransposedConv2dHead",
