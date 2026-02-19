@@ -175,7 +175,18 @@ class TestViT:
         assert config == config_from_str
 
     def test_moe_config_from_yaml_str(self, config):
-        config = replace(config, moe_block_indices=(0, 2), moe_num_experts=4, moe_aux_loss_weight=0.01)
+        config = replace(
+            config,
+            moe_block_indices=(0, 2),
+            moe_num_experts=4,
+            moe_routing_mode="token_choice",
+            moe_token_top_k=2,
+            moe_use_simple_experts=True,
+            moe_num_zero_experts=1,
+            moe_num_copy_experts=1,
+            moe_num_constant_experts=1,
+            moe_aux_loss_weight=0.01,
+        )
         config_str = config.to_yaml()
         config_from_str = ViTConfig.from_yaml(config_str)
         assert config == config_from_str
@@ -235,8 +246,16 @@ class TestViT:
         out = model(x)
         assert out.moe is None
 
-    def test_forward_with_moe_exposes_layer_stats(self, device, config):
-        config = replace(config, moe_block_indices=(1,), moe_num_experts=4, moe_expert_capacity_factor=0.75)
+    @pytest.mark.parametrize("moe_routing_mode", ["expert_choice", "token_choice"])
+    def test_forward_with_moe_exposes_layer_stats(self, device, config, moe_routing_mode):
+        config = replace(
+            config,
+            moe_block_indices=(1,),
+            moe_num_experts=4,
+            moe_expert_capacity_factor=0.75,
+            moe_routing_mode=moe_routing_mode,
+            moe_token_top_k=2,
+        )
         x = torch.randn(2, 3, *config.img_size, device=device)
         model = ViT(config).to(device)
         out = model(x)
@@ -248,8 +267,30 @@ class TestViT:
         assert layer_stats.expert_token_counts.shape == (config.moe_num_experts,)
         assert layer_stats.dropped_token_count.ndim == 0
         assert layer_stats.capacity.ndim == 0
+        assert layer_stats.routing_mode == config.moe_routing_mode
         assert layer_stats.load_balancing_loss().shape == ()
         assert out.moe.load_balancing_loss().shape == ()
+
+    def test_forward_with_token_choice_simple_experts(self, device, config):
+        config = replace(
+            config,
+            moe_block_indices=(1,),
+            moe_num_experts=4,
+            moe_routing_mode="token_choice",
+            moe_token_top_k=1,
+            moe_use_simple_experts=True,
+            moe_num_zero_experts=1,
+            moe_num_copy_experts=1,
+            moe_num_constant_experts=1,
+        )
+        model = ViT(config).to(device)
+        x = torch.randn(2, 3, *config.img_size, device=device)
+        out = model(x)
+        assert out.moe is not None
+        layer_stats = out.moe.layers[1]
+        assert layer_stats.router_logits.shape == (2, out.dense_features.shape[1], config.moe_num_experts)
+        assert layer_stats.expert_token_counts.shape == (config.moe_num_experts,)
+        assert layer_stats.load_balancing_loss().shape == ()
 
     @pytest.mark.parametrize("num_register_tokens", [0, 2])
     def test_forward_masked(self, device, config, num_register_tokens):
@@ -386,6 +427,96 @@ class TestViT:
     def test_moe_block_indices_require_positive_experts(self, config):
         with pytest.raises(ValueError, match="moe_num_experts must be > 0"):
             replace(config, moe_block_indices=(0,), moe_num_experts=0)
+
+    def test_invalid_moe_routing_mode_raises(self, config):
+        with pytest.raises(ValueError, match="moe_routing_mode must be one of"):
+            replace(config, moe_block_indices=(0,), moe_num_experts=2, moe_routing_mode="invalid")  # type: ignore[arg-type]
+
+    @pytest.mark.parametrize("token_top_k", [0, -1])
+    def test_token_choice_moe_top_k_must_be_positive(self, config, token_top_k):
+        with pytest.raises(ValueError, match="moe_token_top_k must be > 0"):
+            replace(
+                config,
+                moe_block_indices=(0,),
+                moe_num_experts=2,
+                moe_routing_mode="token_choice",
+                moe_token_top_k=token_top_k,
+            )
+
+    def test_token_choice_moe_top_k_must_not_exceed_num_experts(self, config):
+        with pytest.raises(ValueError, match="moe_token_top_k must be <= moe_num_experts"):
+            replace(
+                config,
+                moe_block_indices=(0,),
+                moe_num_experts=2,
+                moe_routing_mode="token_choice",
+                moe_token_top_k=3,
+            )
+
+    def test_simple_expert_counts_require_flag(self, config):
+        with pytest.raises(ValueError, match="simple expert counts require moe_use_simple_experts=True"):
+            replace(
+                config,
+                moe_block_indices=(0,),
+                moe_num_experts=4,
+                moe_routing_mode="token_choice",
+                moe_num_constant_experts=1,
+            )
+
+    def test_simple_experts_require_token_choice_routing(self, config):
+        with pytest.raises(ValueError, match="moe_use_simple_experts requires moe_routing_mode='token_choice'"):
+            replace(
+                config,
+                moe_block_indices=(0,),
+                moe_num_experts=4,
+                moe_routing_mode="expert_choice",
+                moe_use_simple_experts=True,
+                moe_num_constant_experts=1,
+            )
+
+    def test_simple_expert_counts_must_not_exceed_total_experts(self, config):
+        with pytest.raises(ValueError, match="sum of simple experts"):
+            replace(
+                config,
+                moe_block_indices=(0,),
+                moe_num_experts=2,
+                moe_routing_mode="token_choice",
+                moe_use_simple_experts=True,
+                moe_num_zero_experts=1,
+                moe_num_copy_experts=1,
+                moe_num_constant_experts=1,
+            )
+
+    def test_simple_experts_must_leave_mlp_expert(self, config):
+        with pytest.raises(ValueError, match="must leave at least one MLP expert"):
+            replace(
+                config,
+                moe_block_indices=(0,),
+                moe_num_experts=2,
+                moe_routing_mode="token_choice",
+                moe_use_simple_experts=True,
+                moe_num_zero_experts=1,
+                moe_num_copy_experts=1,
+            )
+
+    @pytest.mark.parametrize(
+        ("field_name", "field_value"),
+        [
+            ("moe_num_zero_experts", -1),
+            ("moe_num_copy_experts", -1),
+            ("moe_num_constant_experts", -1),
+        ],
+    )
+    def test_simple_expert_counts_must_be_non_negative(self, config, field_name, field_value):
+        with pytest.raises(ValueError, match=rf"{field_name} must be >= 0"):
+            replace(
+                config,
+                moe_block_indices=(0,),
+                moe_num_experts=4,
+                moe_routing_mode="token_choice",
+                moe_use_simple_experts=True,
+                **{field_name: field_value},
+            )
 
     @pytest.mark.parametrize("capacity_factor", [0.0, -0.1])
     def test_moe_capacity_factor_must_be_positive(self, config, capacity_factor):
@@ -584,7 +715,28 @@ class TestCompile:
 
     @pytest.mark.compile
     @pytest.mark.cuda
-    def test_compile_forward_with_moe(self):
+    @pytest.mark.parametrize(
+        (
+            "moe_routing_mode",
+            "moe_use_simple_experts",
+            "moe_num_zero_experts",
+            "moe_num_copy_experts",
+            "moe_num_constant_experts",
+        ),
+        [
+            ("expert_choice", False, 0, 0, 0),
+            ("token_choice", False, 0, 0, 0),
+            ("token_choice", True, 1, 1, 1),
+        ],
+    )
+    def test_compile_forward_with_moe(
+        self,
+        moe_routing_mode,
+        moe_use_simple_experts,
+        moe_num_zero_experts,
+        moe_num_copy_experts,
+        moe_num_constant_experts,
+    ):
         config = ViTConfig(
             in_channels=3,
             patch_size=(16, 16),
@@ -597,6 +749,12 @@ class TestCompile:
             dtype=torch.float32,
             moe_block_indices=(1,),
             moe_num_experts=4,
+            moe_routing_mode=moe_routing_mode,
+            moe_token_top_k=2,
+            moe_use_simple_experts=moe_use_simple_experts,
+            moe_num_zero_experts=moe_num_zero_experts,
+            moe_num_copy_experts=moe_num_copy_experts,
+            moe_num_constant_experts=moe_num_constant_experts,
         )
         model = ViT(config).cuda()
         x = torch.randn(2, 3, 224, 224, device="cuda")

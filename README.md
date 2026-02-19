@@ -66,7 +66,10 @@ logits = model.heads["cls"](pooled)  # (B, 10)
 
 ## Mixture of Experts (MoE)
 
-You can convert selected encoder MLP blocks to expert-choice MoE by index via `moe_block_indices`.
+You can convert selected encoder MLP blocks to MoE by index via `moe_block_indices`.
+Routing is controlled globally with `moe_routing_mode`:
+- `"expert_choice"` (default)
+- `"token_choice"`
 
 ```python
 import torch
@@ -83,6 +86,12 @@ config = ViTConfig(
     activation="swiglu",
     moe_block_indices=(2, 5, 8, 11),  # encoder layer indices to convert
     moe_num_experts=8,
+    moe_routing_mode="token_choice",  # or "expert_choice"
+    moe_token_top_k=2,                # used for token-choice routing
+    moe_use_simple_experts=True,      # token-choice only
+    moe_num_zero_experts=1,           # output 0
+    moe_num_copy_experts=1,           # output x (skip)
+    moe_num_constant_experts=1,       # output learned c (pure replace)
     moe_expert_capacity_factor=1.0,
     moe_router_jitter_noise=0.01,
     moe_drop_overflow_tokens=True,
@@ -100,6 +109,7 @@ When MoE is enabled, routing diagnostics are exposed on `features.moe`:
 - `features.moe.layers[layer_idx].expert_token_counts`
 - `features.moe.layers[layer_idx].dropped_token_count`
 - `features.moe.layers[layer_idx].capacity`
+- `features.moe.layers[layer_idx].routing_mode`
 
 ### Applying the load-balancing loss
 
@@ -115,6 +125,23 @@ moe_loss = features.moe.load_balancing_loss() if features.moe is not None else t
 loss = task_loss + config.moe_aux_loss_weight * moe_loss
 loss.backward()
 ```
+
+Balancing loss semantics are routing-mode aware:
+- `expert_choice`: Switch-style importance/load dot-product loss (`N * sum(importance * load)`), which can naturally sit near `1.0` for balanced routing.
+- `token_choice`: V-MoE-style coefficient-of-variation loss (`cv^2(importance) + cv^2(load)`), which is non-negative with minimum `0`.
+
+### Token-choice simple experts (MoE++)
+
+When `moe_use_simple_experts=True`, token-choice MoE can reserve some experts for simple behavior:
+- zero expert: outputs all zeros
+- copy expert: outputs the normalized input token (`x`)
+- constant expert: outputs a learned vector (`c`, pure replace)
+
+Notes:
+- simple experts are only supported for `moe_routing_mode="token_choice"`.
+- `moe_num_experts` is the total expert count, including simple experts and MLP experts.
+- `moe_num_zero_experts + moe_num_copy_experts + moe_num_constant_experts` must be `<= moe_num_experts`.
+- at least one MLP expert must remain.
 
 MoE MLP compute paths are designed to follow the same compile-first pattern used by dense MLP blocks.
 

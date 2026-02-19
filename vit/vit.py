@@ -10,7 +10,15 @@ from torch import Tensor
 from torch.utils.checkpoint import checkpoint
 
 from .head import Head, HeadConfig, TransposedConv2dHead, UpsampleHead
-from .moe import MoELayerStats, MoEStats
+from .moe import (
+    ROUTING_MODE_EXPERT_CHOICE,
+    ROUTING_MODE_TOKEN_CHOICE,
+    ExpertChoiceMoE,
+    MoELayerStats,
+    MoEStats,
+    RoutingMode,
+    TokenChoiceMoE,
+)
 from .norm import NORM_TYPE_CHOICES, NormType, make_norm
 from .patch_embed import PatchEmbed2d, PatchEmbed3d
 from .pos_enc import PositionEncoder
@@ -80,6 +88,12 @@ class ViTConfig:
     moe_expert_capacity_factor: float = 1.0
     moe_router_jitter_noise: float = 0.0
     moe_drop_overflow_tokens: bool = True
+    moe_routing_mode: RoutingMode = "expert_choice"
+    moe_token_top_k: int = 2
+    moe_use_simple_experts: bool = False
+    moe_num_zero_experts: int = 0
+    moe_num_copy_experts: int = 0
+    moe_num_constant_experts: int = 0
     moe_aux_loss_weight: float = 0.0
 
     # RoPE options
@@ -125,10 +139,40 @@ class ViTConfig:
             raise ValueError("moe_num_experts must be > 0 when moe_block_indices is not empty")
         if self.moe_num_experts < 0:
             raise ValueError(f"moe_num_experts must be >= 0, got {self.moe_num_experts}")
+        if self.moe_num_zero_experts < 0:
+            raise ValueError(f"moe_num_zero_experts must be >= 0, got {self.moe_num_zero_experts}")
+        if self.moe_num_copy_experts < 0:
+            raise ValueError(f"moe_num_copy_experts must be >= 0, got {self.moe_num_copy_experts}")
+        if self.moe_num_constant_experts < 0:
+            raise ValueError(f"moe_num_constant_experts must be >= 0, got {self.moe_num_constant_experts}")
+        if self.moe_routing_mode not in (ROUTING_MODE_EXPERT_CHOICE, ROUTING_MODE_TOKEN_CHOICE):
+            raise ValueError(
+                f"moe_routing_mode must be one of "
+                f"({ROUTING_MODE_EXPERT_CHOICE}, {ROUTING_MODE_TOKEN_CHOICE}), got {self.moe_routing_mode}"
+            )
+        simple_total = self.moe_num_zero_experts + self.moe_num_copy_experts + self.moe_num_constant_experts
+        if not self.moe_use_simple_experts and simple_total > 0:
+            raise ValueError("simple expert counts require moe_use_simple_experts=True")
+        if block_indices and self.moe_use_simple_experts:
+            if self.moe_routing_mode != ROUTING_MODE_TOKEN_CHOICE:
+                raise ValueError("moe_use_simple_experts requires moe_routing_mode='token_choice'")
+            if simple_total > self.moe_num_experts:
+                raise ValueError(
+                    f"sum of simple experts ({simple_total}) must be <= moe_num_experts ({self.moe_num_experts})"
+                )
+            if self.moe_num_experts - simple_total <= 0:
+                raise ValueError("simple experts must leave at least one MLP expert")
         if self.moe_expert_capacity_factor <= 0:
             raise ValueError(f"moe_expert_capacity_factor must be > 0, got {self.moe_expert_capacity_factor}")
         if self.moe_router_jitter_noise < 0:
             raise ValueError(f"moe_router_jitter_noise must be >= 0, got {self.moe_router_jitter_noise}")
+        if block_indices and self.moe_routing_mode == ROUTING_MODE_TOKEN_CHOICE:
+            if self.moe_token_top_k <= 0:
+                raise ValueError(f"moe_token_top_k must be > 0, got {self.moe_token_top_k}")
+            if self.moe_token_top_k > self.moe_num_experts:
+                raise ValueError(
+                    f"moe_token_top_k must be <= moe_num_experts ({self.moe_num_experts}), got {self.moe_token_top_k}"
+                )
         if self.moe_aux_loss_weight < 0:
             raise ValueError(f"moe_aux_loss_weight must be >= 0, got {self.moe_aux_loss_weight}")
 
@@ -390,6 +434,12 @@ class ViT(nn.Module):
             moe_expert_capacity_factor=self.config.moe_expert_capacity_factor,
             moe_router_jitter_noise=self.config.moe_router_jitter_noise,
             moe_drop_overflow_tokens=self.config.moe_drop_overflow_tokens,
+            moe_routing_mode=self.config.moe_routing_mode,
+            moe_token_top_k=self.config.moe_token_top_k,
+            moe_use_simple_experts=self.config.moe_use_simple_experts,
+            moe_num_zero_experts=self.config.moe_num_zero_experts,
+            moe_num_copy_experts=self.config.moe_num_copy_experts,
+            moe_num_constant_experts=self.config.moe_num_constant_experts,
         )
 
     def create_decoder_layer(
@@ -562,11 +612,15 @@ class ViT(nn.Module):
                     x, router_logits, expert_token_counts, dropped_token_count, capacity = (
                         block.forward_with_moe_tensors(x, rope=rope)
                     )
+                if not isinstance(block.mlp, (ExpertChoiceMoE, TokenChoiceMoE)):
+                    raise RuntimeError("MoE block did not contain an MoE MLP module")
+                routing_mode = cast(RoutingMode, block.mlp.routing_mode)
                 moe_layer_stats[i] = MoELayerStats(
                     router_logits=router_logits,
                     expert_token_counts=expert_token_counts,
                     dropped_token_count=dropped_token_count,
                     capacity=capacity,
+                    routing_mode=routing_mode,
                 )
             elif use_checkpoint:
                 x = cast(Tensor, checkpoint(block, x, rope, use_reentrant=False))

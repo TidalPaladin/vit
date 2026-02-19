@@ -158,7 +158,25 @@ class TestActivationCheckpointing:
                 assert param.grad is not None, f"{name} has no gradient with mask"
                 assert not param.grad.isnan().any(), f"{name} has nan gradient with mask"
 
-    def test_checkpointing_with_moe(self, device, config):
+    @pytest.mark.parametrize(
+        "moe_kwargs",
+        [
+            pytest.param({"moe_routing_mode": "expert_choice", "moe_token_top_k": 2}, id="expert-choice"),
+            pytest.param({"moe_routing_mode": "token_choice", "moe_token_top_k": 2}, id="token-choice"),
+            pytest.param(
+                {
+                    "moe_routing_mode": "token_choice",
+                    "moe_token_top_k": 2,
+                    "moe_use_simple_experts": True,
+                    "moe_num_zero_experts": 1,
+                    "moe_num_copy_experts": 1,
+                    "moe_num_constant_experts": 1,
+                },
+                id="token-choice-simple-experts",
+            ),
+        ],
+    )
+    def test_checkpointing_with_moe(self, device, config, moe_kwargs):
         """Verify checkpointing keeps MoE aux tensors usable for training loss."""
         config = replace(
             config,
@@ -166,6 +184,7 @@ class TestActivationCheckpointing:
             moe_block_indices=(1,),
             moe_num_experts=4,
             moe_aux_loss_weight=0.1,
+            **moe_kwargs,
         )
         model = ViT(config).to(device)
         model.train()

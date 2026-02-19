@@ -83,7 +83,8 @@ class TestTransformerEncoderLayer:
         # With correct single application, it should be γ * unscaled (0.1x)
         assert_close(mlp_out_scaled, expected_scaled, rtol=1e-4, atol=1e-6)
 
-    def test_forward_with_moe_tensors(self, device):
+    @pytest.mark.parametrize("moe_routing_mode", ["expert_choice", "token_choice"])
+    def test_forward_with_moe_tensors(self, device, moe_routing_mode):
         B, L, D = 2, 64, 64
         layer = TransformerEncoderLayer(
             hidden_size=D,
@@ -91,6 +92,31 @@ class TestTransformerEncoderLayer:
             num_attention_heads=4,
             use_moe=True,
             moe_num_experts=4,
+            moe_routing_mode=moe_routing_mode,
+            moe_token_top_k=2,
+        ).to(device)
+        x = torch.randn(B, L, D, device=device)
+        y, router_logits, expert_token_counts, dropped_token_count, capacity = layer.forward_with_moe_tensors(x)
+        assert y.shape == (B, L, D)
+        assert router_logits.shape == (B, L, 4)
+        assert expert_token_counts.shape == (4,)
+        assert dropped_token_count.ndim == 0
+        assert capacity.ndim == 0
+
+    def test_forward_with_token_choice_simple_experts(self, device):
+        B, L, D = 2, 64, 64
+        layer = TransformerEncoderLayer(
+            hidden_size=D,
+            ffn_hidden_size=4 * D,
+            num_attention_heads=4,
+            use_moe=True,
+            moe_num_experts=4,
+            moe_routing_mode="token_choice",
+            moe_token_top_k=2,
+            moe_use_simple_experts=True,
+            moe_num_zero_experts=1,
+            moe_num_copy_experts=1,
+            moe_num_constant_experts=1,
         ).to(device)
         x = torch.randn(B, L, D, device=device)
         y, router_logits, expert_token_counts, dropped_token_count, capacity = layer.forward_with_moe_tensors(x)

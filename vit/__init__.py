@@ -10,7 +10,7 @@ from .head import (
     UpsampleHeadConfig,
     register_constructors as register_head_constructors,
 )
-from .moe import MoELayerStats, MoEStats
+from .moe import ExpertChoiceMoE, MoELayerStats, MoEStats, TokenChoiceMoE
 from .vit import ViT, ViTConfig, ViTFeatures, register_constructors as register_vit_constructors
 
 
@@ -21,6 +21,8 @@ __all__ = [
     "ViT",
     "ViTConfig",
     "ViTFeatures",
+    "ExpertChoiceMoE",
+    "TokenChoiceMoE",
     "MoELayerStats",
     "MoEStats",
     "HeadConfig",
