@@ -261,7 +261,20 @@ class TestViT:
         assert layer_stats.dropped_token_count.ndim == 0
         assert layer_stats.capacity.ndim == 0
         assert layer_stats.load_balancing_loss().shape == ()
+        layer_health = layer_stats.router_health_metrics()
+        assert layer_health.drop_rate.ndim == 0
+        assert layer_health.capacity_utilization_mean.ndim == 0
+        assert layer_health.capacity_utilization_peak.ndim == 0
+        assert layer_health.expert_load_cv.ndim == 0
+        assert layer_health.router_importance_cv.ndim == 0
+        assert layer_health.router_entropy.ndim == 0
+        assert layer_health.expert_usage_fraction.ndim == 0
+        assert int(layer_health.layer_count.item()) == 1
         assert out.moe.load_balancing_loss().shape == ()
+        aggregate_health = out.moe.router_health_metrics()
+        assert aggregate_health.drop_rate.ndim == 0
+        assert int(aggregate_health.layer_count.item()) == 1
+        assert_close(aggregate_health.drop_rate, layer_health.drop_rate)
 
     @pytest.mark.parametrize("num_register_tokens", [0, 2])
     def test_forward_masked(self, device, config, num_register_tokens):

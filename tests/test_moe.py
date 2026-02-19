@@ -10,10 +10,26 @@ FFN_HIDDEN_SIZE = 64
 NUM_EXPERTS = 4
 CAPACITY_FRACTION = 0.25
 SMALL_PROB = 1e-4
+ROUTER_HEALTH_FLOAT_FIELDS = (
+    "drop_rate",
+    "capacity_utilization_mean",
+    "capacity_utilization_peak",
+    "expert_load_cv",
+    "router_importance_cv",
+    "router_entropy",
+    "expert_usage_fraction",
+)
 
 
 def _logits_from_probs(probs: torch.Tensor, batch_size: int, sequence_length: int) -> torch.Tensor:
     return probs.log().view(1, 1, -1).expand(batch_size, sequence_length, -1).clone()
+
+
+def _assert_router_health_metric_shapes(metrics) -> None:
+    for field in ROUTER_HEALTH_FLOAT_FIELDS:
+        value = getattr(metrics, field)
+        assert value.ndim == 0
+    assert metrics.layer_count.ndim == 0
 
 
 class TestMoE:
@@ -227,3 +243,115 @@ class TestMoELoss:
 
         expected = torch.stack([layer0.load_balancing_loss(), layer1.load_balancing_loss()]).mean()
         assert_close(stats.load_balancing_loss(), expected)
+
+
+class TestMoERouterHealth:
+    def test_layer_router_health_metrics_smoke(self):
+        num_experts = 4
+        batch_size = 2
+        sequence_length = 16
+        stats = MoELayerStats(
+            router_logits=_logits_from_probs(
+                torch.full((num_experts,), 1.0 / num_experts), batch_size, sequence_length
+            ),
+            expert_token_counts=torch.tensor([16, 16, 16, 16], dtype=torch.int64),
+            dropped_token_count=torch.tensor(2, dtype=torch.int64),
+            capacity=torch.tensor(16, dtype=torch.int64),
+        )
+
+        metrics = stats.router_health_metrics()
+
+        _assert_router_health_metric_shapes(metrics)
+        assert int(metrics.layer_count.item()) == 1
+
+    def test_layer_router_health_prefers_balanced_distributions(self):
+        num_experts = 4
+        batch_size = 2
+        sequence_length = 16
+        num_assignments = 64
+
+        balanced_stats = MoELayerStats(
+            router_logits=_logits_from_probs(
+                torch.full((num_experts,), 1.0 / num_experts), batch_size, sequence_length
+            ),
+            expert_token_counts=torch.tensor([16, 16, 16, 16], dtype=torch.int64),
+            dropped_token_count=torch.tensor(0, dtype=torch.int64),
+            capacity=torch.tensor(16, dtype=torch.int64),
+        )
+        collapsed_stats = MoELayerStats(
+            router_logits=_logits_from_probs(
+                torch.tensor([1.0 - 3 * SMALL_PROB, SMALL_PROB, SMALL_PROB, SMALL_PROB]),
+                batch_size,
+                sequence_length,
+            ),
+            expert_token_counts=torch.tensor([num_assignments, 0, 0, 0], dtype=torch.int64),
+            dropped_token_count=torch.tensor(0, dtype=torch.int64),
+            capacity=torch.tensor(num_assignments, dtype=torch.int64),
+        )
+
+        balanced_metrics = balanced_stats.router_health_metrics()
+        collapsed_metrics = collapsed_stats.router_health_metrics()
+
+        assert balanced_metrics.expert_load_cv < collapsed_metrics.expert_load_cv
+        assert balanced_metrics.router_importance_cv < collapsed_metrics.router_importance_cv
+        assert balanced_metrics.router_entropy > collapsed_metrics.router_entropy
+        assert balanced_metrics.expert_usage_fraction > collapsed_metrics.expert_usage_fraction
+
+    def test_layer_router_health_reports_drop_and_capacity_metrics(self):
+        num_experts = 4
+        stats = MoELayerStats(
+            router_logits=_logits_from_probs(torch.full((num_experts,), 0.25), batch_size=1, sequence_length=4),
+            expert_token_counts=torch.tensor([2, 1, 1, 0], dtype=torch.int64),
+            dropped_token_count=torch.tensor(1, dtype=torch.int64),
+            capacity=torch.tensor(2, dtype=torch.int64),
+        )
+
+        metrics = stats.router_health_metrics()
+
+        assert_close(metrics.drop_rate, torch.tensor(0.25))
+        assert_close(metrics.capacity_utilization_mean, torch.tensor(0.5))
+        assert_close(metrics.capacity_utilization_peak, torch.tensor(1.0))
+        assert_close(metrics.expert_usage_fraction, torch.tensor(0.75))
+
+    def test_moe_stats_router_health_matches_mean_across_layers(self):
+        num_experts = 4
+        layer0 = MoELayerStats(
+            router_logits=_logits_from_probs(torch.full((num_experts,), 0.25), batch_size=1, sequence_length=4),
+            expert_token_counts=torch.tensor([2, 1, 1, 0], dtype=torch.int64),
+            dropped_token_count=torch.tensor(1, dtype=torch.int64),
+            capacity=torch.tensor(2, dtype=torch.int64),
+        )
+        layer1 = MoELayerStats(
+            router_logits=_logits_from_probs(torch.tensor([0.85, 0.05, 0.05, 0.05]), batch_size=1, sequence_length=4),
+            expert_token_counts=torch.tensor([4, 0, 0, 0], dtype=torch.int64),
+            dropped_token_count=torch.tensor(0, dtype=torch.int64),
+            capacity=torch.tensor(4, dtype=torch.int64),
+        )
+        stats = MoEStats(layers={0: layer0, 1: layer1})
+
+        layer0_metrics = layer0.router_health_metrics()
+        layer1_metrics = layer1.router_health_metrics()
+        aggregate_metrics = stats.router_health_metrics()
+
+        for field in ROUTER_HEALTH_FLOAT_FIELDS:
+            expected = torch.stack([getattr(layer0_metrics, field), getattr(layer1_metrics, field)]).mean()
+            assert_close(getattr(aggregate_metrics, field), expected)
+        assert int(aggregate_metrics.layer_count.item()) == 2
+
+    def test_router_health_metrics_are_detached(self):
+        num_experts = 4
+        router_logits = _logits_from_probs(
+            torch.full((num_experts,), 1.0 / num_experts),
+            batch_size=1,
+            sequence_length=4,
+        ).requires_grad_(True)
+        stats = MoELayerStats(
+            router_logits=router_logits,
+            expert_token_counts=torch.tensor([1, 1, 1, 1], dtype=torch.int64),
+            dropped_token_count=torch.tensor(0, dtype=torch.int64),
+            capacity=torch.tensor(1, dtype=torch.int64),
+        )
+
+        metrics = stats.router_health_metrics()
+        for field in ROUTER_HEALTH_FLOAT_FIELDS:
+            assert getattr(metrics, field).requires_grad is False

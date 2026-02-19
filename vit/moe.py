@@ -13,6 +13,7 @@ from .norm import NormType, apply_norm, get_norm_bias, is_layer_norm, make_norm
 
 
 CV2_EPS = 1e-10
+ROUTER_HEALTH_EPS = 1e-12
 
 
 @torch.compile(
@@ -78,6 +79,18 @@ def _expert_mlp_glu(
 
 
 @dataclass
+class MoERouterHealthMetrics:
+    drop_rate: Tensor
+    capacity_utilization_mean: Tensor
+    capacity_utilization_peak: Tensor
+    expert_load_cv: Tensor
+    router_importance_cv: Tensor
+    router_entropy: Tensor
+    expert_usage_fraction: Tensor
+    layer_count: Tensor
+
+
+@dataclass
 class MoELayerStats:
     router_logits: Tensor
     expert_token_counts: Tensor
@@ -93,6 +106,47 @@ class MoELayerStats:
         )
         return _cv_squared(importance) + _cv_squared(load)
 
+    def router_health_metrics(self) -> MoERouterHealthMetrics:
+        device = self.router_logits.device
+        expert_counts = self.expert_token_counts.to(device=device, dtype=torch.float32)
+        total_tokens = self.router_logits.shape[0] * self.router_logits.shape[1]
+        total_tokens_tensor = torch.tensor(total_tokens, device=device, dtype=torch.float32).clamp_min(1.0)
+        capacity = self.capacity.to(device=device, dtype=torch.float32).clamp_min(1.0)
+        router_probs = torch.softmax(self.router_logits, dim=-1).to(torch.float32)
+
+        drop_rate = self.dropped_token_count.to(device=device, dtype=torch.float32) / total_tokens_tensor
+        utilization = expert_counts / capacity
+        capacity_utilization_mean = utilization.mean()
+        capacity_utilization_peak = utilization.max()
+
+        total_assignments = expert_counts.sum().clamp_min(1.0)
+        expert_load = expert_counts / total_assignments
+        expert_load_cv = _cv_squared(expert_load)
+
+        router_importance = router_probs.mean(dim=(0, 1))
+        router_importance_cv = _cv_squared(router_importance)
+
+        entropy = -(router_probs * router_probs.clamp_min(ROUTER_HEALTH_EPS).log()).sum(dim=-1).mean()
+        num_experts = self.router_logits.shape[-1]
+        if num_experts > 1:
+            router_entropy = entropy / math.log(num_experts)
+        else:
+            router_entropy = torch.zeros((), device=device, dtype=torch.float32)
+
+        expert_usage_fraction = (self.expert_token_counts > 0).to(device=device, dtype=torch.float32).mean()
+
+        metrics = MoERouterHealthMetrics(
+            drop_rate=drop_rate,
+            capacity_utilization_mean=capacity_utilization_mean,
+            capacity_utilization_peak=capacity_utilization_peak,
+            expert_load_cv=expert_load_cv,
+            router_importance_cv=router_importance_cv,
+            router_entropy=router_entropy,
+            expert_usage_fraction=expert_usage_fraction,
+            layer_count=torch.tensor(1, device=device, dtype=torch.int64),
+        )
+        return _detach_router_health_metrics(metrics)
+
 
 @dataclass
 class MoEStats:
@@ -104,11 +158,58 @@ class MoEStats:
         losses = [self.layers[i].load_balancing_loss() for i in sorted(self.layers)]
         return torch.stack(losses).mean()
 
+    def router_health_metrics(self) -> MoERouterHealthMetrics:
+        if not self.layers:
+            return _empty_router_health_metrics()
+        layer_metrics = [self.layers[i].router_health_metrics() for i in sorted(self.layers)]
+        return _aggregate_router_health_metrics(layer_metrics)
+
 
 def _cv_squared(x: Tensor) -> Tensor:
     mean = x.mean()
     variance = x.var(unbiased=False)
     return variance / (mean.square() + CV2_EPS)
+
+
+def _empty_router_health_metrics(device: torch.device | None = None) -> MoERouterHealthMetrics:
+    return MoERouterHealthMetrics(
+        drop_rate=torch.tensor(0.0, device=device),
+        capacity_utilization_mean=torch.tensor(0.0, device=device),
+        capacity_utilization_peak=torch.tensor(0.0, device=device),
+        expert_load_cv=torch.tensor(0.0, device=device),
+        router_importance_cv=torch.tensor(0.0, device=device),
+        router_entropy=torch.tensor(0.0, device=device),
+        expert_usage_fraction=torch.tensor(0.0, device=device),
+        layer_count=torch.tensor(0, device=device, dtype=torch.int64),
+    )
+
+
+def _detach_router_health_metrics(metrics: MoERouterHealthMetrics) -> MoERouterHealthMetrics:
+    return MoERouterHealthMetrics(
+        drop_rate=metrics.drop_rate.detach(),
+        capacity_utilization_mean=metrics.capacity_utilization_mean.detach(),
+        capacity_utilization_peak=metrics.capacity_utilization_peak.detach(),
+        expert_load_cv=metrics.expert_load_cv.detach(),
+        router_importance_cv=metrics.router_importance_cv.detach(),
+        router_entropy=metrics.router_entropy.detach(),
+        expert_usage_fraction=metrics.expert_usage_fraction.detach(),
+        layer_count=metrics.layer_count.detach(),
+    )
+
+
+def _aggregate_router_health_metrics(layer_metrics: list[MoERouterHealthMetrics]) -> MoERouterHealthMetrics:
+    first = layer_metrics[0]
+    metrics = MoERouterHealthMetrics(
+        drop_rate=torch.stack([m.drop_rate for m in layer_metrics]).mean(),
+        capacity_utilization_mean=torch.stack([m.capacity_utilization_mean for m in layer_metrics]).mean(),
+        capacity_utilization_peak=torch.stack([m.capacity_utilization_peak for m in layer_metrics]).mean(),
+        expert_load_cv=torch.stack([m.expert_load_cv for m in layer_metrics]).mean(),
+        router_importance_cv=torch.stack([m.router_importance_cv for m in layer_metrics]).mean(),
+        router_entropy=torch.stack([m.router_entropy for m in layer_metrics]).mean(),
+        expert_usage_fraction=torch.stack([m.expert_usage_fraction for m in layer_metrics]).mean(),
+        layer_count=torch.tensor(len(layer_metrics), device=first.layer_count.device, dtype=torch.int64),
+    )
+    return _detach_router_health_metrics(metrics)
 
 
 class MoE(nn.Module):
