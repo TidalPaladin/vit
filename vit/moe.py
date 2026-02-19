@@ -20,7 +20,7 @@ CV2_EPS = 1e-10
 
 @torch.compile(
     fullgraph=True,
-    dynamic=False,
+    dynamic=True,
     options={
         "layout_optimization": True,
         "epilogue_fusion": True,
@@ -47,7 +47,7 @@ def _expert_mlp(
 
 @torch.compile(
     fullgraph=True,
-    dynamic=False,
+    dynamic=True,
     options={
         "layout_optimization": True,
         "epilogue_fusion": True,
