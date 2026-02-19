@@ -57,6 +57,7 @@ The component benchmark CLI supports:
 - `run`
 - `compare`
 - `list-baselines`
+- `--norm-type` to switch between `rmsnorm` and `layernorm` for `mlp` and `self_attention` runs
 
 Detailed workflows, recipes, and interpretation guidance are maintained in:
 - `.agents/skills/vit-component-benchmark/SKILL.md`

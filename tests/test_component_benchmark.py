@@ -21,6 +21,7 @@ def test_build_component_benchmark_cases_default_grid() -> None:
     assert len(cases) == 6  # 3 shape tiers * 2 default components
     assert {case.component for case in cases} == {"mlp", "self_attention"}
     assert {case.pass_mode for case in cases} == {"forward"}
+    assert {case.norm_type for case in cases} == {"rmsnorm"}
 
 
 def test_run_component_benchmark_case_forward_mlp_cpu() -> None:
@@ -31,6 +32,7 @@ def test_run_component_benchmark_case_forward_mlp_cpu() -> None:
         seq_lens=[8],
         hidden_sizes=[32],
         ffn_mults=[2],
+        norm_type="layernorm",
     )[0]
 
     result = run_component_benchmark_case(
@@ -202,6 +204,7 @@ def test_component_cli_run_and_compare(tmp_path: Path) -> None:
 
     candidate_args = baseline_args.copy()
     candidate_args[candidate_args.index("baseline")] = "candidate"
+    candidate_args.extend(["--norm-type", "layernorm"])
     assert component_benchmark_main(candidate_args) == 0
 
     compare_args = [

@@ -78,6 +78,50 @@ class TestViT:
         for name, param in model.named_parameters():
             assert param.dtype == torch.float32, f"{name} has dtype {param.dtype}, expected float32"
 
+    @pytest.mark.parametrize(
+        ("norm_type", "norm_cls"),
+        [("rmsnorm", nn.RMSNorm), ("layernorm", nn.LayerNorm)],
+    )
+    def test_norm_type_controls_model_norm_modules(self, device, norm_type, norm_cls):
+        config = ViTConfig(
+            in_channels=3,
+            patch_size=(16, 16),
+            img_size=(224, 224),
+            depth=1,
+            hidden_size=64,
+            ffn_hidden_size=128,
+            num_attention_heads=4,
+            pos_enc="learnable",
+            norm_type=norm_type,
+            dtype=torch.float32,
+        )
+        model = ViT(config).to(device)
+        block = model.get_block(0)
+        assert isinstance(model.output_norm, norm_cls)
+        assert isinstance(block.self_attention.norm, norm_cls)
+        assert isinstance(block.mlp.norm, norm_cls)
+
+        x = torch.randn(2, 3, *config.img_size, device=device)
+        out = model(x)
+        assert out.visual_tokens.shape[-1] == config.hidden_size
+
+    def test_rmsnorm_output_norm_preserves_default_eps_behavior(self):
+        config = ViTConfig(
+            in_channels=3,
+            patch_size=(16, 16),
+            img_size=(224, 224),
+            depth=1,
+            hidden_size=64,
+            ffn_hidden_size=128,
+            num_attention_heads=4,
+            pos_enc="learnable",
+            norm_type="rmsnorm",
+            dtype=torch.float32,
+        )
+        model = ViT(config)
+        assert isinstance(model.output_norm, nn.RMSNorm)
+        assert model.output_norm.eps is None
+
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
     def test_all_params_initialized_with_correct_dtype_and_device(self, device, dtype):
         """Verify all parameters (including heads) are initialized with correct dtype and device."""
@@ -287,6 +331,20 @@ class TestViT:
                 ffn_hidden_size=200,
                 num_attention_heads=8,  # 100 is not divisible by 8
                 pos_enc="learnable",
+            )
+
+    def test_invalid_norm_type_raises(self):
+        with pytest.raises(ValueError, match="Unsupported norm_type"):
+            ViTConfig(
+                in_channels=3,
+                patch_size=(16, 16),
+                img_size=(224, 224),
+                depth=1,
+                hidden_size=64,
+                ffn_hidden_size=128,
+                num_attention_heads=4,
+                pos_enc="learnable",
+                norm_type="invalid",  # type: ignore[arg-type]
             )
 
     def test_fourier_pos_enc_with_odd_hidden_size_raises(self):

@@ -23,6 +23,7 @@ from vit.attention import SelfAttention
 from vit.drop_path import drop_path
 from vit.fused import NormMLP
 from vit.layer_scale import LayerScale
+from vit.norm import NORM_TYPE_CHOICES, NormType
 
 
 ComponentKind = Literal["mlp", "self_attention", "layer_scale_residual", "drop_path_residual"]
@@ -95,6 +96,7 @@ class ComponentBenchmarkCase:
     layer_scale_init: float
     bias: bool
     eps: float
+    norm_type: NormType
 
     @property
     def case_id(self) -> str:
@@ -266,9 +268,12 @@ def build_component_benchmark_cases(
     layer_scale_init: float | None = None,
     bias: bool | None = None,
     eps: float | None = None,
+    norm_type: NormType = "rmsnorm",
 ) -> list[ComponentBenchmarkCase]:
     """Generate benchmark cases from sweep configuration and presets."""
     _validate_sweeps(batch_sizes, seq_lens, hidden_sizes, num_heads, ffn_mults)
+    if norm_type not in NORM_TYPE_CHOICES:
+        raise ValueError(f"Unknown norm_type '{norm_type}'. Available norm types: {', '.join(NORM_TYPE_CHOICES)}")
 
     for preset in presets:
         if preset not in PRESET_CONFIGS:
@@ -309,6 +314,7 @@ def build_component_benchmark_cases(
                 "layer_scale_init": resolved_layer_scale_init,
                 "bias": resolved_bias,
                 "eps": resolved_eps,
+                "norm_type": norm_type,
             }
 
             if component == "self_attention":
@@ -383,6 +389,7 @@ def run_component_benchmark_suite(
     max_measurement_seconds: float = 10.0,
     include_memory: bool = False,
     num_memory_iters: int = 5,
+    norm_type: NormType = "rmsnorm",
 ) -> list[ComponentBenchmarkResult]:
     """Run all benchmark cases in a configured suite."""
     cases = build_component_benchmark_cases(
@@ -403,6 +410,7 @@ def run_component_benchmark_suite(
         layer_scale_init=layer_scale_init,
         bias=bias,
         eps=eps,
+        norm_type=norm_type,
     )
 
     return [
@@ -722,6 +730,7 @@ def _build_mlp_target(
         ffn_hidden_size=case.ffn_hidden_size,
         bias=case.bias,
         activation=case.activation,
+        norm_type=case.norm_type,
         eps=case.eps,
         dropout=case.hidden_dropout,
         device=device,
@@ -758,6 +767,7 @@ def _build_self_attention_target(
         hidden_dropout=case.hidden_dropout,
         attention_dropout=case.attention_dropout,
         bias=case.bias,
+        norm_type=case.norm_type,
         eps=case.eps,
         device=device,
         dtype=param_dtype,

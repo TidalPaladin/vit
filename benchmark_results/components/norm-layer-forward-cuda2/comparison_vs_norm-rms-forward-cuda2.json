@@ -1,0 +1,71 @@
+{
+  "baseline": "norm-rms-forward-cuda2",
+  "candidate": "norm-layer-forward-cuda2",
+  "comparisons": [
+    {
+      "baseline_value": 0.7488219404783775,
+      "candidate_value": 0.8563021429223951,
+      "case_id": "mlp|default|forward|b2s1024d768h12ffn3072",
+      "delta_abs": 0.10748020244401768,
+      "delta_pct": 14.353238952287512,
+      "is_regression": true,
+      "metric": "mean_ms"
+    },
+    {
+      "baseline_value": 0.29521765596468313,
+      "candidate_value": 0.29896157187001554,
+      "case_id": "mlp|default|forward|b4s256d512h8ffn2048",
+      "delta_abs": 0.0037439159053324067,
+      "delta_pct": 1.2681883450020657,
+      "is_regression": false,
+      "metric": "mean_ms"
+    },
+    {
+      "baseline_value": 0.24883937623275265,
+      "candidate_value": 0.2550257710483281,
+      "case_id": "mlp|default|forward|b8s64d256h4ffn1024",
+      "delta_abs": 0.0061863948155754245,
+      "delta_pct": 2.4860996315104735,
+      "is_regression": false,
+      "metric": "mean_ms"
+    },
+    {
+      "baseline_value": 0.515316163146741,
+      "candidate_value": 0.5213295358693559,
+      "case_id": "self_attention|default|forward|b2s1024d768h12ffn3072",
+      "delta_abs": 0.006013372722614929,
+      "delta_pct": 1.166928800737532,
+      "is_regression": false,
+      "metric": "mean_ms"
+    },
+    {
+      "baseline_value": 0.5878426847166262,
+      "candidate_value": 0.3729332303940436,
+      "case_id": "self_attention|default|forward|b4s256d512h8ffn2048",
+      "delta_abs": -0.21490945432258257,
+      "delta_pct": -36.55900803225632,
+      "is_regression": false,
+      "metric": "mean_ms"
+    },
+    {
+      "baseline_value": 0.3561718892291342,
+      "candidate_value": 0.35768006658720636,
+      "case_id": "self_attention|default|forward|b8s64d256h4ffn1024",
+      "delta_abs": 0.0015081773580721825,
+      "delta_pct": 0.42344087326384555,
+      "is_regression": false,
+      "metric": "mean_ms"
+    }
+  ],
+  "summary": {
+    "baseline_cases": 6,
+    "candidate_cases": 6,
+    "compared_cases": 6,
+    "metric": "mean_ms",
+    "missing_in_baseline": 0,
+    "missing_in_candidate": 0,
+    "noise_floor_pct": 1.0,
+    "regression_threshold_pct": 5.0,
+    "regressions": 1
+  }
+}

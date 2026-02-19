@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from torch import Tensor
 from torchao.quantization import quantize_
 
+from .norm import NormType, apply_norm, get_norm_bias, is_layer_norm, make_norm
 from .rope import apply_rope
 
 
@@ -27,12 +28,14 @@ def project_qkv_packed(
     w_in: Tensor,
     b_in: Tensor | None,
     w_norm: Tensor,
+    b_norm: Tensor | None,
+    use_layer_norm: bool,
     head_dim: int,
     eps: float,
     rope: Tensor | None = None,
     # fmt: on
 ) -> tuple[Tensor, Tensor, Tensor]:
-    x = F.rms_norm(x, x.shape[-1:], w_norm, eps=eps)
+    x = apply_norm(x, w_norm, b_norm, eps, use_layer_norm=use_layer_norm)
     q, k, v = F.linear(x, w_in, b_in).chunk(3, dim=-1)
     q = _unfold_head_and_permute(q, head_dim)
     k = _unfold_head_and_permute(k, head_dim)
@@ -53,13 +56,15 @@ def project_q_kv_packed(
     w_kv: Tensor,
     b_kv: Tensor | None,
     w_norm: Tensor,
+    b_norm: Tensor | None,
+    use_layer_norm: bool,
     head_dim: int,
     eps: float,
     rope_q: Tensor | None = None,
     rope_k: Tensor | None = None,
     # fmt: on
 ) -> tuple[Tensor, Tensor, Tensor]:
-    q = F.rms_norm(q, q.shape[-1:], w_norm, eps=eps)
+    q = apply_norm(q, w_norm, b_norm, eps, use_layer_norm=use_layer_norm)
     q = F.linear(q, w_q, b_q)
     k, v = F.linear(kv, w_kv, b_kv).chunk(2, dim=-1)
     q = _unfold_head_and_permute(q, head_dim)
@@ -102,6 +107,8 @@ def attention_qkv_packed(
     w_in: Tensor,
     b_in: Tensor | None,
     w_norm: Tensor,
+    b_norm: Tensor | None,
+    use_layer_norm: bool,
     head_dim: int,
     w_out: Tensor,
     b_out: Tensor | None,
@@ -113,7 +120,7 @@ def attention_qkv_packed(
     rope: Tensor | None = None,
     # fmt: on
 ) -> Tensor:
-    q, k, v = project_qkv_packed(x, w_in, b_in, w_norm, head_dim, eps, rope)
+    q, k, v = project_qkv_packed(x, w_in, b_in, w_norm, b_norm, use_layer_norm, head_dim, eps, rope)
     attention_dropout = 0.0 if not training else attention_dropout
     o = F.scaled_dot_product_attention(
         q, k, v, attn_mask=attn_mask, dropout_p=attention_dropout, is_causal=False, enable_gqa=True
@@ -134,6 +141,8 @@ def attention_q_kv_packed(
     w_kv: Tensor,
     b_kv: Tensor | None,
     w_norm: Tensor,
+    b_norm: Tensor | None,
+    use_layer_norm: bool,
     head_dim: int,
     w_out: Tensor,
     b_out: Tensor | None,
@@ -146,7 +155,9 @@ def attention_q_kv_packed(
     rope_k: Tensor | None = None,
     # fmt: on
 ) -> Tensor:
-    q, k, v = project_q_kv_packed(q, kv, w_q, b_q, w_kv, b_kv, w_norm, head_dim, eps, rope_q, rope_k)
+    q, k, v = project_q_kv_packed(
+        q, kv, w_q, b_q, w_kv, b_kv, w_norm, b_norm, use_layer_norm, head_dim, eps, rope_q, rope_k
+    )
     attention_dropout = 0.0 if not training else attention_dropout
     o = F.scaled_dot_product_attention(
         q, k, v, attn_mask=attn_mask, dropout_p=attention_dropout, is_causal=False, enable_gqa=True
@@ -206,12 +217,14 @@ def attention_weights_qkv_packed(
     w_in: Tensor,
     b_in: Tensor | None,
     w_norm: Tensor,
+    b_norm: Tensor | None,
+    use_layer_norm: bool,
     head_dim: int,
     eps: float,
     rope: Tensor | None = None,
     # fmt: on
 ) -> Tensor:
-    q, k, _ = project_qkv_packed(x, w_in, b_in, w_norm, head_dim, eps, rope)
+    q, k, _ = project_qkv_packed(x, w_in, b_in, w_norm, b_norm, use_layer_norm, head_dim, eps, rope)
     return (q @ k.mT * (head_dim**-0.5)).softmax(dim=-1)
 
 
@@ -226,13 +239,17 @@ def attention_weights_q_kv_packed(
     w_kv: Tensor,
     b_kv: Tensor | None,
     w_norm: Tensor,
+    b_norm: Tensor | None,
+    use_layer_norm: bool,
     head_dim: int,
     eps: float,
     rope_q: Tensor | None = None,
     rope_k: Tensor | None = None,
     # fmt: on
 ) -> Tensor:
-    q, k, _ = project_q_kv_packed(q, kv, w_q, b_q, w_kv, b_kv, w_norm, head_dim, eps, rope_q, rope_k)
+    q, k, _ = project_q_kv_packed(
+        q, kv, w_q, b_q, w_kv, b_kv, w_norm, b_norm, use_layer_norm, head_dim, eps, rope_q, rope_k
+    )
     return (q @ k.mT * (head_dim**-0.5)).softmax(dim=-1)
 
 
@@ -268,10 +285,12 @@ class SelfAttention(nn.Module):
         out_quantization_config: Any | None = None,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
+        norm_type: NormType = "rmsnorm",
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
-        self.norm = nn.RMSNorm(hidden_size, eps=eps, **factory_kwargs)
+        self.norm = make_norm(hidden_size, norm_type, eps=eps, **factory_kwargs)
+        self._use_layer_norm = is_layer_norm(norm_type)
         self.qkv_proj = nn.Linear(hidden_size, 3 * hidden_size, bias=bias, **factory_kwargs)
         self.out_proj = nn.Linear(hidden_size, hidden_size, bias=bias, **factory_kwargs)
         self.dropout = nn.Dropout(hidden_dropout)
@@ -301,6 +320,8 @@ class SelfAttention(nn.Module):
             self.qkv_proj.weight,
             self.qkv_proj.bias,
             self.norm.weight,
+            get_norm_bias(self.norm),
+            self._use_layer_norm,
             self._head_dim,
             self.out_proj.weight,
             self.out_proj.bias,
@@ -325,6 +346,8 @@ class SelfAttention(nn.Module):
             self.qkv_proj.weight,
             self.qkv_proj.bias,
             self.norm.weight,
+            get_norm_bias(self.norm),
+            self._use_layer_norm,
             self._head_dim,
             self.norm.eps or 1e-5,
             rope,
@@ -347,10 +370,12 @@ class CrossAttention(nn.Module):
         out_quantization_config: Any | None = None,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
+        norm_type: NormType = "rmsnorm",
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
-        self.norm = nn.RMSNorm(hidden_size, eps=eps, **factory_kwargs)
+        self.norm = make_norm(hidden_size, norm_type, eps=eps, **factory_kwargs)
+        self._use_layer_norm = is_layer_norm(norm_type)
         self.q_proj = nn.Linear(hidden_size, hidden_size, bias=bias, **factory_kwargs)
         self.kv_proj = nn.Linear(hidden_size, 2 * hidden_size, bias=bias, **factory_kwargs)
         self.out_proj = nn.Linear(hidden_size, hidden_size, bias=bias, **factory_kwargs)
@@ -393,6 +418,8 @@ class CrossAttention(nn.Module):
             self.kv_proj.weight,
             self.kv_proj.bias,
             self.norm.weight,
+            get_norm_bias(self.norm),
+            self._use_layer_norm,
             self._head_dim,
             self.out_proj.weight,
             self.out_proj.bias,
@@ -430,6 +457,8 @@ class CrossAttention(nn.Module):
             self.kv_proj.weight,
             self.kv_proj.bias,
             self.norm.weight,
+            get_norm_bias(self.norm),
+            self._use_layer_norm,
             self._head_dim,
             self.norm.eps or 1e-5,
             rope_q,
