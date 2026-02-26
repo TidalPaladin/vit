@@ -74,7 +74,7 @@ def create_grid(
     return grid.view(1, -1, len(dims))
 
 
-@torch.compile(fullgraph=True, dynamic=False)
+@torch.compile(fullgraph=True)
 def learnable_position(
     dims: Sequence[int], positions_size: Sequence[int], positions: Tensor, dropout: float = 0.0, training: bool = False
 ) -> Tensor:
@@ -132,7 +132,7 @@ class LearnablePosition(nn.Module):
             return self.forward(dims)
 
 
-@torch.compile(fullgraph=True, dynamic=False)
+@torch.compile(fullgraph=True)
 def fourier_position(
     dims: Sequence[int],
     w_fourier: Tensor,
