@@ -5,6 +5,20 @@ from torch.testing import assert_close
 from vit.transformer import CrossAttentionTransformer, TransformerDecoderLayer, TransformerEncoderLayer
 
 
+def _create_batched_rope(batch_size: int, seq_len: int, head_dim: int, device: torch.device) -> torch.Tensor:
+    return torch.randn(2, batch_size, 1, seq_len, head_dim, device=device)
+
+
+def _expected_keep_count(batch_size: int, drop_path_rate: float) -> int:
+    return max(1, int(batch_size * (1.0 - drop_path_rate)))
+
+
+def _assert_parameter_grads_finite(module: torch.nn.Module) -> None:
+    for param in module.parameters():
+        assert param.grad is not None
+        assert not param.grad.isnan().any()
+
+
 class TestTransformerEncoderLayer:
     @pytest.mark.parametrize("layer_scale", [None, 1e-5])
     @pytest.mark.parametrize("norm_type", ["rmsnorm", "layernorm"])
@@ -29,9 +43,7 @@ class TestTransformerEncoderLayer:
         with torch.autocast(device_type=device.type, dtype=torch.float32):
             y = transformer_layer(x)
         y.sum().backward()
-        for param in transformer_layer.parameters():
-            assert param.grad is not None
-            assert not param.grad.isnan().any()
+        _assert_parameter_grads_finite(transformer_layer)
 
     def test_forward_determinstic(self, device):
         B, L, D = 16, 128, 128
@@ -83,6 +95,75 @@ class TestTransformerEncoderLayer:
         # With correct single application, it should be γ * unscaled (0.1x)
         assert_close(mlp_out_scaled, expected_scaled, rtol=1e-4, atol=1e-6)
 
+    def test_selective_stochastic_depth_uses_fixed_keep_count(self, device, monkeypatch):
+        batch_size, seq_len, hidden_size = 8, 16, 64
+        drop_path_rate = 0.25
+        expected_keep_count = _expected_keep_count(batch_size, drop_path_rate)
+        num_attention_heads = 4
+        head_dim = hidden_size // num_attention_heads
+
+        layer = TransformerEncoderLayer(
+            hidden_size=hidden_size,
+            ffn_hidden_size=hidden_size * 2,
+            num_attention_heads=num_attention_heads,
+            hidden_dropout=0.0,
+            attention_dropout=0.0,
+            drop_path_rate=drop_path_rate,
+        ).to(device)
+        layer.train()
+
+        attention_batches: list[int] = []
+        attention_rope_batches: list[int] = []
+        mlp_batches: list[int] = []
+
+        original_attention_forward = layer.self_attention.forward
+        original_mlp_forward = layer.mlp.forward
+
+        def record_attention_batch(
+            x: torch.Tensor, attn_mask: torch.Tensor | None = None, rope: torch.Tensor | None = None
+        ) -> torch.Tensor:
+            attention_batches.append(x.shape[0])
+            if rope is not None and rope.ndim == 5:
+                attention_rope_batches.append(rope.shape[1])
+            return original_attention_forward(x, attn_mask=attn_mask, rope=rope)
+
+        def record_mlp_batch(x: torch.Tensor) -> torch.Tensor:
+            mlp_batches.append(x.shape[0])
+            return original_mlp_forward(x)
+
+        monkeypatch.setattr(layer.self_attention, "forward", record_attention_batch)
+        monkeypatch.setattr(layer.mlp, "forward", record_mlp_batch)
+
+        x = torch.randn(batch_size, seq_len, hidden_size, device=device)
+        rope = _create_batched_rope(batch_size, seq_len, head_dim, device)
+        for _ in range(4):
+            y = layer(x, rope=rope)
+            assert y.shape == (batch_size, seq_len, hidden_size)
+
+        assert attention_batches
+        assert mlp_batches
+        assert set(attention_batches) == {expected_keep_count}
+        assert set(mlp_batches) == {expected_keep_count}
+        assert set(attention_rope_batches) == {expected_keep_count}
+
+    def test_backward_with_selective_stochastic_depth(self, device):
+        batch_size, seq_len, hidden_size = 8, 16, 64
+        layer = TransformerEncoderLayer(
+            hidden_size=hidden_size,
+            ffn_hidden_size=hidden_size * 2,
+            num_attention_heads=4,
+            hidden_dropout=0.0,
+            attention_dropout=0.0,
+            drop_path_rate=0.5,
+        ).to(device)
+        layer.train()
+
+        x = torch.randn(batch_size, seq_len, hidden_size, device=device, requires_grad=True)
+        y = layer(x)
+        y.sum().backward()
+
+        _assert_parameter_grads_finite(layer)
+
 
 class TestTransformerDecoderLayer:
     @pytest.mark.parametrize("layer_scale", [None, 1e-5])
@@ -110,9 +191,7 @@ class TestTransformerDecoderLayer:
         with torch.autocast(device_type=device.type, dtype=torch.float32):
             y = transformer_layer(x, kv)
         y.sum().backward()
-        for param in transformer_layer.parameters():
-            assert param.grad is not None
-            assert not param.grad.isnan().any()
+        _assert_parameter_grads_finite(transformer_layer)
 
     def test_forward_determinstic(self, device):
         B, L, D = 16, 128, 128
@@ -129,6 +208,75 @@ class TestTransformerDecoderLayer:
         y3 = layer(x, kv)
         y4 = layer(x, kv)
         assert not torch.allclose(y3, y4)
+
+    def test_selective_stochastic_depth_subsets_cross_attention_inputs(self, device, monkeypatch):
+        batch_size, seq_len, hidden_size, kv_len = 7, 16, 64, 10
+        drop_path_rate = 0.4
+        expected_keep_count = _expected_keep_count(batch_size, drop_path_rate)
+        num_attention_heads = 4
+        head_dim = hidden_size // num_attention_heads
+
+        layer = TransformerDecoderLayer(
+            hidden_size=hidden_size,
+            ffn_hidden_size=hidden_size * 2,
+            num_attention_heads=num_attention_heads,
+            hidden_dropout=0.0,
+            attention_dropout=0.0,
+            drop_path_rate=drop_path_rate,
+        ).to(device)
+        layer.train()
+
+        self_attention_batches: list[int] = []
+        cross_attention_batches: list[tuple[int, int]] = []
+        cross_rope_batches: list[tuple[int, int]] = []
+        mlp_batches: list[int] = []
+
+        original_self_attention_forward = layer.self_attention.forward
+        original_cross_attention_forward = layer.cross_attention.forward
+        original_mlp_forward = layer.mlp.forward
+
+        def record_self_attention_batch(
+            x: torch.Tensor, attn_mask: torch.Tensor | None = None, rope: torch.Tensor | None = None
+        ) -> torch.Tensor:
+            self_attention_batches.append(x.shape[0])
+            return original_self_attention_forward(x, attn_mask=attn_mask, rope=rope)
+
+        def record_cross_attention_batch(
+            q: torch.Tensor,
+            kv: torch.Tensor,
+            attn_mask: torch.Tensor | None = None,
+            rope_q: torch.Tensor | None = None,
+            rope_k: torch.Tensor | None = None,
+        ) -> torch.Tensor:
+            cross_attention_batches.append((q.shape[0], kv.shape[0]))
+            if rope_q is not None and rope_k is not None and rope_q.ndim == 5 and rope_k.ndim == 5:
+                cross_rope_batches.append((rope_q.shape[1], rope_k.shape[1]))
+            return original_cross_attention_forward(q, kv, attn_mask=attn_mask, rope_q=rope_q, rope_k=rope_k)
+
+        def record_mlp_batch(x: torch.Tensor) -> torch.Tensor:
+            mlp_batches.append(x.shape[0])
+            return original_mlp_forward(x)
+
+        monkeypatch.setattr(layer.self_attention, "forward", record_self_attention_batch)
+        monkeypatch.setattr(layer.cross_attention, "forward", record_cross_attention_batch)
+        monkeypatch.setattr(layer.mlp, "forward", record_mlp_batch)
+
+        x = torch.randn(batch_size, seq_len, hidden_size, device=device)
+        kv = torch.randn(batch_size, kv_len, hidden_size, device=device)
+        rope_q = _create_batched_rope(batch_size, seq_len, head_dim, device)
+        rope_k = _create_batched_rope(batch_size, kv_len, head_dim, device)
+
+        for _ in range(4):
+            y = layer(x, kv, rope_q=rope_q, rope_k=rope_k)
+            assert y.shape == (batch_size, seq_len, hidden_size)
+
+        assert self_attention_batches
+        assert cross_attention_batches
+        assert mlp_batches
+        assert set(self_attention_batches) == {expected_keep_count}
+        assert set(mlp_batches) == {expected_keep_count}
+        assert set(cross_attention_batches) == {(expected_keep_count, expected_keep_count)}
+        assert set(cross_rope_batches) == {(expected_keep_count, expected_keep_count)}
 
 
 class TestCrossAttentionTransformer:
@@ -154,9 +302,7 @@ class TestCrossAttentionTransformer:
         with torch.autocast(device_type=device.type, dtype=torch.float32):
             y = transformer_layer(x, kv)
         y.sum().backward()
-        for param in transformer_layer.parameters():
-            assert param.grad is not None
-            assert not param.grad.isnan().any()
+        _assert_parameter_grads_finite(transformer_layer)
 
     def test_forward_determinstic(self, device):
         B, L, D = 16, 128, 128
@@ -173,3 +319,61 @@ class TestCrossAttentionTransformer:
         y3 = layer(x, kv)
         y4 = layer(x, kv)
         assert not torch.allclose(y3, y4)
+
+    def test_selective_stochastic_depth_cross_attention_alignment(self, device, monkeypatch):
+        batch_size, seq_len, hidden_size, kv_len = 9, 12, 64, 6
+        drop_path_rate = 0.5
+        expected_keep_count = _expected_keep_count(batch_size, drop_path_rate)
+        num_attention_heads = 4
+        head_dim = hidden_size // num_attention_heads
+
+        layer = CrossAttentionTransformer(
+            hidden_size=hidden_size,
+            ffn_hidden_size=hidden_size * 2,
+            num_attention_heads=num_attention_heads,
+            hidden_dropout=0.0,
+            attention_dropout=0.0,
+            drop_path_rate=drop_path_rate,
+        ).to(device)
+        layer.train()
+
+        cross_attention_batches: list[tuple[int, int]] = []
+        mlp_batches: list[int] = []
+
+        original_cross_attention_forward = layer.cross_attention.forward
+        original_mlp_forward = layer.mlp.forward
+
+        def record_cross_attention_batch(
+            q: torch.Tensor,
+            kv: torch.Tensor,
+            attn_mask: torch.Tensor | None = None,
+            rope_q: torch.Tensor | None = None,
+            rope_k: torch.Tensor | None = None,
+        ) -> torch.Tensor:
+            cross_attention_batches.append((q.shape[0], kv.shape[0]))
+            if rope_q is not None and rope_q.ndim == 5:
+                assert rope_q.shape[1] == q.shape[0]
+            if rope_k is not None and rope_k.ndim == 5:
+                assert rope_k.shape[1] == kv.shape[0]
+            return original_cross_attention_forward(q, kv, attn_mask=attn_mask, rope_q=rope_q, rope_k=rope_k)
+
+        def record_mlp_batch(x: torch.Tensor) -> torch.Tensor:
+            mlp_batches.append(x.shape[0])
+            return original_mlp_forward(x)
+
+        monkeypatch.setattr(layer.cross_attention, "forward", record_cross_attention_batch)
+        monkeypatch.setattr(layer.mlp, "forward", record_mlp_batch)
+
+        x = torch.randn(batch_size, seq_len, hidden_size, device=device)
+        kv = torch.randn(batch_size, kv_len, hidden_size, device=device)
+        rope_q = _create_batched_rope(batch_size, seq_len, head_dim, device)
+        rope_k = _create_batched_rope(batch_size, kv_len, head_dim, device)
+
+        for _ in range(4):
+            y = layer(x, kv, rope_q=rope_q, rope_k=rope_k)
+            assert y.shape == (batch_size, seq_len, hidden_size)
+
+        assert cross_attention_batches
+        assert mlp_batches
+        assert set(cross_attention_batches) == {(expected_keep_count, expected_keep_count)}
+        assert set(mlp_batches) == {expected_keep_count}
