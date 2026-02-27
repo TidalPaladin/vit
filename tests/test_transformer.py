@@ -151,7 +151,7 @@ class TestTransformerEncoderLayer:
         assert set(mlp_batches) == {expected_keep_count}
         assert set(attention_rope_batches) == {expected_keep_count}
 
-    def test_selective_stochastic_depth_scale_matches_drop_rate(self, device):
+    def test_selective_stochastic_depth_scale_matches_keep_ratio(self, device):
         batch_size = 8
         seq_len = 4
         hidden_size = 16
@@ -159,7 +159,8 @@ class TestTransformerEncoderLayer:
         x = torch.randn(batch_size, seq_len, hidden_size, device=device)
         _, keep_indices, residual_scale = _select_residual_subset(x, drop_path_rate=drop_path_rate, training=True)
         assert keep_indices is not None
-        assert residual_scale == pytest.approx(1.0 / (1.0 - drop_path_rate))
+        keep_count = _expected_keep_count(batch_size, drop_path_rate)
+        assert residual_scale == pytest.approx(batch_size / keep_count)
 
     def test_backward_with_selective_stochastic_depth(self, device):
         batch_size, seq_len, hidden_size = 8, 16, 64
@@ -293,6 +294,48 @@ class TestTransformerDecoderLayer:
         assert set(cross_attention_batches) == {(expected_keep_count, expected_keep_count)}
         assert set(cross_rope_batches) == {(expected_keep_count, expected_keep_count)}
 
+    def test_selective_stochastic_depth_preserves_broadcast_kv_batch(self, device, monkeypatch):
+        batch_size, seq_len, hidden_size, kv_len = 8, 16, 64, 10
+        kv_batch_size = 1
+        drop_path_rate = 0.5
+        expected_keep_count = _expected_keep_count(batch_size, drop_path_rate)
+        num_attention_heads = 4
+        head_dim = hidden_size // num_attention_heads
+
+        layer = TransformerDecoderLayer(
+            hidden_size=hidden_size,
+            ffn_hidden_size=hidden_size * 2,
+            num_attention_heads=num_attention_heads,
+            hidden_dropout=0.0,
+            attention_dropout=0.0,
+            drop_path_rate=drop_path_rate,
+        ).to(device)
+        layer.train()
+
+        cross_attention_batches: list[tuple[int, int]] = []
+        original_cross_attention_forward = layer.cross_attention.forward
+
+        def record_cross_attention_batch(
+            q: torch.Tensor,
+            kv: torch.Tensor,
+            attn_mask: torch.Tensor | None = None,
+            rope_q: torch.Tensor | None = None,
+            rope_k: torch.Tensor | None = None,
+        ) -> torch.Tensor:
+            cross_attention_batches.append((q.shape[0], kv.shape[0]))
+            return original_cross_attention_forward(q, kv, attn_mask=attn_mask, rope_q=rope_q, rope_k=rope_k)
+
+        monkeypatch.setattr(layer.cross_attention, "forward", record_cross_attention_batch)
+
+        x = torch.randn(batch_size, seq_len, hidden_size, device=device)
+        kv = torch.randn(kv_batch_size, kv_len, hidden_size, device=device)
+        rope_q = _create_batched_rope(batch_size, seq_len, head_dim, device)
+        rope_k = _create_batched_rope(kv_batch_size, kv_len, head_dim, device)
+
+        y = layer(x, kv, rope_q=rope_q, rope_k=rope_k)
+        assert y.shape == (batch_size, seq_len, hidden_size)
+        assert cross_attention_batches == [(expected_keep_count, kv_batch_size)]
+
 
 class TestCrossAttentionTransformer:
     @pytest.mark.parametrize("layer_scale", [None, 1e-5])
@@ -392,3 +435,45 @@ class TestCrossAttentionTransformer:
         assert mlp_batches
         assert set(cross_attention_batches) == {(expected_keep_count, expected_keep_count)}
         assert set(mlp_batches) == {expected_keep_count}
+
+    def test_selective_stochastic_depth_preserves_broadcast_kv_batch(self, device, monkeypatch):
+        batch_size, seq_len, hidden_size, kv_len = 8, 12, 64, 6
+        kv_batch_size = 1
+        drop_path_rate = 0.5
+        expected_keep_count = _expected_keep_count(batch_size, drop_path_rate)
+        num_attention_heads = 4
+        head_dim = hidden_size // num_attention_heads
+
+        layer = CrossAttentionTransformer(
+            hidden_size=hidden_size,
+            ffn_hidden_size=hidden_size * 2,
+            num_attention_heads=num_attention_heads,
+            hidden_dropout=0.0,
+            attention_dropout=0.0,
+            drop_path_rate=drop_path_rate,
+        ).to(device)
+        layer.train()
+
+        cross_attention_batches: list[tuple[int, int]] = []
+        original_cross_attention_forward = layer.cross_attention.forward
+
+        def record_cross_attention_batch(
+            q: torch.Tensor,
+            kv: torch.Tensor,
+            attn_mask: torch.Tensor | None = None,
+            rope_q: torch.Tensor | None = None,
+            rope_k: torch.Tensor | None = None,
+        ) -> torch.Tensor:
+            cross_attention_batches.append((q.shape[0], kv.shape[0]))
+            return original_cross_attention_forward(q, kv, attn_mask=attn_mask, rope_q=rope_q, rope_k=rope_k)
+
+        monkeypatch.setattr(layer.cross_attention, "forward", record_cross_attention_batch)
+
+        x = torch.randn(batch_size, seq_len, hidden_size, device=device)
+        kv = torch.randn(kv_batch_size, kv_len, hidden_size, device=device)
+        rope_q = _create_batched_rope(batch_size, seq_len, head_dim, device)
+        rope_k = _create_batched_rope(kv_batch_size, kv_len, head_dim, device)
+
+        y = layer(x, kv, rope_q=rope_q, rope_k=rope_k)
+        assert y.shape == (batch_size, seq_len, hidden_size)
+        assert cross_attention_batches == [(expected_keep_count, kv_batch_size)]

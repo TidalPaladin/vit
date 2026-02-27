@@ -22,7 +22,7 @@ def _select_residual_subset(x: Tensor, drop_path_rate: float, training: bool) ->
         return x, None, 1.0
 
     keep_indices = torch.randperm(batch_size, device=x.device)[:keep_count]
-    residual_scale = float(1.0 / keep_prob)
+    residual_scale = float(batch_size / keep_count)
     return x.index_select(0, keep_indices), keep_indices, residual_scale
 
 
@@ -45,8 +45,10 @@ def _subset_batched_rope(rope: Tensor | None, keep_indices: Tensor | None, full_
     return rope
 
 
-def _subset_batch(tensor: Tensor, keep_indices: Tensor | None) -> Tensor:
+def _subset_batch(tensor: Tensor, keep_indices: Tensor | None, full_batch_size: int) -> Tensor:
     if keep_indices is None:
+        return tensor
+    if tensor.shape[0] != full_batch_size:
         return tensor
     return tensor.index_select(0, keep_indices)
 
@@ -244,7 +246,7 @@ class TransformerDecoderLayer(nn.Module):
         x = _merge_residual_subset(x, o, keep_indices, residual_scale)
 
         x_residual, keep_indices, residual_scale = _select_residual_subset(x, self.drop_path_rate, self.training)
-        kv_residual = _subset_batch(kv, keep_indices)
+        kv_residual = _subset_batch(kv, keep_indices, batch_size)
         rope_q_residual = _subset_batched_rope(rope_q, keep_indices, batch_size)
         rope_k_residual = _subset_batched_rope(rope_k, keep_indices, batch_size)
         o = self.layer_scale_cross(
@@ -340,7 +342,7 @@ class CrossAttentionTransformer(nn.Module):
         batch_size = x.shape[0]
 
         x_residual, keep_indices, residual_scale = _select_residual_subset(x, self.drop_path_rate, self.training)
-        kv_residual = _subset_batch(kv, keep_indices)
+        kv_residual = _subset_batch(kv, keep_indices, batch_size)
         rope_q_residual = _subset_batched_rope(rope_q, keep_indices, batch_size)
         rope_k_residual = _subset_batched_rope(rope_k, keep_indices, batch_size)
         o = self.layer_scale_cross(
