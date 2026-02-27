@@ -492,7 +492,7 @@ class TestCompile:
         )
 
     @classmethod
-    def _parity_models(cls) -> tuple[ViTConfig, ViT, torch.nn.Module]:
+    def _parity_models(cls) -> tuple[ViTConfig, ViT, Any]:
         config = cls._parity_config()
         eager_model = ViT(config).cuda().eval()
         compiled_model = torch.compile(deepcopy(eager_model).eval())
