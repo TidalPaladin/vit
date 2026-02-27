@@ -15,13 +15,14 @@ def _select_residual_subset(x: Tensor, drop_path_rate: float, training: bool) ->
     if not training or drop_path_rate <= 0.0 or batch_size <= 1:
         return x, None, 1.0
 
-    keep_count = int(batch_size * (1.0 - drop_path_rate))
+    keep_prob = 1.0 - drop_path_rate
+    keep_count = int(batch_size * keep_prob)
     keep_count = max(1, min(batch_size, keep_count))
     if keep_count == batch_size:
         return x, None, 1.0
 
     keep_indices = torch.randperm(batch_size, device=x.device)[:keep_count]
-    residual_scale = float(batch_size / keep_count)
+    residual_scale = float(1.0 / keep_prob)
     return x.index_select(0, keep_indices), keep_indices, residual_scale
 
 

@@ -1,4 +1,5 @@
 import math
+from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import replace
 from typing import Any
@@ -468,6 +469,55 @@ class TestViTFeatures:
 class TestCompile:
     """Dedicated tests for torch.compile functionality."""
 
+    PARITY_SEED = 0
+    PARITY_RTL = 1e-4
+    PARITY_FORWARD_ATOL = 2e-3
+    PARITY_GRAD_ATOL = 1e-5
+
+    @staticmethod
+    def _parity_config() -> ViTConfig:
+        return ViTConfig(
+            in_channels=3,
+            patch_size=(16, 16),
+            img_size=(224, 224),
+            depth=3,
+            hidden_size=128,
+            ffn_hidden_size=256,
+            num_attention_heads=8,
+            pos_enc="learnable",
+            hidden_dropout=0.0,
+            attention_dropout=0.0,
+            drop_path_rate=0.0,
+            dtype=torch.float32,
+        )
+
+    @classmethod
+    def _parity_models(cls) -> tuple[ViTConfig, ViT, torch.nn.Module]:
+        config = cls._parity_config()
+        eager_model = ViT(config).cuda().eval()
+        compiled_model = torch.compile(deepcopy(eager_model).eval())
+        return config, eager_model, compiled_model
+
+    @staticmethod
+    @contextmanager
+    def _deterministic_cuda_math():
+        previous_deterministic_algorithms = torch.are_deterministic_algorithms_enabled()
+        previous_cudnn_deterministic = torch.backends.cudnn.deterministic
+        previous_cudnn_benchmark = torch.backends.cudnn.benchmark
+        torch.use_deterministic_algorithms(True)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        try:
+            yield
+        finally:
+            torch.use_deterministic_algorithms(previous_deterministic_algorithms)
+            torch.backends.cudnn.deterministic = previous_cudnn_deterministic
+            torch.backends.cudnn.benchmark = previous_cudnn_benchmark
+
+    @staticmethod
+    def _normalized_named_parameters(model: torch.nn.Module) -> dict[str, torch.nn.Parameter]:
+        return {name.removeprefix("_orig_mod."): param for name, param in model.named_parameters()}
+
     def test_compile_is_disabled_by_default(self):
         """Verify that torch.compile is disabled in test environment."""
         import os
@@ -530,3 +580,56 @@ class TestCompile:
         for name, param in model.named_parameters():
             if param.requires_grad:
                 assert param.grad is not None, f"{name} has no gradient"
+
+    @pytest.mark.compile
+    @pytest.mark.cuda
+    def test_compile_forward_matches_eager(self):
+        """Compiled and eager forward passes should be numerically equivalent."""
+        with self._deterministic_cuda_math():
+            torch.manual_seed(self.PARITY_SEED)
+            config, eager_model, compiled_model = self._parity_models()
+
+            x = torch.randn(2, 3, *config.img_size, device="cuda")
+            with torch.no_grad():
+                eager_out = eager_model(x).dense_features
+                compiled_out = compiled_model(x).dense_features
+
+            assert_close(compiled_out, eager_out, rtol=self.PARITY_RTL, atol=self.PARITY_FORWARD_ATOL)
+
+    @pytest.mark.compile
+    @pytest.mark.cuda
+    def test_compile_backward_matches_eager(self):
+        """Compiled and eager backward passes should produce equivalent gradients."""
+        with self._deterministic_cuda_math():
+            torch.manual_seed(self.PARITY_SEED)
+            config, eager_model, compiled_model = self._parity_models()
+
+            eager_x = torch.randn(2, 3, *config.img_size, device="cuda", requires_grad=True)
+            compiled_x = eager_x.detach().clone().requires_grad_(True)
+
+            eager_out = eager_model(eager_x).dense_features
+            eager_loss = eager_out.square().mean()
+            eager_loss.backward()
+
+            compiled_out = compiled_model(compiled_x).dense_features
+            compiled_loss = compiled_out.square().mean()
+            compiled_loss.backward()
+
+            assert_close(compiled_out, eager_out, rtol=self.PARITY_RTL, atol=self.PARITY_FORWARD_ATOL)
+            assert eager_x.grad is not None
+            assert compiled_x.grad is not None
+            assert_close(compiled_x.grad, eager_x.grad, rtol=self.PARITY_RTL, atol=self.PARITY_GRAD_ATOL)
+
+            eager_params = dict(eager_model.named_parameters())
+            compiled_params = self._normalized_named_parameters(compiled_model)
+            assert compiled_params.keys() == eager_params.keys()
+            for name in eager_params:
+                eager_grad = eager_params[name].grad
+                compiled_grad = compiled_params[name].grad
+                if eager_grad is None or compiled_grad is None:
+                    assert eager_grad is None and compiled_grad is None, (
+                        f"{name} gradient presence mismatch: eager={eager_grad is not None}, "
+                        f"compiled={compiled_grad is not None}"
+                    )
+                    continue
+                assert_close(compiled_grad, eager_grad, rtol=self.PARITY_RTL, atol=self.PARITY_GRAD_ATOL)

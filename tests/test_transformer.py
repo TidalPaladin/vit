@@ -2,7 +2,12 @@ import pytest
 import torch
 from torch.testing import assert_close
 
-from vit.transformer import CrossAttentionTransformer, TransformerDecoderLayer, TransformerEncoderLayer
+from vit.transformer import (
+    CrossAttentionTransformer,
+    TransformerDecoderLayer,
+    TransformerEncoderLayer,
+    _select_residual_subset,
+)
 
 
 def _create_batched_rope(batch_size: int, seq_len: int, head_dim: int, device: torch.device) -> torch.Tensor:
@@ -145,6 +150,16 @@ class TestTransformerEncoderLayer:
         assert set(attention_batches) == {expected_keep_count}
         assert set(mlp_batches) == {expected_keep_count}
         assert set(attention_rope_batches) == {expected_keep_count}
+
+    def test_selective_stochastic_depth_scale_matches_drop_rate(self, device):
+        batch_size = 8
+        seq_len = 4
+        hidden_size = 16
+        drop_path_rate = 0.2
+        x = torch.randn(batch_size, seq_len, hidden_size, device=device)
+        _, keep_indices, residual_scale = _select_residual_subset(x, drop_path_rate=drop_path_rate, training=True)
+        assert keep_indices is not None
+        assert residual_scale == pytest.approx(1.0 / (1.0 - drop_path_rate))
 
     def test_backward_with_selective_stochastic_depth(self, device):
         batch_size, seq_len, hidden_size = 8, 16, 64
