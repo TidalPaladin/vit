@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 
-from ._version import __version__
+import importlib
+from importlib.metadata import PackageNotFoundError, version
+
 from .head import (
     Head,
     HeadConfig,
@@ -12,6 +14,23 @@ from .head import (
 )
 from .vit import ViT, ViTConfig, ViTFeatures, register_constructors as register_vit_constructors
 
+
+def _resolve_version() -> str:
+    try:
+        version_module = importlib.import_module("vit._version")
+        resolved = getattr(version_module, "__version__", None)
+        if isinstance(resolved, str):
+            return resolved
+    except ModuleNotFoundError:
+        pass
+
+    try:
+        return version("vit")
+    except PackageNotFoundError:
+        return "0+unknown"
+
+
+__version__: str = _resolve_version()
 
 register_vit_constructors()
 register_head_constructors()

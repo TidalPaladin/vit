@@ -160,7 +160,8 @@ class TestActivationCheckpointing:
 
     def test_checkpointing_with_drop_path(self, device, config):
         """Verify checkpointing handles stochastic depth correctly."""
-        config = replace(config, activation_checkpointing=True, drop_path_rate=0.1)
+        # Batch size is 2 below, so drop_path_rate=0.5 forces selective residual compute with keep_count=1.
+        config = replace(config, activation_checkpointing=True, drop_path_rate=0.5)
         model = ViT(config).to(device)
         model.train()
         x = torch.randn(2, 3, 224, 224, device=device, requires_grad=True)

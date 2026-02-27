@@ -5,10 +5,52 @@ import torch.nn as nn
 from torch import Tensor
 
 from .attention import CrossAttention, SelfAttention
-from .drop_path import drop_path
 from .fused import NormMLP
 from .layer_scale import LayerScale
 from .norm import NormType
+
+
+def _select_residual_subset(x: Tensor, drop_path_rate: float, training: bool) -> tuple[Tensor, Tensor | None, float]:
+    batch_size = x.shape[0]
+    if not training or drop_path_rate <= 0.0 or batch_size <= 1:
+        return x, None, 1.0
+
+    keep_prob = 1.0 - drop_path_rate
+    keep_count = int(batch_size * keep_prob)
+    keep_count = max(1, min(batch_size, keep_count))
+    if keep_count == batch_size:
+        return x, None, 1.0
+
+    keep_indices = torch.randperm(batch_size, device=x.device)[:keep_count]
+    residual_scale = float(batch_size / keep_count)
+    return x.index_select(0, keep_indices), keep_indices, residual_scale
+
+
+def _merge_residual_subset(
+    x: Tensor,
+    residual: Tensor,
+    keep_indices: Tensor | None,
+    residual_scale: float,
+) -> Tensor:
+    if keep_indices is None:
+        return x + residual
+    return x.flatten(1).index_add(0, keep_indices, residual.flatten(1), alpha=residual_scale).view_as(x)
+
+
+def _subset_batched_rope(rope: Tensor | None, keep_indices: Tensor | None, full_batch_size: int) -> Tensor | None:
+    if rope is None or keep_indices is None:
+        return rope
+    if rope.ndim == 5 and rope.shape[1] == full_batch_size:
+        return rope.index_select(1, keep_indices)
+    return rope
+
+
+def _subset_batch(tensor: Tensor, keep_indices: Tensor | None, full_batch_size: int) -> Tensor:
+    if keep_indices is None:
+        return tensor
+    if tensor.shape[0] != full_batch_size:
+        return tensor
+    return tensor.index_select(0, keep_indices)
 
 
 class TransformerEncoderLayer(nn.Module):
@@ -84,13 +126,17 @@ class TransformerEncoderLayer(nn.Module):
         if qkv_quantization_config is not None or attn_quantization_config is not None:
             self.self_attention.apply_quantization(qkv_quantization_config, attn_quantization_config)
 
-    @torch.compile
     def forward(self, x: Tensor, rope: Tensor | None = None) -> Tensor:
-        o = self.layer_scale_attn(self.self_attention(x, rope=rope))
-        x = x + drop_path(o, self.drop_path_rate, self.training)
+        batch_size = x.shape[0]
 
-        o = self.layer_scale_mlp(self.mlp(x))
-        x = x + drop_path(o, self.drop_path_rate, self.training)
+        x_residual, keep_indices, residual_scale = _select_residual_subset(x, self.drop_path_rate, self.training)
+        rope_residual = _subset_batched_rope(rope, keep_indices, batch_size)
+        o = self.layer_scale_attn(self.self_attention(x_residual, rope=rope_residual))
+        x = _merge_residual_subset(x, o, keep_indices, residual_scale)
+
+        x_residual, keep_indices, residual_scale = _select_residual_subset(x, self.drop_path_rate, self.training)
+        o = self.layer_scale_mlp(self.mlp(x_residual))
+        x = _merge_residual_subset(x, o, keep_indices, residual_scale)
         return x
 
     if TYPE_CHECKING:
@@ -192,14 +238,25 @@ class TransformerDecoderLayer(nn.Module):
             self.cross_attention.apply_quantization(qkv_quantization_config, attn_quantization_config)
 
     def forward(self, x: Tensor, kv: Tensor, rope_q: Tensor | None = None, rope_k: Tensor | None = None) -> Tensor:
-        o = self.layer_scale_attn(self.self_attention(x, rope=rope_q))
-        x = x + drop_path(o, self.drop_path_rate, self.training)
+        batch_size = x.shape[0]
 
-        o = self.layer_scale_cross(self.cross_attention(x, kv, rope_q=rope_q, rope_k=rope_k))
-        x = x + drop_path(o, self.drop_path_rate, self.training)
+        x_residual, keep_indices, residual_scale = _select_residual_subset(x, self.drop_path_rate, self.training)
+        rope_q_residual = _subset_batched_rope(rope_q, keep_indices, batch_size)
+        o = self.layer_scale_attn(self.self_attention(x_residual, rope=rope_q_residual))
+        x = _merge_residual_subset(x, o, keep_indices, residual_scale)
 
-        o = self.layer_scale_mlp(self.mlp(x))
-        x = x + drop_path(o, self.drop_path_rate, self.training)
+        x_residual, keep_indices, residual_scale = _select_residual_subset(x, self.drop_path_rate, self.training)
+        kv_residual = _subset_batch(kv, keep_indices, batch_size)
+        rope_q_residual = _subset_batched_rope(rope_q, keep_indices, batch_size)
+        rope_k_residual = _subset_batched_rope(rope_k, keep_indices, batch_size)
+        o = self.layer_scale_cross(
+            self.cross_attention(x_residual, kv_residual, rope_q=rope_q_residual, rope_k=rope_k_residual)
+        )
+        x = _merge_residual_subset(x, o, keep_indices, residual_scale)
+
+        x_residual, keep_indices, residual_scale = _select_residual_subset(x, self.drop_path_rate, self.training)
+        o = self.layer_scale_mlp(self.mlp(x_residual))
+        x = _merge_residual_subset(x, o, keep_indices, residual_scale)
         return x
 
     if TYPE_CHECKING:
@@ -282,11 +339,20 @@ class CrossAttentionTransformer(nn.Module):
             self.cross_attention.apply_quantization(qkv_quantization_config, attn_quantization_config)
 
     def forward(self, x: Tensor, kv: Tensor, rope_q: Tensor | None = None, rope_k: Tensor | None = None) -> Tensor:
-        o = self.layer_scale_cross(self.cross_attention(x, kv, rope_q=rope_q, rope_k=rope_k))
-        x = x + drop_path(o, self.drop_path_rate, self.training)
+        batch_size = x.shape[0]
 
-        o = self.layer_scale_mlp(self.mlp(x))
-        x = x + drop_path(o, self.drop_path_rate, self.training)
+        x_residual, keep_indices, residual_scale = _select_residual_subset(x, self.drop_path_rate, self.training)
+        kv_residual = _subset_batch(kv, keep_indices, batch_size)
+        rope_q_residual = _subset_batched_rope(rope_q, keep_indices, batch_size)
+        rope_k_residual = _subset_batched_rope(rope_k, keep_indices, batch_size)
+        o = self.layer_scale_cross(
+            self.cross_attention(x_residual, kv_residual, rope_q=rope_q_residual, rope_k=rope_k_residual)
+        )
+        x = _merge_residual_subset(x, o, keep_indices, residual_scale)
+
+        x_residual, keep_indices, residual_scale = _select_residual_subset(x, self.drop_path_rate, self.training)
+        o = self.layer_scale_mlp(self.mlp(x_residual))
+        x = _merge_residual_subset(x, o, keep_indices, residual_scale)
         return x
 
     if TYPE_CHECKING:
