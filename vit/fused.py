@@ -85,6 +85,7 @@ class NormLinear(nn.Module):
 
 @torch.compile(
     fullgraph=True,
+    dynamic=False,
     options={
         "layout_optimization": True,
         "epilogue_fusion": True,
@@ -119,6 +120,7 @@ def norm_mlp(
 
 @torch.compile(
     fullgraph=True,
+    dynamic=False,
     options={
         "layout_optimization": True,
         "epilogue_fusion": True,

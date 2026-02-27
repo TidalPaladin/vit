@@ -124,7 +124,6 @@ class TransformerEncoderLayer(nn.Module):
         if qkv_quantization_config is not None or attn_quantization_config is not None:
             self.self_attention.apply_quantization(qkv_quantization_config, attn_quantization_config)
 
-    @torch.compile
     def forward(self, x: Tensor, rope: Tensor | None = None) -> Tensor:
         batch_size = x.shape[0]
 
