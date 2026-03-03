@@ -11,6 +11,27 @@ from torchao.quantization import Int8WeightOnlyConfig
 from vit.attention import AttentivePool, CrossAttention, SelfAttention
 
 
+NormModule = torch.nn.LayerNorm | torch.nn.RMSNorm
+
+
+def _apply_norm_manual(x: torch.Tensor, norm: torch.nn.LayerNorm | torch.nn.RMSNorm) -> torch.Tensor:
+    if isinstance(norm, torch.nn.LayerNorm):
+        return F.layer_norm(x, x.shape[-1:], norm.weight, norm.bias, norm.eps)
+    return F.rms_norm(x, x.shape[-1:], norm.weight, norm.eps)
+
+
+def _to_heads(x: torch.Tensor, batch_size: int, seq_len: int, num_heads: int, head_dim: int) -> torch.Tensor:
+    return x.view(batch_size, seq_len, num_heads, head_dim).transpose(1, 2)
+
+
+def _assert_qk_norm_type(
+    layer: SelfAttention | CrossAttention,
+    norm_cls: type[torch.nn.LayerNorm] | type[torch.nn.RMSNorm],
+) -> None:
+    assert isinstance(layer.q_norm, norm_cls)
+    assert isinstance(layer.k_norm, norm_cls)
+
+
 class TestSelfAttention:
     def test_positional_eps_argument_is_backward_compatible(self, device):
         layer = SelfAttention(128, 8, 0.1, 0.1, True, 1e-6).to(device)
@@ -214,5 +235,72 @@ class TestAttentionWeightsScaling:
         q = q.view(B, L, H, head_dim).transpose(1, 2)
         k = k.view(B, L, H, head_dim).transpose(1, 2)
         expected = (q @ k.mT * (head_dim**-0.5)).softmax(dim=-1)
+
+        assert_close(weights, expected, atol=1e-5, rtol=1e-5)
+
+
+class TestQKNormalization:
+    @pytest.mark.parametrize(
+        ("norm_type", "norm_cls"), [("rmsnorm", torch.nn.RMSNorm), ("layernorm", torch.nn.LayerNorm)]
+    )
+    def test_self_attention_qk_normalizer_follows_norm_type(self, norm_type, norm_cls):
+        layer = SelfAttention(64, 4, norm_type=norm_type, qk_normalization=True)
+        _assert_qk_norm_type(layer, norm_cls)
+
+    @pytest.mark.parametrize(
+        ("norm_type", "norm_cls"), [("rmsnorm", torch.nn.RMSNorm), ("layernorm", torch.nn.LayerNorm)]
+    )
+    def test_cross_attention_qk_normalizer_follows_norm_type(self, norm_type, norm_cls):
+        layer = CrossAttention(64, 4, norm_type=norm_type, qk_normalization=True)
+        _assert_qk_norm_type(layer, norm_cls)
+
+    @pytest.mark.parametrize("norm_type", ["rmsnorm", "layernorm"])
+    def test_self_attention_forward_weights_with_qk_normalization(self, device, norm_type):
+        B, L, D, H = 2, 16, 64, 4
+        head_dim = D // H
+        layer = SelfAttention(
+            D, H, hidden_dropout=0, attention_dropout=0, norm_type=norm_type, qk_normalization=True
+        ).to(device)
+        layer.eval()
+        x = torch.randn(B, L, D, device=device)
+
+        weights = layer.forward_weights(x)
+
+        x_norm = _apply_norm_manual(x, cast(NormModule, layer.norm))
+        qkv = F.linear(x_norm, layer.qkv_proj.weight, layer.qkv_proj.bias)
+        q, k, _ = qkv.chunk(3, dim=-1)
+        q = _to_heads(q, B, L, H, head_dim)
+        k = _to_heads(k, B, L, H, head_dim)
+        q_norm = cast(NormModule, layer.q_norm)
+        k_norm = cast(NormModule, layer.k_norm)
+        q = _apply_norm_manual(q, q_norm)
+        k = _apply_norm_manual(k, k_norm)
+        expected = (q @ k.mT * (head_dim**-0.5)).softmax(dim=-1)
+
+        assert_close(weights, expected, atol=1e-5, rtol=1e-5)
+
+    @pytest.mark.parametrize("norm_type", ["rmsnorm", "layernorm"])
+    def test_cross_attention_forward_weights_with_qk_normalization(self, device, norm_type):
+        B, L_q, L_kv, D, H = 2, 16, 8, 64, 4
+        head_dim = D // H
+        layer = CrossAttention(
+            D, H, hidden_dropout=0, attention_dropout=0, norm_type=norm_type, qk_normalization=True
+        ).to(device)
+        layer.eval()
+        q = torch.randn(B, L_q, D, device=device)
+        kv = torch.randn(B, L_kv, D, device=device)
+
+        weights = layer.forward_weights(q, kv)
+
+        q_input = _apply_norm_manual(q, cast(NormModule, layer.norm))
+        q_proj = F.linear(q_input, layer.q_proj.weight, layer.q_proj.bias)
+        k_proj, _ = F.linear(kv, layer.kv_proj.weight, layer.kv_proj.bias).chunk(2, dim=-1)
+        q_proj = _to_heads(q_proj, B, L_q, H, head_dim)
+        k_proj = _to_heads(k_proj, B, L_kv, H, head_dim)
+        q_norm = cast(NormModule, layer.q_norm)
+        k_norm = cast(NormModule, layer.k_norm)
+        q_proj = _apply_norm_manual(q_proj, q_norm)
+        k_proj = _apply_norm_manual(k_proj, k_norm)
+        expected = (q_proj @ k_proj.mT * (head_dim**-0.5)).softmax(dim=-1)
 
         assert_close(weights, expected, atol=1e-5, rtol=1e-5)

@@ -106,6 +106,50 @@ class TestViT:
         out = model(x)
         assert out.visual_tokens.shape[-1] == config.hidden_size
 
+    @pytest.mark.parametrize(
+        ("norm_type", "norm_cls"),
+        [("rmsnorm", nn.RMSNorm), ("layernorm", nn.LayerNorm)],
+    )
+    def test_qk_normalization_uses_backbone_norm_type(self, device, norm_type, norm_cls):
+        config = ViTConfig(
+            in_channels=3,
+            patch_size=(16, 16),
+            img_size=(224, 224),
+            depth=1,
+            hidden_size=64,
+            ffn_hidden_size=128,
+            num_attention_heads=4,
+            pos_enc="learnable",
+            norm_type=norm_type,
+            qk_normalization=True,
+            dtype=torch.float32,
+        )
+        model = ViT(config).to(device)
+        block = model.get_block(0)
+        assert isinstance(block.self_attention.q_norm, norm_cls)
+        assert isinstance(block.self_attention.k_norm, norm_cls)
+
+    def test_forward_with_rope_and_qk_normalization(self, device):
+        config = ViTConfig(
+            in_channels=3,
+            patch_size=(16, 16),
+            img_size=(224, 224),
+            depth=1,
+            hidden_size=64,
+            ffn_hidden_size=128,
+            num_attention_heads=4,
+            pos_enc="rope",
+            norm_type="layernorm",
+            qk_normalization=True,
+            dtype=torch.float32,
+        )
+        model = ViT(config).to(device)
+        x = torch.randn(2, 3, *config.img_size, device=device)
+        with torch.autocast(device_type=device.type, dtype=torch.float32, enabled=True):
+            out = model(x)
+        L = math.prod(model.stem.tokenized_size(config.img_size))
+        assert out.visual_tokens.shape == (2, L, config.hidden_size)
+
     def test_rmsnorm_output_norm_preserves_default_eps_behavior(self):
         config = ViTConfig(
             in_channels=3,
