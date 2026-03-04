@@ -75,6 +75,7 @@ class TransformerEncoderLayer(nn.Module):
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
         norm_type: NormType = "rmsnorm",
+        qk_normalization: bool = False,
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -89,6 +90,7 @@ class TransformerEncoderLayer(nn.Module):
             eps=eps,
             qkv_quantization_config=qkv_quantization_config,
             out_quantization_config=attn_quantization_config,
+            qk_normalization=qk_normalization,
             **factory_kwargs,
         )
         self.mlp = NormMLP(
@@ -167,6 +169,7 @@ class TransformerDecoderLayer(nn.Module):
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
         norm_type: NormType = "rmsnorm",
+        qk_normalization: bool = False,
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -181,6 +184,7 @@ class TransformerDecoderLayer(nn.Module):
             eps=eps,
             qkv_quantization_config=qkv_quantization_config,
             out_quantization_config=attn_quantization_config,
+            qk_normalization=qk_normalization,
             **factory_kwargs,
         )
         self.cross_attention = CrossAttention(
@@ -193,6 +197,7 @@ class TransformerDecoderLayer(nn.Module):
             eps=eps,
             qkv_quantization_config=qkv_quantization_config,
             out_quantization_config=attn_quantization_config,
+            qk_normalization=qk_normalization,
             **factory_kwargs,
         )
         self.mlp = NormMLP(
@@ -287,6 +292,7 @@ class CrossAttentionTransformer(nn.Module):
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
         norm_type: NormType = "rmsnorm",
+        qk_normalization: bool = False,
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -301,6 +307,7 @@ class CrossAttentionTransformer(nn.Module):
             eps=eps,
             qkv_quantization_config=qkv_quantization_config,
             out_quantization_config=attn_quantization_config,
+            qk_normalization=qk_normalization,
             **factory_kwargs,
         )
         self.mlp = NormMLP(

@@ -25,6 +25,14 @@ def _assert_parameter_grads_finite(module: torch.nn.Module) -> None:
 
 
 class TestTransformerEncoderLayer:
+    @pytest.mark.parametrize(
+        ("norm_type", "norm_cls"), [("rmsnorm", torch.nn.RMSNorm), ("layernorm", torch.nn.LayerNorm)]
+    )
+    def test_qk_normalization_wires_self_attention_norm_type(self, norm_type, norm_cls):
+        layer = TransformerEncoderLayer(64, 128, 4, norm_type=norm_type, qk_normalization=True)
+        assert isinstance(layer.self_attention.q_norm, norm_cls)
+        assert isinstance(layer.self_attention.k_norm, norm_cls)
+
     @pytest.mark.parametrize("layer_scale", [None, 1e-5])
     @pytest.mark.parametrize("norm_type", ["rmsnorm", "layernorm"])
     def test_forward(self, device, layer_scale, norm_type):
@@ -182,6 +190,16 @@ class TestTransformerEncoderLayer:
 
 
 class TestTransformerDecoderLayer:
+    @pytest.mark.parametrize(
+        ("norm_type", "norm_cls"), [("rmsnorm", torch.nn.RMSNorm), ("layernorm", torch.nn.LayerNorm)]
+    )
+    def test_qk_normalization_wires_self_and_cross_attention_norm_type(self, norm_type, norm_cls):
+        layer = TransformerDecoderLayer(64, 128, 4, norm_type=norm_type, qk_normalization=True)
+        assert isinstance(layer.self_attention.q_norm, norm_cls)
+        assert isinstance(layer.self_attention.k_norm, norm_cls)
+        assert isinstance(layer.cross_attention.q_norm, norm_cls)
+        assert isinstance(layer.cross_attention.k_norm, norm_cls)
+
     @pytest.mark.parametrize("layer_scale", [None, 1e-5])
     @pytest.mark.parametrize("norm_type", ["rmsnorm", "layernorm"])
     def test_forward(self, device, layer_scale, norm_type):
@@ -338,6 +356,14 @@ class TestTransformerDecoderLayer:
 
 
 class TestCrossAttentionTransformer:
+    @pytest.mark.parametrize(
+        ("norm_type", "norm_cls"), [("rmsnorm", torch.nn.RMSNorm), ("layernorm", torch.nn.LayerNorm)]
+    )
+    def test_qk_normalization_wires_cross_attention_norm_type(self, norm_type, norm_cls):
+        layer = CrossAttentionTransformer(64, 128, 4, norm_type=norm_type, qk_normalization=True)
+        assert isinstance(layer.cross_attention.q_norm, norm_cls)
+        assert isinstance(layer.cross_attention.k_norm, norm_cls)
+
     @pytest.mark.parametrize("layer_scale", [None, 1e-5])
     @pytest.mark.parametrize("norm_type", ["rmsnorm", "layernorm"])
     def test_forward(self, device, layer_scale, norm_type):

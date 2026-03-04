@@ -92,6 +92,7 @@ class ViTConfig:
     # Master weight dtype (default BF16)
     dtype: torch.dtype = torch.bfloat16
     norm_type: NormType = "rmsnorm"
+    qk_normalization: bool = False
 
     # Heads
     heads: dict[str, HeadConfig] = field(default_factory=dict)
@@ -332,6 +333,7 @@ class ViT(nn.Module):
             mlp_bias=self.config.mlp_bias,
             activation=self.config.activation,
             norm_type=self.config.norm_type,
+            qk_normalization=self.config.qk_normalization,
             drop_path_rate=self.config.drop_path_rate,
             layer_scale=self.config.layer_scale,
             glu_limit=self.config.glu_limit,
@@ -360,6 +362,7 @@ class ViT(nn.Module):
             mlp_bias=self.config.mlp_bias,
             activation=self.config.activation,
             norm_type=self.config.norm_type,
+            qk_normalization=self.config.qk_normalization,
             drop_path_rate=self.config.drop_path_rate,
             layer_scale=self.config.layer_scale,
             glu_limit=self.config.glu_limit,
@@ -388,6 +391,7 @@ class ViT(nn.Module):
             mlp_bias=self.config.mlp_bias,
             activation=self.config.activation,
             norm_type=self.config.norm_type,
+            qk_normalization=self.config.qk_normalization,
             drop_path_rate=self.config.drop_path_rate,
             layer_scale=self.config.layer_scale,
             glu_limit=self.config.glu_limit,
