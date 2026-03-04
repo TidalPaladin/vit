@@ -93,6 +93,7 @@ class ViTConfig:
     dtype: torch.dtype = torch.bfloat16
     norm_type: NormType = "rmsnorm"
     qk_normalization: bool = False
+    patch_embed_normalization: bool = False
 
     # Heads
     heads: dict[str, HeadConfig] = field(default_factory=dict)
@@ -258,6 +259,11 @@ class ViT(nn.Module):
             config.img_size,
             pos_enc=config.pos_enc if config.pos_enc != "rope" else "none",
             **factory_kwargs,
+        )
+        self.patch_embed_norm = (
+            make_norm(config.hidden_size, config.norm_type, **factory_kwargs)
+            if config.patch_embed_normalization
+            else None
         )
 
         if config.pos_enc == "rope":
@@ -486,6 +492,9 @@ class ViT(nn.Module):
 
         return rope
 
+    def normalize_patch_embeddings(self, x: Tensor) -> Tensor:
+        return self.patch_embed_norm(x) if self.patch_embed_norm is not None else x
+
     def forward(
         self,
         x: Tensor,
@@ -496,6 +505,7 @@ class ViT(nn.Module):
         # Prepare transformer input
         tokenized_size = self.stem.tokenized_size(x.shape[2:])
         x = self.stem(x)
+        x = self.normalize_patch_embeddings(x)
         x = apply_mask(mask, x) if mask is not None else x
         x = self.add_prefix_tokens(x)
 
@@ -536,6 +546,7 @@ class ViT(nn.Module):
         # Prepare transformer input
         tokenized_size = self.stem.tokenized_size(x.shape[2:])
         x = self.stem(x)
+        x = self.normalize_patch_embeddings(x)
         x = self.add_prefix_tokens(x)
 
         # Apply transformer
@@ -560,6 +571,8 @@ class ViT(nn.Module):
 
     def backbone_requires_grad_(self, requires_grad: bool = True) -> None:
         self.stem.requires_grad_(requires_grad)
+        if self.patch_embed_norm is not None:
+            self.patch_embed_norm.requires_grad_(requires_grad)
         self.blocks.requires_grad_(requires_grad)
         self.output_norm.requires_grad_(requires_grad)
         if self.register_tokens is not None:

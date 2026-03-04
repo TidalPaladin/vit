@@ -3,6 +3,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import replace
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 import torch
@@ -42,6 +43,9 @@ def assert_none_requires_grad(module: Any):
 
 
 class TestViT:
+    def test_patch_embed_normalization_defaults_to_false(self, config):
+        assert config.patch_embed_normalization is False
+
     def test_default_dtype_is_bfloat16(self):
         """Verify that the default master weight dtype is BF16."""
         config = ViTConfig(
@@ -94,11 +98,13 @@ class TestViT:
             num_attention_heads=4,
             pos_enc="learnable",
             norm_type=norm_type,
+            patch_embed_normalization=True,
             dtype=torch.float32,
         )
         model = ViT(config).to(device)
         block = model.get_block(0)
         assert isinstance(model.output_norm, norm_cls)
+        assert isinstance(model.patch_embed_norm, norm_cls)
         assert isinstance(block.self_attention.norm, norm_cls)
         assert isinstance(block.mlp.norm, norm_cls)
 
@@ -226,6 +232,15 @@ class TestViT:
         config_from_path = ViTConfig.from_yaml(path)
         assert config == config_from_path
 
+    def test_patch_embed_normalization_yaml_serialization(self, config):
+        config_norm = replace(config, patch_embed_normalization=True)
+        config_norm_restored = ViTConfig.from_yaml(config_norm.to_yaml())
+        assert config_norm_restored.patch_embed_normalization is True
+
+        config_no_norm = replace(config, patch_embed_normalization=False)
+        config_no_norm_restored = ViTConfig.from_yaml(config_no_norm.to_yaml())
+        assert config_no_norm_restored.patch_embed_normalization is False
+
     @pytest.mark.parametrize("num_register_tokens", [0, 2])
     def test_forward(self, device, config, num_register_tokens):
         config = replace(config, num_register_tokens=num_register_tokens)
@@ -291,6 +306,64 @@ class TestViT:
                 assert param.grad is not None, f"{name} has no gradient"
                 assert not param.grad.isnan().any(), f"{name} has nan gradient"
 
+    @pytest.mark.parametrize("patch_embed_normalization", [False, True])
+    def test_patch_embed_normalization_applies_after_stem(self, device, patch_embed_normalization):
+        config = ViTConfig(
+            in_channels=3,
+            patch_size=(16, 16),
+            img_size=(224, 224),
+            depth=0,
+            hidden_size=64,
+            ffn_hidden_size=128,
+            num_attention_heads=4,
+            pos_enc="learnable",
+            norm_type="layernorm",
+            patch_embed_normalization=patch_embed_normalization,
+            dtype=torch.float32,
+        )
+        model = ViT(config).to(device).eval()
+        x = torch.randn(2, 3, *config.img_size, device=device)
+
+        with torch.no_grad():
+            stem_tokens = model.stem(x)
+            out = model(x, output_norm=False)
+
+        expected = model.patch_embed_norm(stem_tokens) if model.patch_embed_norm is not None else stem_tokens
+        assert_close(out.visual_tokens, expected)
+
+    @pytest.mark.parametrize("patch_embed_normalization", [False, True])
+    def test_forward_attention_weights_uses_patch_embed_norm(self, device, patch_embed_normalization):
+        config = ViTConfig(
+            in_channels=3,
+            patch_size=(16, 16),
+            img_size=(224, 224),
+            depth=1,
+            hidden_size=64,
+            ffn_hidden_size=128,
+            num_attention_heads=4,
+            pos_enc="learnable",
+            norm_type="layernorm",
+            patch_embed_normalization=patch_embed_normalization,
+            hidden_dropout=0.0,
+            attention_dropout=0.0,
+            drop_path_rate=0.0,
+            dtype=torch.float32,
+        )
+        model = ViT(config).to(device).eval()
+        block = model.get_block(0)
+        x = torch.randn(2, 3, *config.img_size, device=device)
+
+        with torch.no_grad():
+            stem_tokens = model.stem(x)
+            expected = model.patch_embed_norm(stem_tokens) if model.patch_embed_norm is not None else stem_tokens
+            with patch.object(
+                block.self_attention, "forward_weights", wraps=block.self_attention.forward_weights
+            ) as mock:
+                model.forward_attention_weights(x)
+
+        assert mock.call_count == 1
+        assert_close(mock.call_args.args[0], expected)
+
     def test_mlp_requires_grad(self, config):
         model = ViT(config)
         for block in model.blocks:
@@ -312,6 +385,7 @@ class TestViT:
             assert_none_requires_grad(block.self_attention)
 
     def test_backbone_requires_grad(self, config):
+        config = replace(config, patch_embed_normalization=True)
         model = ViT(config)
         model.backbone_requires_grad_(False)
         for name, param in model.named_parameters():
