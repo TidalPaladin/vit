@@ -36,6 +36,7 @@ config = ViTConfig(
     attention_dropout=0.1,
     bias=False,
     activation="swiglu", # or srelu, gelu, etc.
+    patch_embed_normalization=True,  # Apply backbone norm after patch embedding
     drop_path_rate=0.1,
     num_register_tokens=16,
     pos_enc="fourier",
