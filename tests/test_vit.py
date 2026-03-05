@@ -220,6 +220,24 @@ class TestViT:
                     f"Head {head_name} param {name} on device {param.device}, expected {device}"
                 )
 
+    def test_prefix_tokens_use_bounded_truncated_normal_init(self):
+        config = ViTConfig(
+            in_channels=3,
+            patch_size=(16, 16),
+            img_size=(224, 224),
+            depth=1,
+            hidden_size=64,
+            ffn_hidden_size=128,
+            num_attention_heads=4,
+            pos_enc="learnable",
+            num_register_tokens=2,
+            num_cls_tokens=1,
+            dtype=torch.float32,
+        )
+        model = ViT(config)
+        assert model.register_tokens.abs().max() <= 0.04
+        assert model.cls_tokens.abs().max() <= 0.04
+
     def test_config_from_yaml_str(self, config):
         config_str = config.to_yaml()
         config_from_str = ViTConfig.from_yaml(config_str)

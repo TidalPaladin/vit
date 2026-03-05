@@ -10,6 +10,11 @@ from vit.fused import NormLinear, NormMLP
 
 
 class TestNormLinear:
+    def test_reset_parameters_zeros_bias(self):
+        layer = NormLinear(10, 20)
+        assert layer.linear.bias is not None
+        assert torch.count_nonzero(layer.linear.bias) == 0
+
     @pytest.mark.parametrize("norm_type", ["rmsnorm", "layernorm"])
     def test_forward(self, device, norm_type):
         layer_norm_linear = NormLinear(10, 20, norm_type=norm_type).to(device)
@@ -61,6 +66,13 @@ class TestNormLinear:
 
 
 class TestNormMLP:
+    def test_reset_parameters_zeros_biases(self):
+        layer = NormMLP(10, 20)
+        assert layer.fc1.bias is not None
+        assert layer.fc2.bias is not None
+        assert torch.count_nonzero(layer.fc1.bias) == 0
+        assert torch.count_nonzero(layer.fc2.bias) == 0
+
     @pytest.mark.parametrize("activation", ["relu", "swiglu", "srelu"])
     @pytest.mark.parametrize("norm_type", ["rmsnorm", "layernorm"])
     def test_forward(self, device, activation, norm_type):

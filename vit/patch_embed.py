@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
+from .initialization import init_conv
 from .pos_enc import PositionEncoder, create_position_encoder
 
 
@@ -28,9 +29,13 @@ class PatchEmbed2d(nn.Module):
             stride=cast(Any, tuple(patch_size)),
             **factory_kwargs,
         )
+        self.reset_parameters()
         self.pos_enc = create_position_encoder(
             pos_enc, hidden_size, self.tokenized_size(tuple(img_size)), **factory_kwargs
         )
+
+    def reset_parameters(self) -> None:
+        init_conv(self.patch)
 
     @property
     def patch_size(self) -> tuple[int, int]:
@@ -74,9 +79,13 @@ class PatchEmbed3d(nn.Module):
             stride=cast(Any, tuple(patch_size)),
             **factory_kwargs,
         )
+        self.reset_parameters()
         self.pos_enc = create_position_encoder(
             pos_enc, hidden_size, self.tokenized_size(tuple(img_size)), **factory_kwargs
         )
+
+    def reset_parameters(self) -> None:
+        init_conv(self.patch)
 
     @property
     def patch_size(self) -> tuple[int, int, int]:

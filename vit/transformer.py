@@ -6,6 +6,7 @@ from torch import Tensor
 
 from .attention import CrossAttention, SelfAttention
 from .fused import NormMLP
+from .initialization import zero_bias_if_present
 from .layer_scale import LayerScale
 from .norm import NormType
 
@@ -53,6 +54,18 @@ def _subset_batch(tensor: Tensor, keep_indices: Tensor | None, full_batch_size: 
     return tensor.index_select(0, keep_indices)
 
 
+@torch.no_grad()
+def _zero_linear(module: nn.Linear) -> None:
+    nn.init.zeros_(module.weight)
+    zero_bias_if_present(module)
+
+
+@torch.no_grad()
+def _zero_residual_outputs(*modules: nn.Linear) -> None:
+    for module in modules:
+        _zero_linear(module)
+
+
 class TransformerEncoderLayer(nn.Module):
     def __init__(
         self,
@@ -88,8 +101,8 @@ class TransformerEncoderLayer(nn.Module):
             bias=attention_bias,
             norm_type=norm_type,
             eps=eps,
-            qkv_quantization_config=qkv_quantization_config,
-            out_quantization_config=attn_quantization_config,
+            qkv_quantization_config=None,
+            out_quantization_config=None,
             qk_normalization=qk_normalization,
             **factory_kwargs,
         )
@@ -103,7 +116,7 @@ class TransformerEncoderLayer(nn.Module):
             dropout=hidden_dropout,
             limit=glu_limit,
             extra_bias=glu_extra_bias,
-            quantization_config=mlp_quantization_config,
+            quantization_config=None,
             **factory_kwargs,
         )
         self.layer_scale_attn = (
@@ -116,6 +129,8 @@ class TransformerEncoderLayer(nn.Module):
             if layer_scale is not None
             else nn.Identity()
         )
+        _zero_residual_outputs(self.self_attention.out_proj, self.mlp.fc2)
+        self.apply_quantization(mlp_quantization_config, qkv_quantization_config, attn_quantization_config)
 
     def apply_quantization(
         self,
@@ -182,8 +197,8 @@ class TransformerDecoderLayer(nn.Module):
             bias=attention_bias,
             norm_type=norm_type,
             eps=eps,
-            qkv_quantization_config=qkv_quantization_config,
-            out_quantization_config=attn_quantization_config,
+            qkv_quantization_config=None,
+            out_quantization_config=None,
             qk_normalization=qk_normalization,
             **factory_kwargs,
         )
@@ -195,8 +210,8 @@ class TransformerDecoderLayer(nn.Module):
             bias=attention_bias,
             norm_type=norm_type,
             eps=eps,
-            qkv_quantization_config=qkv_quantization_config,
-            out_quantization_config=attn_quantization_config,
+            qkv_quantization_config=None,
+            out_quantization_config=None,
             qk_normalization=qk_normalization,
             **factory_kwargs,
         )
@@ -210,7 +225,7 @@ class TransformerDecoderLayer(nn.Module):
             dropout=hidden_dropout,
             limit=glu_limit,
             extra_bias=glu_extra_bias,
-            quantization_config=mlp_quantization_config,
+            quantization_config=None,
             **factory_kwargs,
         )
         self.layer_scale_attn = (
@@ -228,6 +243,8 @@ class TransformerDecoderLayer(nn.Module):
             if layer_scale is not None
             else nn.Identity()
         )
+        _zero_residual_outputs(self.self_attention.out_proj, self.cross_attention.out_proj, self.mlp.fc2)
+        self.apply_quantization(mlp_quantization_config, qkv_quantization_config, attn_quantization_config)
 
     def apply_quantization(
         self,
@@ -305,8 +322,8 @@ class CrossAttentionTransformer(nn.Module):
             bias=attention_bias,
             norm_type=norm_type,
             eps=eps,
-            qkv_quantization_config=qkv_quantization_config,
-            out_quantization_config=attn_quantization_config,
+            qkv_quantization_config=None,
+            out_quantization_config=None,
             qk_normalization=qk_normalization,
             **factory_kwargs,
         )
@@ -320,7 +337,7 @@ class CrossAttentionTransformer(nn.Module):
             dropout=hidden_dropout,
             limit=glu_limit,
             extra_bias=glu_extra_bias,
-            quantization_config=mlp_quantization_config,
+            quantization_config=None,
             **factory_kwargs,
         )
         self.layer_scale_cross = (
@@ -333,6 +350,8 @@ class CrossAttentionTransformer(nn.Module):
             if layer_scale is not None
             else nn.Identity()
         )
+        _zero_residual_outputs(self.cross_attention.out_proj, self.mlp.fc2)
+        self.apply_quantization(mlp_quantization_config, qkv_quantization_config, attn_quantization_config)
 
     def apply_quantization(
         self,

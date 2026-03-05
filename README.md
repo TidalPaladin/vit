@@ -3,6 +3,8 @@
 Implementation of Vision Transformer (ViT) in native PyTorch, accelerated by `torch.compile`.
 Supports modern enhancements like RMSNorm, SwiGLU, Squared ReLU, register tokens, and different positional encodings. This implementation does not incorporate a `CLS` token.
 
+Transformer residual output projections are zero-initialized by default (`attn out_proj` and `mlp fc2`) for stable deep-stack initialization.
+
 ## Installation
 
 This library can be installed with the following command

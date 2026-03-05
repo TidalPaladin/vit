@@ -7,6 +7,12 @@ from vit.patch_embed import PatchEmbed2d, PatchEmbed3d
 
 
 class TestPatchEmbed2d:
+    def test_reset_parameters_initializes_patch_conv(self):
+        layer = PatchEmbed2d(3, 64, (4, 4), (64, 64), pos_enc="none")
+        assert layer.patch.bias is not None
+        assert torch.count_nonzero(layer.patch.bias) == 0
+        assert layer.patch.weight.abs().max() <= 0.04
+
     @pytest.mark.parametrize("pos_enc", ["fourier", "learnable", "none"])
     def test_forward(self, device, pos_enc):
         B, C, H, W = 2, 3, 64, 64
@@ -30,6 +36,12 @@ class TestPatchEmbed2d:
 
 
 class TestPatchEmbed3d:
+    def test_reset_parameters_initializes_patch_conv(self):
+        layer = PatchEmbed3d(3, 64, (4, 4, 4), (4, 64, 64), pos_enc="none")
+        assert layer.patch.bias is not None
+        assert torch.count_nonzero(layer.patch.bias) == 0
+        assert layer.patch.weight.abs().max() <= 0.04
+
     @pytest.mark.parametrize("pos_enc", ["fourier", "learnable", "none"])
     def test_forward(self, device, pos_enc):
         B, C, D, H, W = 2, 3, 4, 64, 64

@@ -24,7 +24,31 @@ def _assert_parameter_grads_finite(module: torch.nn.Module) -> None:
         assert not param.grad.isnan().any()
 
 
+def _assert_linear_zero_initialized(linear: torch.nn.Linear) -> None:
+    assert torch.count_nonzero(linear.weight) == 0
+    assert linear.bias is not None
+    assert torch.count_nonzero(linear.bias) == 0
+
+
+@torch.no_grad()
+def _seed_linear_weights(*linears: torch.nn.Linear, std: float = 0.01) -> None:
+    for linear in linears:
+        linear.weight.normal_(std=std)
+
+
 class TestTransformerEncoderLayer:
+    def test_default_residual_outputs_are_zero_initialized(self):
+        layer = TransformerEncoderLayer(64, 128, 4)
+        _assert_linear_zero_initialized(layer.self_attention.out_proj)
+        _assert_linear_zero_initialized(layer.mlp.fc2)
+
+    def test_forward_is_identity_at_initialization(self, device):
+        layer = TransformerEncoderLayer(64, 128, 4).to(device)
+        x = torch.randn(2, 12, 64, device=device)
+        layer.eval()
+        y = layer(x)
+        assert_close(y, x)
+
     @pytest.mark.parametrize(
         ("norm_type", "norm_cls"), [("rmsnorm", torch.nn.RMSNorm), ("layernorm", torch.nn.LayerNorm)]
     )
@@ -67,6 +91,8 @@ class TestTransformerEncoderLayer:
         y1 = layer(x)
         y2 = layer(x)
         assert_close(y1, y2)
+
+        _seed_linear_weights(layer.self_attention.out_proj, layer.mlp.fc2)
 
         layer.train()
         y3 = layer(x)
@@ -190,6 +216,20 @@ class TestTransformerEncoderLayer:
 
 
 class TestTransformerDecoderLayer:
+    def test_default_residual_outputs_are_zero_initialized(self):
+        layer = TransformerDecoderLayer(64, 128, 4)
+        _assert_linear_zero_initialized(layer.self_attention.out_proj)
+        _assert_linear_zero_initialized(layer.cross_attention.out_proj)
+        _assert_linear_zero_initialized(layer.mlp.fc2)
+
+    def test_forward_is_identity_at_initialization(self, device):
+        layer = TransformerDecoderLayer(64, 128, 4).to(device)
+        x = torch.randn(2, 12, 64, device=device)
+        kv = torch.randn(2, 8, 64, device=device)
+        layer.eval()
+        y = layer(x, kv)
+        assert_close(y, x)
+
     @pytest.mark.parametrize(
         ("norm_type", "norm_cls"), [("rmsnorm", torch.nn.RMSNorm), ("layernorm", torch.nn.LayerNorm)]
     )
@@ -237,6 +277,8 @@ class TestTransformerDecoderLayer:
         y1 = layer(x, kv)
         y2 = layer(x, kv)
         assert_close(y1, y2)
+
+        _seed_linear_weights(layer.self_attention.out_proj, layer.cross_attention.out_proj, layer.mlp.fc2)
 
         layer.train()
         y3 = layer(x, kv)
@@ -356,6 +398,19 @@ class TestTransformerDecoderLayer:
 
 
 class TestCrossAttentionTransformer:
+    def test_default_residual_outputs_are_zero_initialized(self):
+        layer = CrossAttentionTransformer(64, 128, 4)
+        _assert_linear_zero_initialized(layer.cross_attention.out_proj)
+        _assert_linear_zero_initialized(layer.mlp.fc2)
+
+    def test_forward_is_identity_at_initialization(self, device):
+        layer = CrossAttentionTransformer(64, 128, 4).to(device)
+        x = torch.randn(2, 12, 64, device=device)
+        kv = torch.randn(2, 8, 64, device=device)
+        layer.eval()
+        y = layer(x, kv)
+        assert_close(y, x)
+
     @pytest.mark.parametrize(
         ("norm_type", "norm_cls"), [("rmsnorm", torch.nn.RMSNorm), ("layernorm", torch.nn.LayerNorm)]
     )
@@ -398,6 +453,8 @@ class TestCrossAttentionTransformer:
         y1 = layer(x, kv)
         y2 = layer(x, kv)
         assert_close(y1, y2)
+
+        _seed_linear_weights(layer.cross_attention.out_proj, layer.mlp.fc2)
 
         layer.train()
         y3 = layer(x, kv)

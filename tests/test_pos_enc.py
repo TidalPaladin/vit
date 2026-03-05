@@ -59,6 +59,11 @@ class TestLearnablePosition:
 
 
 class TestFourierPosition:
+    def test_reset_parameters_initializes_fc1(self):
+        layer = FourierPosition(16, (8, 8))
+        assert torch.count_nonzero(layer.w_fc1.bias) == 0
+        assert layer.w_fc1.weight.abs().max() <= 0.04
+
     def test_forward(self, device):
         D = 16
         torch.random.manual_seed(0)

@@ -33,6 +33,13 @@ def _assert_qk_norm_type(
 
 
 class TestSelfAttention:
+    def test_reset_parameters_initializes_all_projection_biases(self):
+        layer = SelfAttention(64, 4)
+        assert layer.qkv_proj.bias is not None
+        assert layer.out_proj.bias is not None
+        assert torch.count_nonzero(layer.qkv_proj.bias) == 0
+        assert torch.count_nonzero(layer.out_proj.bias) == 0
+
     def test_positional_eps_argument_is_backward_compatible(self, device):
         layer = SelfAttention(128, 8, 0.1, 0.1, True, 1e-6).to(device)
         assert layer.norm.eps == 1e-6
@@ -102,6 +109,15 @@ class TestSelfAttention:
 
 
 class TestCrossAttention:
+    def test_reset_parameters_initializes_all_projection_biases(self):
+        layer = CrossAttention(64, 4)
+        assert layer.q_proj.bias is not None
+        assert layer.kv_proj.bias is not None
+        assert layer.out_proj.bias is not None
+        assert torch.count_nonzero(layer.q_proj.bias) == 0
+        assert torch.count_nonzero(layer.kv_proj.bias) == 0
+        assert torch.count_nonzero(layer.out_proj.bias) == 0
+
     @pytest.mark.parametrize("norm_type", ["rmsnorm", "layernorm"])
     def test_forward(self, device, norm_type):
         B, L, D = 16, 128, 128
@@ -177,6 +193,14 @@ class TestCrossAttention:
 
 
 class TestAttentivePool:
+    def test_reset_parameters_initializes_query_and_biases(self):
+        layer = AttentivePool(64, 4)
+        assert layer.query.abs().max() <= 0.04
+        assert layer.kv_proj.bias is not None
+        assert layer.out_proj.bias is not None
+        assert torch.count_nonzero(layer.kv_proj.bias) == 0
+        assert torch.count_nonzero(layer.out_proj.bias) == 0
+
     def test_forward(self, device):
         B, L, D = 16, 128, 128
         layer = AttentivePool(D, D // 16).to(device)

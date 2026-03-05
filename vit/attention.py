@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from torch import Tensor
 from torchao.quantization import quantize_
 
+from .initialization import init_linear, trunc_normal_
 from .norm import NormModule, NormType, apply_norm, get_norm_bias, is_layer_norm, make_norm
 from .rope import apply_rope
 
@@ -486,7 +487,8 @@ class SelfAttention(nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
-        nn.init.trunc_normal_(self.qkv_proj.weight, std=0.02)
+        init_linear(self.qkv_proj)
+        init_linear(self.out_proj)
         self.apply_quantization(self.qkv_quantization_config, self.out_quantization_config)
 
     def apply_quantization(
@@ -591,8 +593,9 @@ class CrossAttention(nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
-        nn.init.trunc_normal_(self.q_proj.weight, std=0.02)
-        nn.init.trunc_normal_(self.kv_proj.weight, std=0.02)
+        init_linear(self.q_proj)
+        init_linear(self.kv_proj)
+        init_linear(self.out_proj)
         self.apply_quantization(self.qkv_quantization_config, self.out_quantization_config)
 
     def apply_quantization(
@@ -712,9 +715,9 @@ class AttentivePool(nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
-        nn.init.normal_(self.query, std=1.0)
-        nn.init.trunc_normal_(self.kv_proj.weight, std=0.02)
-        nn.init.trunc_normal_(self.out_proj.weight, std=0.02)
+        trunc_normal_(self.query)
+        init_linear(self.kv_proj)
+        init_linear(self.out_proj)
 
     def forward(self, x: Tensor, rope: Tensor | None = None) -> Tensor:
         y = attention_q_kv_packed_static_query(
