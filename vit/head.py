@@ -6,6 +6,8 @@ import torch.nn as nn
 import yaml
 from torch import Tensor
 
+from .initialization import init_conv, init_linear
+
 
 if TYPE_CHECKING:
     from .vit import ViTConfig
@@ -139,8 +141,8 @@ class Head(nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self, bias: float = 0.0) -> None:
-        nn.init.trunc_normal_(self.proj.weight, std=0.02)
-        if self.proj.bias is not None:
+        init_linear(self.proj)
+        if self.proj.bias is not None and bias != 0.0:
             nn.init.constant_(self.proj.bias, bias)
 
     def forward(self, x: Tensor) -> Tensor:
@@ -191,8 +193,8 @@ class TransposedConv2dHead(nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self, bias: float = 0.0) -> None:
-        nn.init.trunc_normal_(self.conv_transpose.weight, std=0.02)
-        if self.conv_transpose.bias is not None:
+        init_conv(self.conv_transpose)
+        if self.conv_transpose.bias is not None and bias != 0.0:
             nn.init.constant_(self.conv_transpose.bias, bias)
 
     def forward(self, x: Tensor) -> Tensor:
@@ -343,15 +345,13 @@ class UpsampleHead(nn.Module):
     def reset_parameters(self, bias: float = 0.0) -> None:
         for upsample in self.upsample_layers:
             assert isinstance(upsample, nn.ConvTranspose2d)
-            nn.init.trunc_normal_(upsample.weight, std=0.02)
-            if upsample.bias is not None:
-                nn.init.constant_(upsample.bias, 0.0)
+            init_conv(upsample)
         for stage_idx, smooth in enumerate(self.smooth_layers):
             assert isinstance(smooth, nn.Sequential)
             is_last_stage = stage_idx == len(self.smooth_layers) - 1
             conv_modules = [m for m in smooth if isinstance(m, nn.Conv2d)]
             for conv_idx, module in enumerate(conv_modules):
-                nn.init.trunc_normal_(module.weight, std=0.02)
+                init_conv(module)
                 if module.bias is not None:
                     is_final_layer = is_last_stage and conv_idx == len(conv_modules) - 1
                     nn.init.constant_(module.bias, bias if is_final_layer else 0.0)

@@ -10,6 +10,7 @@ from torch import Tensor
 from torch.utils.checkpoint import checkpoint
 
 from .head import Head, HeadConfig, TransposedConv2dHead, UpsampleHead
+from .initialization import trunc_normal_
 from .norm import NORM_TYPE_CHOICES, NormType, make_norm
 from .patch_embed import PatchEmbed2d, PatchEmbed3d
 from .pos_enc import PositionEncoder
@@ -288,8 +289,8 @@ class ViT(nn.Module):
             torch.empty(1, config.num_cls_tokens, config.hidden_size, **factory_kwargs),
             requires_grad=config.num_cls_tokens > 0,
         )
-        nn.init.normal_(self.register_tokens, std=0.02)
-        nn.init.normal_(self.cls_tokens, std=0.02)
+        trunc_normal_(self.register_tokens)
+        trunc_normal_(self.cls_tokens)
 
         self.blocks = nn.ModuleList(
             [

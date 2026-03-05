@@ -8,6 +8,7 @@ from torch import Tensor
 from torchao.quantization import quantize_
 
 from .helpers import get_activation
+from .initialization import init_linear
 from .norm import NormType, apply_norm, get_norm_bias, is_layer_norm, make_norm
 
 
@@ -55,7 +56,7 @@ class NormLinear(nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
-        nn.init.trunc_normal_(self.linear.weight, std=0.02)
+        init_linear(self.linear)
         self.apply_quantization(self.quantization_config)
 
     def apply_quantization(self, quantization_config: Any | None) -> None:
@@ -200,8 +201,8 @@ class NormMLP(nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
-        nn.init.trunc_normal_(self.fc1.weight, std=0.02)
-        nn.init.trunc_normal_(self.fc2.weight, std=0.02)
+        init_linear(self.fc1)
+        init_linear(self.fc2)
 
         # Apply quantization after weight initialization
         self.apply_quantization(self.quantization_config)

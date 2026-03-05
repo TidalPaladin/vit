@@ -7,6 +7,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
+from .initialization import INIT_STD, init_linear, trunc_normal_
+
 
 PositionEncoder = Literal["fourier", "learnable", "none", "rope"]
 
@@ -111,10 +113,10 @@ class LearnablePosition(nn.Module):
         if fourier_init:
             fourier_features_(self.positions.view(*self.spatial_size, self.positions.shape[-1]))
             shift = self.positions.mean()
-            scale = 0.02 / self.positions.std()
+            scale = INIT_STD / self.positions.std()
             self.positions.data.sub_(shift).mul_(scale)
         else:
-            nn.init.trunc_normal_(self.positions, std=0.02)
+            trunc_normal_(self.positions)
 
     @torch.no_grad()
     def expand_positions(self, size: Sequence[int]) -> None:
@@ -164,7 +166,7 @@ class FourierPosition(nn.Module):
 
     def reset_parameters(self, std: float = 1.0) -> None:
         nn.init.normal_(self.w_fourier, std=std)
-        nn.init.zeros_(self.w_fc1.bias)
+        init_linear(self.w_fc1)
 
     def forward(self, dims: Sequence[int] | None) -> Tensor:
         dims = dims or self.spatial_size
