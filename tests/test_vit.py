@@ -15,6 +15,15 @@ from vit.head import AttentivePoolHeadConfig, HeadConfig
 from vit.vit import ViT, ViTConfig, ViTFeatures
 
 
+FACTORY_METHOD_NAMES = ("create_encoder_layer", "create_decoder_layer", "create_cross_attention_layer")
+HEAD_FACTORY_CASES = (
+    ("cls", HeadConfig(out_features=10)),
+    ("pool", AttentivePoolHeadConfig(out_features=10)),
+)
+FACTORY_OVERRIDE_DTYPE = torch.float32
+FACTORY_CONFIG_DTYPE = torch.bfloat16
+
+
 @pytest.fixture(params=[pytest.param(False, id="2d"), pytest.param(True, id="3d")])
 def config(request):
     is_3d = request.param
@@ -40,6 +49,31 @@ def assert_all_requires_grad(module: Any):
 def assert_none_requires_grad(module: Any):
     assert isinstance(module, nn.Module)
     assert not any(p.requires_grad for p in module.parameters())
+
+
+def assert_module_params_dtype_and_device(module: nn.Module, dtype: torch.dtype, device: torch.device) -> None:
+    for name, param in module.named_parameters():
+        assert param.dtype == dtype, f"Parameter {name} has dtype {param.dtype}, expected {dtype}"
+        assert param.device == device, f"Parameter {name} on device {param.device}, expected {device}"
+
+
+def make_factory_override_config(**config_overrides: Any) -> ViTConfig:
+    return ViTConfig(
+        in_channels=3,
+        patch_size=(16, 16),
+        img_size=(224, 224),
+        depth=1,
+        hidden_size=64,
+        ffn_hidden_size=128,
+        num_attention_heads=4,
+        pos_enc="learnable",
+        dtype=FACTORY_CONFIG_DTYPE,
+        **config_overrides,
+    )
+
+
+def make_factory_override_model(device: torch.device, **config_overrides: Any) -> ViT:
+    return ViT(make_factory_override_config(**config_overrides), device=device)
 
 
 class TestViT:
@@ -219,6 +253,49 @@ class TestViT:
                 assert param.device == device, (
                     f"Head {head_name} param {name} on device {param.device}, expected {device}"
                 )
+
+    @pytest.mark.parametrize("factory_name", FACTORY_METHOD_NAMES)
+    def test_layer_factories_accept_dtype_override_without_module_to(self, device, factory_name):
+        model = make_factory_override_model(device)
+        factory = getattr(model, factory_name)
+
+        with patch.object(nn.Module, "to", side_effect=AssertionError("factory method should not cast via Module.to")):
+            module = factory(device=device, dtype=FACTORY_OVERRIDE_DTYPE)
+
+        assert_module_params_dtype_and_device(module, FACTORY_OVERRIDE_DTYPE, device)
+
+    @pytest.mark.parametrize("factory_name", FACTORY_METHOD_NAMES)
+    def test_layer_factories_default_to_config_dtype(self, device, factory_name):
+        model = make_factory_override_model(device)
+        factory = getattr(model, factory_name)
+        module = factory(device=device)
+        assert_module_params_dtype_and_device(module, FACTORY_CONFIG_DTYPE, device)
+
+    @pytest.mark.parametrize(("name", "head_config"), HEAD_FACTORY_CASES)
+    def test_create_head_accepts_dtype_override_without_module_to(self, device, name, head_config):
+        model = make_factory_override_model(device)
+
+        with patch.object(nn.Module, "to", side_effect=AssertionError("head factory should not cast via Module.to")):
+            head = model.create_head(name, head_config, device=device, dtype=FACTORY_OVERRIDE_DTYPE)
+
+        assert_module_params_dtype_and_device(head, FACTORY_OVERRIDE_DTYPE, device)
+
+    @pytest.mark.parametrize(("name", "head_config"), HEAD_FACTORY_CASES)
+    def test_create_head_defaults_to_config_dtype(self, device, name, head_config):
+        model = make_factory_override_model(device)
+        head = model.create_head(name, head_config, device=device)
+        assert_module_params_dtype_and_device(head, FACTORY_CONFIG_DTYPE, device)
+
+    def test_vit_init_uses_create_head_factory(self, device):
+        class HeadDtypeOverrideViT(ViT):
+            def create_head(self, name, head_config, device=None, dtype=None):
+                return super().create_head(name, head_config, device=device, dtype=FACTORY_OVERRIDE_DTYPE)
+
+        config = make_factory_override_config(heads={"cls": HeadConfig(out_features=10)})
+        model = HeadDtypeOverrideViT(config, device=device)
+
+        assert model.stem.patch.weight.dtype == FACTORY_CONFIG_DTYPE
+        assert_module_params_dtype_and_device(model.heads["cls"], FACTORY_OVERRIDE_DTYPE, device)
 
     def test_prefix_tokens_use_bounded_truncated_normal_init(self):
         config = ViTConfig(

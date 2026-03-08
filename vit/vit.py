@@ -28,6 +28,10 @@ from .tokens import apply_mask, create_mask
 from .transformer import CrossAttentionTransformer, TransformerDecoderLayer, TransformerEncoderLayer
 
 
+HeadConfigType = HeadConfig | AttentivePoolHeadConfig | TransposedConv2dHeadConfig | UpsampleHeadConfig
+HeadModuleType = Head | AttentivePoolHead | TransposedConv2dHead | UpsampleHead
+
+
 def _parse_dtype(dtype_str: str | None) -> torch.dtype | None:
     """Convert string dtype representation to torch.dtype."""
     if dtype_str is None:
@@ -106,9 +110,7 @@ class ViTConfig:
     patch_embed_normalization: bool = False
 
     # Heads
-    heads: dict[str, HeadConfig | AttentivePoolHeadConfig | TransposedConv2dHeadConfig | UpsampleHeadConfig] = field(
-        default_factory=dict
-    )
+    heads: dict[str, HeadConfigType] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Validate configuration parameters."""
@@ -317,7 +319,7 @@ class ViT(nn.Module):
         self.self_attention_requires_grad_(self.config.self_attention_requires_grad)
 
         self.heads = nn.ModuleDict(
-            {name: head_config.instantiate(config, **factory_kwargs) for name, head_config in config.heads.items()}
+            {name: self.create_head(name, head_config, device=device) for name, head_config in config.heads.items()}
         )
 
     def apply_quantization(
@@ -334,13 +336,18 @@ class ViT(nn.Module):
     def config(self) -> ViTConfig:
         return self._config
 
+    def _resolve_factory_dtype(self, dtype: torch.dtype | None) -> torch.dtype:
+        return self.config.dtype if dtype is None else dtype
+
     def create_encoder_layer(
         self,
         mlp_quantization_config: Any | None = None,
         qkv_quantization_config: Any | None = None,
         attn_quantization_config: Any | None = None,
         device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
     ) -> TransformerEncoderLayer:
+        resolved_dtype = self._resolve_factory_dtype(dtype)
         return TransformerEncoderLayer(
             hidden_size=self.config.hidden_size,
             ffn_hidden_size=self.config.ffn_hidden_size,
@@ -360,7 +367,7 @@ class ViT(nn.Module):
             qkv_quantization_config=qkv_quantization_config,
             attn_quantization_config=attn_quantization_config,
             device=device,
-            dtype=self.config.dtype,
+            dtype=resolved_dtype,
         )
 
     def create_decoder_layer(
@@ -369,7 +376,9 @@ class ViT(nn.Module):
         qkv_quantization_config: Any | None = None,
         attn_quantization_config: Any | None = None,
         device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
     ) -> TransformerDecoderLayer:
+        resolved_dtype = self._resolve_factory_dtype(dtype)
         return TransformerDecoderLayer(
             hidden_size=self.config.hidden_size,
             ffn_hidden_size=self.config.ffn_hidden_size,
@@ -389,7 +398,7 @@ class ViT(nn.Module):
             qkv_quantization_config=qkv_quantization_config,
             attn_quantization_config=attn_quantization_config,
             device=device,
-            dtype=self.config.dtype,
+            dtype=resolved_dtype,
         )
 
     def create_cross_attention_layer(
@@ -398,7 +407,9 @@ class ViT(nn.Module):
         qkv_quantization_config: Any | None = None,
         attn_quantization_config: Any | None = None,
         device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
     ) -> CrossAttentionTransformer:
+        resolved_dtype = self._resolve_factory_dtype(dtype)
         return CrossAttentionTransformer(
             hidden_size=self.config.hidden_size,
             ffn_hidden_size=self.config.ffn_hidden_size,
@@ -418,12 +429,25 @@ class ViT(nn.Module):
             qkv_quantization_config=qkv_quantization_config,
             attn_quantization_config=attn_quantization_config,
             device=device,
-            dtype=self.config.dtype,
+            dtype=resolved_dtype,
         )
 
-    def get_head(self, name: str) -> Head | AttentivePoolHead | TransposedConv2dHead | UpsampleHead:
+    def create_head(
+        self,
+        name: str,
+        head_config: HeadConfigType,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> HeadModuleType:
+        _ = name
+        resolved_dtype = self._resolve_factory_dtype(dtype)
+        head = head_config.instantiate(self.config, device=device, dtype=resolved_dtype)
+        assert isinstance(head, HeadModuleType)
+        return head
+
+    def get_head(self, name: str) -> HeadModuleType:
         head = self.heads[name]
-        assert isinstance(head, Head | AttentivePoolHead | TransposedConv2dHead | UpsampleHead)
+        assert isinstance(head, HeadModuleType)
         return head
 
     def get_block(self, i: int) -> TransformerEncoderLayer:
