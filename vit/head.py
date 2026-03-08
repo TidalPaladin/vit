@@ -6,7 +6,9 @@ import torch.nn as nn
 import yaml
 from torch import Tensor
 
+from .attention import AttentivePool
 from .initialization import init_conv, init_linear
+from .norm import NormType
 
 
 if TYPE_CHECKING:
@@ -15,44 +17,62 @@ else:
     ViTConfig = Any
 
 
-def head_config_constructor(loader, node):
+def _construct_config(loader, node, config_type):
     values = loader.construct_mapping(node, deep=True)
-    return HeadConfig(**values)
+    return config_type(**values)
+
+
+def head_config_constructor(loader, node):
+    return _construct_config(loader, node, HeadConfig)
 
 
 def transposed_conv2d_head_config_constructor(loader, node):
-    values = loader.construct_mapping(node, deep=True)
-    return TransposedConv2dHeadConfig(**values)
+    return _construct_config(loader, node, TransposedConv2dHeadConfig)
+
+
+def attentive_pool_head_config_constructor(loader, node):
+    return _construct_config(loader, node, AttentivePoolHeadConfig)
 
 
 def upsample_head_config_constructor(loader, node):
-    values = loader.construct_mapping(node, deep=True)
-    return UpsampleHeadConfig(**values)
+    return _construct_config(loader, node, UpsampleHeadConfig)
+
+
+def _register_yaml_constructors(tags: list[str], constructor) -> None:
+    for tag in tags:
+        for loader in (yaml.SafeLoader, yaml.FullLoader, yaml.UnsafeLoader):
+            loader.add_constructor(tag, constructor)
 
 
 def register_constructors():
-    head_tags = [
-        "tag:yaml.org,2002:python/object:vit.head.HeadConfig",
-        "tag:yaml.org,2002:python/object:vit.HeadConfig",
-    ]
-    transposed_conv2d_head_tags = [
-        "tag:yaml.org,2002:python/object:vit.head.TransposedConv2dHeadConfig",
-        "tag:yaml.org,2002:python/object:vit.TransposedConv2dHeadConfig",
-    ]
-    upsample_head_tags = [
-        "tag:yaml.org,2002:python/object:vit.head.UpsampleHeadConfig",
-        "tag:yaml.org,2002:python/object:vit.UpsampleHeadConfig",
-    ]
-    loaders = [yaml.SafeLoader, yaml.FullLoader, yaml.UnsafeLoader]
-    for tag in head_tags:
-        for loader in loaders:
-            loader.add_constructor(tag, head_config_constructor)
-    for tag in transposed_conv2d_head_tags:
-        for loader in loaders:
-            loader.add_constructor(tag, transposed_conv2d_head_config_constructor)
-    for tag in upsample_head_tags:
-        for loader in loaders:
-            loader.add_constructor(tag, upsample_head_config_constructor)
+    _register_yaml_constructors(
+        [
+            "tag:yaml.org,2002:python/object:vit.head.HeadConfig",
+            "tag:yaml.org,2002:python/object:vit.HeadConfig",
+        ],
+        head_config_constructor,
+    )
+    _register_yaml_constructors(
+        [
+            "tag:yaml.org,2002:python/object:vit.head.TransposedConv2dHeadConfig",
+            "tag:yaml.org,2002:python/object:vit.TransposedConv2dHeadConfig",
+        ],
+        transposed_conv2d_head_config_constructor,
+    )
+    _register_yaml_constructors(
+        [
+            "tag:yaml.org,2002:python/object:vit.head.UpsampleHeadConfig",
+            "tag:yaml.org,2002:python/object:vit.UpsampleHeadConfig",
+        ],
+        upsample_head_config_constructor,
+    )
+    _register_yaml_constructors(
+        [
+            "tag:yaml.org,2002:python/object:vit.head.AttentivePoolHeadConfig",
+            "tag:yaml.org,2002:python/object:vit.AttentivePoolHeadConfig",
+        ],
+        attentive_pool_head_config_constructor,
+    )
 
 
 @dataclass
@@ -73,6 +93,41 @@ class HeadConfig:
             self.dropout,
             device=device,
             dtype=dtype,
+        )
+
+
+@dataclass
+class AttentivePoolHeadConfig:
+    in_features: int | None = None
+    out_features: int | None = None
+    num_attention_heads: int | None = None
+    num_queries: int = 1
+    hidden_dropout: float = 0.0
+    attention_dropout: float = 0.0
+    dropout: float = 0.0
+
+    def instantiate(
+        self,
+        backbone_config: ViTConfig,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> "AttentivePoolHead":
+        in_features = self.in_features or backbone_config.hidden_size
+        out_features = self.out_features or backbone_config.hidden_size
+        num_attention_heads = self.num_attention_heads or backbone_config.num_attention_heads
+        return AttentivePoolHead(
+            in_features=in_features,
+            out_features=out_features,
+            num_attention_heads=num_attention_heads,
+            num_queries=self.num_queries,
+            hidden_dropout=self.hidden_dropout,
+            attention_dropout=self.attention_dropout,
+            dropout=self.dropout,
+            bias=backbone_config.attention_bias,
+            device=device,
+            dtype=dtype,
+            norm_type=backbone_config.norm_type,
+            qk_normalization=backbone_config.qk_normalization,
         )
 
 
@@ -153,6 +208,53 @@ class Head(nn.Module):
 
         def __call__(self, x: Tensor) -> Tensor:
             return self.forward(x)
+
+
+class AttentivePoolHead(nn.Module):
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        num_attention_heads: int,
+        num_queries: int = 1,
+        hidden_dropout: float = 0.0,
+        attention_dropout: float = 0.0,
+        dropout: float = 0.0,
+        bias: bool = True,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+        norm_type: NormType = "rmsnorm",
+        qk_normalization: bool = False,
+    ):
+        super().__init__()
+        self.pool = AttentivePool(
+            in_features,
+            num_attention_heads,
+            num_queries=num_queries,
+            hidden_dropout=hidden_dropout,
+            attention_dropout=attention_dropout,
+            bias=bias,
+            device=device,
+            dtype=dtype,
+            norm_type=norm_type,
+            qk_normalization=qk_normalization,
+        )
+        self.proj = Head(in_features, out_features, dropout=dropout, device=device, dtype=dtype)
+
+    def reset_parameters(self) -> None:
+        self.pool.reset_parameters()
+        self.proj.reset_parameters()
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.proj(self.pool(x))
+
+    if TYPE_CHECKING:
+
+        def __call__(self, x: Tensor) -> Tensor:
+            return self.forward(x)
+
+    def forward_weights(self, x: Tensor) -> Tensor:
+        return self.pool.forward_weights(x)
 
 
 class TransposedConv2dHead(nn.Module):
