@@ -3,7 +3,10 @@
 import importlib
 from importlib.metadata import PackageNotFoundError, version
 
+from .attention import AttentivePool
 from .head import (
+    AttentivePoolHead,
+    AttentivePoolHeadConfig,
     Head,
     HeadConfig,
     TransposedConv2dHead,
@@ -39,6 +42,9 @@ __all__ = [
     "ViT",
     "ViTConfig",
     "ViTFeatures",
+    "AttentivePool",
+    "AttentivePoolHead",
+    "AttentivePoolHeadConfig",
     "HeadConfig",
     "Head",
     "TransposedConv2dHead",

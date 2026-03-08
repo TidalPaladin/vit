@@ -8,6 +8,7 @@ from torch.testing import assert_close
 from torchao.dtypes import AffineQuantizedTensor
 from torchao.quantization import Int8WeightOnlyConfig
 
+from vit import AttentivePool as PublicAttentivePool
 from vit.attention import AttentivePool, CrossAttention, SelfAttention
 
 
@@ -193,13 +194,18 @@ class TestCrossAttention:
 
 
 class TestAttentivePool:
+    def test_top_level_export(self):
+        assert PublicAttentivePool is AttentivePool
+
     def test_reset_parameters_initializes_query_and_biases(self):
         layer = AttentivePool(64, 4)
         assert layer.query.abs().max() <= 0.04
-        assert layer.kv_proj.bias is not None
-        assert layer.out_proj.bias is not None
-        assert torch.count_nonzero(layer.kv_proj.bias) == 0
-        assert torch.count_nonzero(layer.out_proj.bias) == 0
+        assert layer.cross_attention.q_proj.bias is not None
+        assert layer.cross_attention.kv_proj.bias is not None
+        assert layer.cross_attention.out_proj.bias is not None
+        assert torch.count_nonzero(layer.cross_attention.q_proj.bias) == 0
+        assert torch.count_nonzero(layer.cross_attention.kv_proj.bias) == 0
+        assert torch.count_nonzero(layer.cross_attention.out_proj.bias) == 0
 
     def test_forward(self, device):
         B, L, D = 16, 128, 128
@@ -208,6 +214,14 @@ class TestAttentivePool:
         with torch.autocast(device_type=device.type, dtype=torch.float32):
             y = layer(x)
         assert y.shape == (B, D)
+
+    def test_forward_multi_query(self, device):
+        B, L, D, Q = 16, 128, 128, 3
+        layer = AttentivePool(D, D // 16, num_queries=Q).to(device)
+        x = torch.randn(B, L, D, device=device)
+        with torch.autocast(device_type=device.type, dtype=torch.float32):
+            y = layer(x)
+        assert y.shape == (B, Q, D)
 
     def test_backward(self, device):
         B, L, D = 16, 128, 128
@@ -230,6 +244,22 @@ class TestAttentivePool:
             y = layer.forward_weights(x)
         # forward_weights returns attention weights: (B, H, num_queries, L)
         assert y.shape == (B, H, num_queries, L)
+
+    @pytest.mark.parametrize(
+        ("norm_type", "norm_cls"), [("rmsnorm", torch.nn.RMSNorm), ("layernorm", torch.nn.LayerNorm)]
+    )
+    def test_qk_normalization_uses_requested_norm_type(self, norm_type, norm_cls):
+        layer = AttentivePool(64, 4, norm_type=norm_type, qk_normalization=True)
+        assert isinstance(layer.cross_attention.q_norm, norm_cls)
+        assert isinstance(layer.cross_attention.k_norm, norm_cls)
+
+    def test_invalid_num_queries_raises(self):
+        with pytest.raises(ValueError, match="num_queries must be positive"):
+            AttentivePool(64, 4, num_queries=0)
+
+    def test_hidden_size_not_divisible_by_num_attention_heads_raises(self):
+        with pytest.raises(ValueError, match="hidden_size.*must be divisible by.*num_attention_heads"):
+            AttentivePool(65, 4)
 
 
 class TestAttentionWeightsScaling:

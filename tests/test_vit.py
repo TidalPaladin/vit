@@ -11,7 +11,7 @@ import torch.nn as nn
 from torch.testing import assert_close
 from torchao.quantization import Int8WeightOnlyConfig
 
-from vit.head import HeadConfig
+from vit.head import AttentivePoolHeadConfig, HeadConfig
 from vit.vit import ViT, ViTConfig, ViTFeatures
 
 
@@ -250,6 +250,12 @@ class TestViT:
         config_from_path = ViTConfig.from_yaml(path)
         assert config == config_from_path
 
+    def test_config_from_yaml_with_attentive_pool_head(self, config):
+        config_with_head = replace(config, heads={"cls": AttentivePoolHeadConfig(out_features=32, num_queries=2)})
+        config_from_str = ViTConfig.from_yaml(config_with_head.to_yaml())
+        assert config_with_head == config_from_str
+        assert isinstance(config_from_str.heads["cls"], AttentivePoolHeadConfig)
+
     def test_patch_embed_normalization_yaml_serialization(self, config):
         config_norm = replace(config, patch_embed_normalization=True)
         config_norm_restored = ViTConfig.from_yaml(config_norm.to_yaml())
@@ -420,6 +426,17 @@ class TestViT:
         # Pool visual tokens before head projection
         pooled = out.visual_tokens.mean(dim=1)
         pred = model.heads["cls"](pooled)
+        assert pred.shape == (2, 128)
+
+    def test_with_attentive_pool_head(self, device, config):
+        config = replace(
+            config,
+            heads={"cls": AttentivePoolHeadConfig(out_features=128)},
+        )
+        x = torch.randn(2, 3, *config.img_size, device=device)
+        model = ViT(config).to(device)
+        out = model(x)
+        pred = model.heads["cls"](out.visual_tokens)
         assert pred.shape == (2, 128)
 
     @pytest.mark.parametrize("num_register_tokens", [0, 2])

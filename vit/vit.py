@@ -9,7 +9,16 @@ import yaml
 from torch import Tensor
 from torch.utils.checkpoint import checkpoint
 
-from .head import Head, HeadConfig, TransposedConv2dHead, UpsampleHead
+from .head import (
+    AttentivePoolHead,
+    AttentivePoolHeadConfig,
+    Head,
+    HeadConfig,
+    TransposedConv2dHead,
+    TransposedConv2dHeadConfig,
+    UpsampleHead,
+    UpsampleHeadConfig,
+)
 from .initialization import trunc_normal_
 from .norm import NORM_TYPE_CHOICES, NormType, make_norm
 from .patch_embed import PatchEmbed2d, PatchEmbed3d
@@ -97,7 +106,9 @@ class ViTConfig:
     patch_embed_normalization: bool = False
 
     # Heads
-    heads: dict[str, HeadConfig] = field(default_factory=dict)
+    heads: dict[str, HeadConfig | AttentivePoolHeadConfig | TransposedConv2dHeadConfig | UpsampleHeadConfig] = field(
+        default_factory=dict
+    )
 
     def __post_init__(self) -> None:
         """Validate configuration parameters."""
@@ -410,9 +421,9 @@ class ViT(nn.Module):
             dtype=self.config.dtype,
         )
 
-    def get_head(self, name: str) -> Head | TransposedConv2dHead | UpsampleHead:
+    def get_head(self, name: str) -> Head | AttentivePoolHead | TransposedConv2dHead | UpsampleHead:
         head = self.heads[name]
-        assert isinstance(head, Head | TransposedConv2dHead | UpsampleHead)
+        assert isinstance(head, Head | AttentivePoolHead | TransposedConv2dHead | UpsampleHead)
         return head
 
     def get_block(self, i: int) -> TransformerEncoderLayer:
