@@ -5,7 +5,7 @@ import torch.nn as nn
 from torch import Tensor
 
 from .attention import CrossAttention, SelfAttention
-from .fused import NormMLP
+from .fused import AdaNormMLP, NormMLP
 from .initialization import zero_bias_if_present
 from .layer_scale import LayerScale
 from .norm import NormType
@@ -54,6 +54,79 @@ def _subset_batch(tensor: Tensor, keep_indices: Tensor | None, full_batch_size: 
     return tensor.index_select(0, keep_indices)
 
 
+def _subset_conditioning(tensor: Tensor, keep_indices: Tensor | None, full_batch_size: int) -> Tensor:
+    if tensor.ndim == 1:
+        return tensor
+    return _subset_batch(tensor, keep_indices, full_batch_size)
+
+
+def _forward_mlp(
+    mlp: NormMLP,
+    x: Tensor,
+    conditioning: Tensor | None,
+    keep_indices: Tensor | None,
+    full_batch_size: int,
+) -> Tensor:
+    if isinstance(mlp, AdaNormMLP):
+        if conditioning is None:
+            raise ValueError("conditioning is required when transformer conditioning_size is set")
+        conditioning = _subset_conditioning(conditioning, keep_indices, full_batch_size)
+        return mlp(x, conditioning=conditioning)
+    if conditioning is not None:
+        raise ValueError("conditioning is not supported unless transformer conditioning_size is set")
+    return mlp(x)
+
+
+def _make_mlp(
+    hidden_size: int,
+    ffn_hidden_size: int,
+    *,
+    bias: bool,
+    activation: str,
+    norm_type: NormType,
+    eps: float,
+    dropout: float,
+    limit: float | None,
+    extra_bias: float | None,
+    quantization_config: Any | None,
+    conditioning_size: int | None,
+    adaln_gate_init: float,
+    device: torch.device | None,
+    dtype: torch.dtype | None,
+) -> NormMLP:
+    if conditioning_size is not None:
+        return AdaNormMLP(
+            hidden_size=hidden_size,
+            ffn_hidden_size=ffn_hidden_size,
+            bias=bias,
+            activation=activation,
+            norm_type=norm_type,
+            eps=eps,
+            dropout=dropout,
+            limit=limit,
+            extra_bias=extra_bias,
+            quantization_config=quantization_config,
+            conditioning_size=conditioning_size,
+            adaln_gate_init=adaln_gate_init,
+            device=device,
+            dtype=dtype,
+        )
+    return NormMLP(
+        hidden_size=hidden_size,
+        ffn_hidden_size=ffn_hidden_size,
+        bias=bias,
+        activation=activation,
+        norm_type=norm_type,
+        eps=eps,
+        dropout=dropout,
+        limit=limit,
+        extra_bias=extra_bias,
+        quantization_config=quantization_config,
+        device=device,
+        dtype=dtype,
+    )
+
+
 @torch.no_grad()
 def _zero_linear(module: nn.Linear) -> None:
     nn.init.zeros_(module.weight)
@@ -64,6 +137,13 @@ def _zero_linear(module: nn.Linear) -> None:
 def _zero_residual_outputs(*modules: nn.Linear) -> None:
     for module in modules:
         _zero_linear(module)
+
+
+@torch.no_grad()
+def _zero_mlp_residual_output(mlp: NormMLP) -> None:
+    if isinstance(mlp, AdaNormMLP):
+        return
+    _zero_linear(mlp.fc2)
 
 
 class TransformerEncoderLayer(nn.Module):
@@ -89,6 +169,8 @@ class TransformerEncoderLayer(nn.Module):
         dtype: torch.dtype | None = None,
         norm_type: NormType = "rmsnorm",
         qk_normalization: bool = False,
+        conditioning_size: int | None = None,
+        adaln_gate_init: float = 0.0,
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -106,7 +188,7 @@ class TransformerEncoderLayer(nn.Module):
             qk_normalization=qk_normalization,
             **factory_kwargs,
         )
-        self.mlp = NormMLP(
+        self.mlp = _make_mlp(
             hidden_size=hidden_size,
             ffn_hidden_size=ffn_hidden_size,
             bias=mlp_bias,
@@ -117,7 +199,10 @@ class TransformerEncoderLayer(nn.Module):
             limit=glu_limit,
             extra_bias=glu_extra_bias,
             quantization_config=None,
-            **factory_kwargs,
+            conditioning_size=conditioning_size,
+            adaln_gate_init=adaln_gate_init,
+            device=device,
+            dtype=dtype,
         )
         self.layer_scale_attn = (
             LayerScale(hidden_size, layer_scale, inplace=True, **factory_kwargs)
@@ -129,7 +214,8 @@ class TransformerEncoderLayer(nn.Module):
             if layer_scale is not None
             else nn.Identity()
         )
-        _zero_residual_outputs(self.self_attention.out_proj, self.mlp.fc2)
+        _zero_residual_outputs(self.self_attention.out_proj)
+        _zero_mlp_residual_output(self.mlp)
         self.apply_quantization(mlp_quantization_config, qkv_quantization_config, attn_quantization_config)
 
     def apply_quantization(
@@ -143,7 +229,7 @@ class TransformerEncoderLayer(nn.Module):
         if qkv_quantization_config is not None or attn_quantization_config is not None:
             self.self_attention.apply_quantization(qkv_quantization_config, attn_quantization_config)
 
-    def forward(self, x: Tensor, rope: Tensor | None = None) -> Tensor:
+    def forward(self, x: Tensor, rope: Tensor | None = None, conditioning: Tensor | None = None) -> Tensor:
         batch_size = x.shape[0]
 
         x_residual, keep_indices, residual_scale = _select_residual_subset(x, self.drop_path_rate, self.training)
@@ -152,14 +238,14 @@ class TransformerEncoderLayer(nn.Module):
         x = _merge_residual_subset(x, o, keep_indices, residual_scale)
 
         x_residual, keep_indices, residual_scale = _select_residual_subset(x, self.drop_path_rate, self.training)
-        o = self.layer_scale_mlp(self.mlp(x_residual))
+        o = self.layer_scale_mlp(_forward_mlp(self.mlp, x_residual, conditioning, keep_indices, batch_size))
         x = _merge_residual_subset(x, o, keep_indices, residual_scale)
         return x
 
     if TYPE_CHECKING:
 
-        def __call__(self, x: Tensor, rope: Tensor | None = None) -> Tensor:
-            return self.forward(x, rope)
+        def __call__(self, x: Tensor, rope: Tensor | None = None, conditioning: Tensor | None = None) -> Tensor:
+            return self.forward(x, rope, conditioning)
 
 
 class TransformerDecoderLayer(nn.Module):
@@ -185,6 +271,8 @@ class TransformerDecoderLayer(nn.Module):
         dtype: torch.dtype | None = None,
         norm_type: NormType = "rmsnorm",
         qk_normalization: bool = False,
+        conditioning_size: int | None = None,
+        adaln_gate_init: float = 0.0,
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -215,7 +303,7 @@ class TransformerDecoderLayer(nn.Module):
             qk_normalization=qk_normalization,
             **factory_kwargs,
         )
-        self.mlp = NormMLP(
+        self.mlp = _make_mlp(
             hidden_size=hidden_size,
             ffn_hidden_size=ffn_hidden_size,
             bias=mlp_bias,
@@ -226,7 +314,10 @@ class TransformerDecoderLayer(nn.Module):
             limit=glu_limit,
             extra_bias=glu_extra_bias,
             quantization_config=None,
-            **factory_kwargs,
+            conditioning_size=conditioning_size,
+            adaln_gate_init=adaln_gate_init,
+            device=device,
+            dtype=dtype,
         )
         self.layer_scale_attn = (
             LayerScale(hidden_size, layer_scale, inplace=True, **factory_kwargs)
@@ -243,7 +334,8 @@ class TransformerDecoderLayer(nn.Module):
             if layer_scale is not None
             else nn.Identity()
         )
-        _zero_residual_outputs(self.self_attention.out_proj, self.cross_attention.out_proj, self.mlp.fc2)
+        _zero_residual_outputs(self.self_attention.out_proj, self.cross_attention.out_proj)
+        _zero_mlp_residual_output(self.mlp)
         self.apply_quantization(mlp_quantization_config, qkv_quantization_config, attn_quantization_config)
 
     def apply_quantization(
@@ -259,7 +351,14 @@ class TransformerDecoderLayer(nn.Module):
         if qkv_quantization_config is not None or attn_quantization_config is not None:
             self.cross_attention.apply_quantization(qkv_quantization_config, attn_quantization_config)
 
-    def forward(self, x: Tensor, kv: Tensor, rope_q: Tensor | None = None, rope_k: Tensor | None = None) -> Tensor:
+    def forward(
+        self,
+        x: Tensor,
+        kv: Tensor,
+        rope_q: Tensor | None = None,
+        rope_k: Tensor | None = None,
+        conditioning: Tensor | None = None,
+    ) -> Tensor:
         batch_size = x.shape[0]
 
         x_residual, keep_indices, residual_scale = _select_residual_subset(x, self.drop_path_rate, self.training)
@@ -277,14 +376,21 @@ class TransformerDecoderLayer(nn.Module):
         x = _merge_residual_subset(x, o, keep_indices, residual_scale)
 
         x_residual, keep_indices, residual_scale = _select_residual_subset(x, self.drop_path_rate, self.training)
-        o = self.layer_scale_mlp(self.mlp(x_residual))
+        o = self.layer_scale_mlp(_forward_mlp(self.mlp, x_residual, conditioning, keep_indices, batch_size))
         x = _merge_residual_subset(x, o, keep_indices, residual_scale)
         return x
 
     if TYPE_CHECKING:
 
-        def __call__(self, x: Tensor, kv: Tensor, rope_q: Tensor | None = None, rope_k: Tensor | None = None) -> Tensor:
-            return self.forward(x, kv, rope_q, rope_k)
+        def __call__(
+            self,
+            x: Tensor,
+            kv: Tensor,
+            rope_q: Tensor | None = None,
+            rope_k: Tensor | None = None,
+            conditioning: Tensor | None = None,
+        ) -> Tensor:
+            return self.forward(x, kv, rope_q, rope_k, conditioning)
 
 
 class CrossAttentionTransformer(nn.Module):
@@ -310,6 +416,8 @@ class CrossAttentionTransformer(nn.Module):
         dtype: torch.dtype | None = None,
         norm_type: NormType = "rmsnorm",
         qk_normalization: bool = False,
+        conditioning_size: int | None = None,
+        adaln_gate_init: float = 0.0,
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -327,7 +435,7 @@ class CrossAttentionTransformer(nn.Module):
             qk_normalization=qk_normalization,
             **factory_kwargs,
         )
-        self.mlp = NormMLP(
+        self.mlp = _make_mlp(
             hidden_size=hidden_size,
             ffn_hidden_size=ffn_hidden_size,
             bias=mlp_bias,
@@ -338,7 +446,10 @@ class CrossAttentionTransformer(nn.Module):
             limit=glu_limit,
             extra_bias=glu_extra_bias,
             quantization_config=None,
-            **factory_kwargs,
+            conditioning_size=conditioning_size,
+            adaln_gate_init=adaln_gate_init,
+            device=device,
+            dtype=dtype,
         )
         self.layer_scale_cross = (
             LayerScale(hidden_size, layer_scale, inplace=True, **factory_kwargs)
@@ -350,7 +461,8 @@ class CrossAttentionTransformer(nn.Module):
             if layer_scale is not None
             else nn.Identity()
         )
-        _zero_residual_outputs(self.cross_attention.out_proj, self.mlp.fc2)
+        _zero_residual_outputs(self.cross_attention.out_proj)
+        _zero_mlp_residual_output(self.mlp)
         self.apply_quantization(mlp_quantization_config, qkv_quantization_config, attn_quantization_config)
 
     def apply_quantization(
@@ -364,7 +476,14 @@ class CrossAttentionTransformer(nn.Module):
         if qkv_quantization_config is not None or attn_quantization_config is not None:
             self.cross_attention.apply_quantization(qkv_quantization_config, attn_quantization_config)
 
-    def forward(self, x: Tensor, kv: Tensor, rope_q: Tensor | None = None, rope_k: Tensor | None = None) -> Tensor:
+    def forward(
+        self,
+        x: Tensor,
+        kv: Tensor,
+        rope_q: Tensor | None = None,
+        rope_k: Tensor | None = None,
+        conditioning: Tensor | None = None,
+    ) -> Tensor:
         batch_size = x.shape[0]
 
         x_residual, keep_indices, residual_scale = _select_residual_subset(x, self.drop_path_rate, self.training)
@@ -377,11 +496,18 @@ class CrossAttentionTransformer(nn.Module):
         x = _merge_residual_subset(x, o, keep_indices, residual_scale)
 
         x_residual, keep_indices, residual_scale = _select_residual_subset(x, self.drop_path_rate, self.training)
-        o = self.layer_scale_mlp(self.mlp(x_residual))
+        o = self.layer_scale_mlp(_forward_mlp(self.mlp, x_residual, conditioning, keep_indices, batch_size))
         x = _merge_residual_subset(x, o, keep_indices, residual_scale)
         return x
 
     if TYPE_CHECKING:
 
-        def __call__(self, x: Tensor, kv: Tensor, rope_q: Tensor | None = None, rope_k: Tensor | None = None) -> Tensor:
-            return self.forward(x, kv, rope_q, rope_k)
+        def __call__(
+            self,
+            x: Tensor,
+            kv: Tensor,
+            rope_q: Tensor | None = None,
+            rope_k: Tensor | None = None,
+            conditioning: Tensor | None = None,
+        ) -> Tensor:
+            return self.forward(x, kv, rope_q, rope_k, conditioning)

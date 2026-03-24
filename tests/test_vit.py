@@ -11,6 +11,7 @@ import torch.nn as nn
 from torch.testing import assert_close
 from torchao.quantization import Int8WeightOnlyConfig
 
+from vit.fused import VALID_ADALN_GATE_INITS, AdaNormMLP
 from vit.head import AttentivePoolHeadConfig, HeadConfig
 from vit.vit import ViT, ViTConfig, ViTFeatures
 
@@ -190,6 +191,41 @@ class TestViT:
         L = math.prod(model.stem.tokenized_size(config.img_size))
         assert out.visual_tokens.shape == (2, L, config.hidden_size)
 
+    def test_conditioning_size_uses_adanorm_mlp_blocks(self, device):
+        config = ViTConfig(
+            in_channels=3,
+            patch_size=(16, 16),
+            img_size=(224, 224),
+            depth=1,
+            hidden_size=64,
+            ffn_hidden_size=128,
+            num_attention_heads=4,
+            pos_enc="learnable",
+            conditioning_size=32,
+            dtype=torch.float32,
+        )
+        model = ViT(config).to(device)
+        assert isinstance(model.get_block(0).mlp, AdaNormMLP)
+
+    def test_adaln_gate_init_is_forwarded_to_blocks(self, device):
+        config = ViTConfig(
+            in_channels=3,
+            patch_size=(16, 16),
+            img_size=(224, 224),
+            depth=1,
+            hidden_size=64,
+            ffn_hidden_size=128,
+            num_attention_heads=4,
+            pos_enc="learnable",
+            conditioning_size=32,
+            adaln_gate_init=VALID_ADALN_GATE_INITS[1],
+            dtype=torch.float32,
+        )
+        model = ViT(config).to(device)
+        block = model.get_block(0)
+        assert isinstance(block.mlp, AdaNormMLP)
+        assert block.mlp.adaln_gate_init == VALID_ADALN_GATE_INITS[1]
+
     def test_rmsnorm_output_norm_preserves_default_eps_behavior(self):
         config = ViTConfig(
             in_channels=3,
@@ -352,6 +388,29 @@ class TestViT:
         L = math.prod(model.stem.tokenized_size(config.img_size))
         assert out.visual_tokens.shape == (2, L, 128)
 
+    def test_forward_with_conditioning(self, device, config):
+        config = replace(config, conditioning_size=32)
+        x = torch.randn(2, 3, *config.img_size, device=device)
+        conditioning = torch.randn(2, 32, device=device)
+        model = ViT(config).to(device)
+        out = model(x, conditioning=conditioning)
+        L = math.prod(model.stem.tokenized_size(config.img_size))
+        assert out.visual_tokens.shape == (2, L, config.hidden_size)
+
+    def test_forward_rejects_conditioning_without_config(self, device, config):
+        x = torch.randn(2, 3, *config.img_size, device=device)
+        conditioning = torch.randn(2, config.hidden_size, device=device)
+        model = ViT(config).to(device)
+        with pytest.raises(ValueError, match="conditioning is not supported"):
+            model(x, conditioning=conditioning)
+
+    def test_forward_requires_conditioning_when_configured(self, device, config):
+        config = replace(config, conditioning_size=32)
+        x = torch.randn(2, 3, *config.img_size, device=device)
+        model = ViT(config).to(device)
+        with pytest.raises(ValueError, match="conditioning is required"):
+            model(x)
+
     @pytest.mark.parametrize("masked", [False, True])
     def test_forward_with_rope(self, device, config, masked):
         x = torch.randn(3, 3, *config.img_size, device=device)
@@ -401,6 +460,18 @@ class TestViT:
         model = ViT(config).to(device)
         with torch.autocast(device_type=device.type, dtype=torch.float32, enabled=True):
             out = model(x)
+        out.dense_features.sum().backward()
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                assert param.grad is not None, f"{name} has no gradient"
+                assert not param.grad.isnan().any(), f"{name} has nan gradient"
+
+    def test_backward_with_conditioning(self, device, config):
+        config = replace(config, conditioning_size=32)
+        x = torch.randn(2, 3, *config.img_size, device=device, requires_grad=True)
+        conditioning = torch.randn(2, 32, device=device)
+        model = ViT(config).to(device)
+        out = model(x, conditioning=conditioning)
         out.dense_features.sum().backward()
         for name, param in model.named_parameters():
             if param.requires_grad:
@@ -534,6 +605,14 @@ class TestViT:
             assert (weight <= 1).all(), f"{name} has weights greater than 1"
             assert weight.shape == (B, H, L + num_register_tokens, *size)
 
+    def test_forward_attention_weights_with_conditioning(self, device, config):
+        config = replace(config, conditioning_size=32)
+        x = torch.randn(2, 3, *config.img_size, device=device)
+        conditioning = torch.randn(2, 32, device=device)
+        model = ViT(config).to(device)
+        weights = model.forward_attention_weights(x, conditioning=conditioning)
+        assert len(weights) == config.depth
+
     def test_quantization(self, device, config):
         torch.random.manual_seed(0)
         D = config.hidden_size
@@ -576,6 +655,20 @@ class TestViT:
                 num_attention_heads=4,
                 pos_enc="learnable",
                 norm_type="invalid",  # type: ignore[arg-type]
+            )
+
+    def test_invalid_adaln_gate_init_raises(self):
+        with pytest.raises(ValueError, match="adaln_gate_init must be one of"):
+            ViTConfig(
+                in_channels=3,
+                patch_size=(16, 16),
+                img_size=(224, 224),
+                depth=1,
+                hidden_size=64,
+                ffn_hidden_size=128,
+                num_attention_heads=4,
+                pos_enc="learnable",
+                adaln_gate_init=0.5,
             )
 
     def test_fourier_pos_enc_with_odd_hidden_size_raises(self):

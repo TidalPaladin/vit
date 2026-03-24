@@ -158,6 +158,20 @@ class TestActivationCheckpointing:
                 assert param.grad is not None, f"{name} has no gradient with mask"
                 assert not param.grad.isnan().any(), f"{name} has nan gradient with mask"
 
+    def test_checkpointing_with_conditioning(self, device, config):
+        config = replace(config, activation_checkpointing=True, conditioning_size=32)
+        model = ViT(config).to(device)
+        model.train()
+        x = torch.randn(2, 3, 224, 224, device=device, requires_grad=True)
+        conditioning = torch.randn(2, 32, device=device)
+        out = model(x, conditioning=conditioning)
+        out.dense_features.sum().backward()
+
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                assert param.grad is not None, f"{name} has no gradient with conditioning"
+                assert not param.grad.isnan().any(), f"{name} has nan gradient with conditioning"
+
     def test_checkpointing_with_drop_path(self, device, config):
         """Verify checkpointing handles stochastic depth correctly."""
         # Batch size is 2 below, so drop_path_rate=0.5 forces selective residual compute with keep_count=1.
