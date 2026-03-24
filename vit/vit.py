@@ -9,6 +9,7 @@ import yaml
 from torch import Tensor
 from torch.utils.checkpoint import checkpoint
 
+from .fused import validate_adaln_gate_init
 from .head import (
     AttentivePoolHead,
     AttentivePoolHeadConfig,
@@ -66,6 +67,14 @@ def register_constructors():
 
 @dataclass(frozen=True)
 class ViTConfig:
+    """Configuration for ViT construction.
+
+    When enabling conditioned MLPs via `conditioning_size`, keep `adaln_gate_init=0.0`
+    for the default AdaLN-Zero initialization. Set `adaln_gate_init=1.0` when
+    converting a pretrained unconditioned MLP stack into a conditioned one so the
+    loaded MLP path is preserved at initialization.
+    """
+
     # Inputs
     in_channels: int
     patch_size: Sequence[int]
@@ -103,6 +112,7 @@ class ViTConfig:
     # Memory optimization
     activation_checkpointing: bool = False
     conditioning_size: int | None = None
+    adaln_gate_init: float = 0.0
 
     # Master weight dtype (default BF16)
     dtype: torch.dtype = torch.bfloat16
@@ -126,6 +136,7 @@ class ViTConfig:
             raise ValueError(f"hidden_size ({self.hidden_size}) must be even when using Fourier positional encoding")
         if self.conditioning_size is not None and self.conditioning_size <= 0:
             raise ValueError(f"conditioning_size must be positive when provided, got {self.conditioning_size}")
+        validate_adaln_gate_init(self.adaln_gate_init)
 
     def instantiate(self, device: torch.device | None = None) -> "ViT":
         return ViT(self, device=device)
@@ -372,6 +383,7 @@ class ViT(nn.Module):
             device=device,
             dtype=resolved_dtype,
             conditioning_size=self.config.conditioning_size,
+            adaln_gate_init=self.config.adaln_gate_init,
         )
 
     def create_decoder_layer(
@@ -404,6 +416,7 @@ class ViT(nn.Module):
             device=device,
             dtype=resolved_dtype,
             conditioning_size=self.config.conditioning_size,
+            adaln_gate_init=self.config.adaln_gate_init,
         )
 
     def create_cross_attention_layer(
@@ -436,6 +449,7 @@ class ViT(nn.Module):
             device=device,
             dtype=resolved_dtype,
             conditioning_size=self.config.conditioning_size,
+            adaln_gate_init=self.config.adaln_gate_init,
         )
 
     def create_head(

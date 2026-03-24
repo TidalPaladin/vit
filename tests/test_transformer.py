@@ -2,7 +2,7 @@ import pytest
 import torch
 from torch.testing import assert_close
 
-from vit.fused import AdaNormMLP
+from vit.fused import VALID_ADALN_GATE_INITS, AdaNormMLP
 from vit.transformer import (
     CrossAttentionTransformer,
     TransformerDecoderLayer,
@@ -61,6 +61,11 @@ class TestTransformerEncoderLayer:
     def test_conditioning_size_uses_adanorm_mlp(self):
         layer = TransformerEncoderLayer(64, 128, 4, conditioning_size=32)
         assert isinstance(layer.mlp, AdaNormMLP)
+
+    def test_adaln_gate_init_is_forwarded_to_conditioned_mlp(self):
+        layer = TransformerEncoderLayer(64, 128, 4, conditioning_size=32, adaln_gate_init=VALID_ADALN_GATE_INITS[1])
+        assert isinstance(layer.mlp, AdaNormMLP)
+        assert layer.mlp.adaln_gate_init == VALID_ADALN_GATE_INITS[1]
 
     @pytest.mark.parametrize("layer_scale", [None, 1e-5])
     @pytest.mark.parametrize("norm_type", ["rmsnorm", "layernorm"])

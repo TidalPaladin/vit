@@ -7,7 +7,7 @@ from torch.testing import assert_close
 from torchao.dtypes import AffineQuantizedTensor
 from torchao.quantization import Int8WeightOnlyConfig
 
-from vit.fused import AdaNormMLP, NormLinear, NormMLP
+from vit.fused import VALID_ADALN_GATE_INITS, AdaNormMLP, NormLinear, NormMLP
 
 
 def _apply_norm_manual(
@@ -176,6 +176,10 @@ class TestNormMLP:
 
 
 class TestAdaNormMLP:
+    def test_invalid_adaln_gate_init_raises(self):
+        with pytest.raises(ValueError, match="adaln_gate_init must be one of"):
+            AdaNormMLP(10, 20, adaln_gate_init=0.5)
+
     @pytest.mark.parametrize("norm_type", ["rmsnorm", "layernorm"])
     def test_zero_init_outputs_zero(self, device, norm_type):
         layer = AdaNormMLP(10, 20, norm_type=norm_type).to(device)
@@ -184,6 +188,21 @@ class TestAdaNormMLP:
 
         y = layer(x, conditioning=conditioning)
         assert_close(y, torch.zeros_like(y))
+
+    @pytest.mark.parametrize("norm_type", ["rmsnorm", "layernorm"])
+    def test_gate_init_one_matches_unconditioned_mlp_after_weight_load(self, device, norm_type):
+        base = NormMLP(10, 20, norm_type=norm_type, dropout=0.0).to(device)
+        conditioned = AdaNormMLP(10, 20, norm_type=norm_type, dropout=0.0, adaln_gate_init=1.0).to(device)
+        conditioned.load_state_dict(base.state_dict(), strict=False)
+
+        x = torch.randn(2, 4, 10, device=device)
+        conditioning = torch.randn(2, 10, device=device)
+
+        assert conditioned.modulation.bias is not None
+        hidden_size = conditioned.fc2.out_features
+        expected_gate = torch.full((hidden_size,), VALID_ADALN_GATE_INITS[1], device=device)
+        assert_close(conditioned.modulation.bias[2 * hidden_size :], expected_gate)
+        assert_close(conditioned(x, conditioning=conditioning), base(x))
 
     @pytest.mark.parametrize("activation", ["relu", "swiglu"])
     @pytest.mark.parametrize("norm_type", ["rmsnorm", "layernorm"])

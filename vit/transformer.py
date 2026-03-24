@@ -90,6 +90,7 @@ def _make_mlp(
     extra_bias: float | None,
     quantization_config: Any | None,
     conditioning_size: int | None,
+    adaln_gate_init: float,
     device: torch.device | None,
     dtype: torch.dtype | None,
 ) -> NormMLP:
@@ -106,6 +107,7 @@ def _make_mlp(
             extra_bias=extra_bias,
             quantization_config=quantization_config,
             conditioning_size=conditioning_size,
+            adaln_gate_init=adaln_gate_init,
             device=device,
             dtype=dtype,
         )
@@ -168,6 +170,7 @@ class TransformerEncoderLayer(nn.Module):
         norm_type: NormType = "rmsnorm",
         qk_normalization: bool = False,
         conditioning_size: int | None = None,
+        adaln_gate_init: float = 0.0,
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -197,6 +200,7 @@ class TransformerEncoderLayer(nn.Module):
             extra_bias=glu_extra_bias,
             quantization_config=None,
             conditioning_size=conditioning_size,
+            adaln_gate_init=adaln_gate_init,
             device=device,
             dtype=dtype,
         )
@@ -268,6 +272,7 @@ class TransformerDecoderLayer(nn.Module):
         norm_type: NormType = "rmsnorm",
         qk_normalization: bool = False,
         conditioning_size: int | None = None,
+        adaln_gate_init: float = 0.0,
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -310,6 +315,7 @@ class TransformerDecoderLayer(nn.Module):
             extra_bias=glu_extra_bias,
             quantization_config=None,
             conditioning_size=conditioning_size,
+            adaln_gate_init=adaln_gate_init,
             device=device,
             dtype=dtype,
         )
@@ -411,6 +417,7 @@ class CrossAttentionTransformer(nn.Module):
         norm_type: NormType = "rmsnorm",
         qk_normalization: bool = False,
         conditioning_size: int | None = None,
+        adaln_gate_init: float = 0.0,
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -440,6 +447,7 @@ class CrossAttentionTransformer(nn.Module):
             extra_bias=glu_extra_bias,
             quantization_config=None,
             conditioning_size=conditioning_size,
+            adaln_gate_init=adaln_gate_init,
             device=device,
             dtype=dtype,
         )

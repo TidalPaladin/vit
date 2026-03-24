@@ -12,6 +12,14 @@ from .initialization import init_linear, zero_bias_if_present
 from .norm import NormType, apply_norm, get_norm_bias, is_layer_norm, make_norm, reshape_modulation
 
 
+VALID_ADALN_GATE_INITS = (0.0, 1.0)
+
+
+def validate_adaln_gate_init(adaln_gate_init: float) -> None:
+    if adaln_gate_init not in VALID_ADALN_GATE_INITS:
+        raise ValueError(f"adaln_gate_init must be one of {VALID_ADALN_GATE_INITS}, got {adaln_gate_init}")
+
+
 @torch.compile(fullgraph=True)
 def norm_linear(
     # fmt: off
@@ -320,6 +328,7 @@ class AdaNormMLP(NormMLP):
         dtype: torch.dtype | None = None,
         norm_type: NormType = "rmsnorm",
         conditioning_size: int | None = None,
+        adaln_gate_init: float = 0.0,
     ):
         super().__init__(
             hidden_size=hidden_size,
@@ -335,8 +344,10 @@ class AdaNormMLP(NormMLP):
             dtype=dtype,
             norm_type=norm_type,
         )
+        validate_adaln_gate_init(adaln_gate_init)
         factory_kwargs = {"device": device, "dtype": dtype}
         self.conditioning_size = hidden_size if conditioning_size is None else conditioning_size
+        self.adaln_gate_init = adaln_gate_init
         self.conditioning_activation = nn.SiLU()
         self.modulation = nn.Linear(self.conditioning_size, 3 * hidden_size, **factory_kwargs)
         self.reset_modulation_parameters()
@@ -345,6 +356,9 @@ class AdaNormMLP(NormMLP):
     def reset_modulation_parameters(self) -> None:
         nn.init.zeros_(self.modulation.weight)
         zero_bias_if_present(self.modulation)
+        if self.modulation.bias is not None:
+            hidden_size = self.fc2.out_features
+            self.modulation.bias[2 * hidden_size :].fill_(self.adaln_gate_init)
 
     def forward(
         self,

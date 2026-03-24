@@ -11,7 +11,7 @@ import torch.nn as nn
 from torch.testing import assert_close
 from torchao.quantization import Int8WeightOnlyConfig
 
-from vit.fused import AdaNormMLP
+from vit.fused import VALID_ADALN_GATE_INITS, AdaNormMLP
 from vit.head import AttentivePoolHeadConfig, HeadConfig
 from vit.vit import ViT, ViTConfig, ViTFeatures
 
@@ -206,6 +206,25 @@ class TestViT:
         )
         model = ViT(config).to(device)
         assert isinstance(model.get_block(0).mlp, AdaNormMLP)
+
+    def test_adaln_gate_init_is_forwarded_to_blocks(self, device):
+        config = ViTConfig(
+            in_channels=3,
+            patch_size=(16, 16),
+            img_size=(224, 224),
+            depth=1,
+            hidden_size=64,
+            ffn_hidden_size=128,
+            num_attention_heads=4,
+            pos_enc="learnable",
+            conditioning_size=32,
+            adaln_gate_init=VALID_ADALN_GATE_INITS[1],
+            dtype=torch.float32,
+        )
+        model = ViT(config).to(device)
+        block = model.get_block(0)
+        assert isinstance(block.mlp, AdaNormMLP)
+        assert block.mlp.adaln_gate_init == VALID_ADALN_GATE_INITS[1]
 
     def test_rmsnorm_output_norm_preserves_default_eps_behavior(self):
         config = ViTConfig(
@@ -636,6 +655,20 @@ class TestViT:
                 num_attention_heads=4,
                 pos_enc="learnable",
                 norm_type="invalid",  # type: ignore[arg-type]
+            )
+
+    def test_invalid_adaln_gate_init_raises(self):
+        with pytest.raises(ValueError, match="adaln_gate_init must be one of"):
+            ViTConfig(
+                in_channels=3,
+                patch_size=(16, 16),
+                img_size=(224, 224),
+                depth=1,
+                hidden_size=64,
+                ffn_hidden_size=128,
+                num_attention_heads=4,
+                pos_enc="learnable",
+                adaln_gate_init=0.5,
             )
 
     def test_fourier_pos_enc_with_odd_hidden_size_raises(self):
