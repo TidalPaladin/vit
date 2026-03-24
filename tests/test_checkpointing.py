@@ -3,7 +3,6 @@ from dataclasses import replace
 
 import pytest
 import torch
-from conftest import enable_model_adaln_gates
 from torch.testing import assert_close
 
 from vit.vit import ViT, ViTConfig
@@ -162,7 +161,6 @@ class TestActivationCheckpointing:
     def test_checkpointing_with_conditioning(self, device, config):
         config = replace(config, activation_checkpointing=True, conditioning_size=32)
         model = ViT(config).to(device)
-        enable_model_adaln_gates(model)
         model.train()
         x = torch.randn(2, 3, 224, 224, device=device, requires_grad=True)
         conditioning = torch.randn(2, 32, device=device)

@@ -5,8 +5,6 @@ import torch
 import torch._dynamo
 import torch._dynamo.config
 
-from vit.fused import AdaNormMLP
-
 
 # Disable torch.compile by default for faster tests
 # The env var signals our intent, the config flag actually disables compilation
@@ -49,20 +47,6 @@ def handle_cuda_mark(item):  # pragma: no cover
 
 def pytest_runtest_setup(item):
     handle_cuda_mark(item)
-
-
-def enable_adaln_gate(module: AdaNormMLP) -> None:
-    with torch.no_grad():
-        assert module.modulation.bias is not None
-        hidden_size = module.fc2.out_features
-        module.modulation.bias[2 * hidden_size :].fill_(1.0)
-
-
-def enable_model_adaln_gates(model) -> None:
-    with torch.no_grad():
-        for block in model.blocks:
-            assert isinstance(block.mlp, AdaNormMLP)
-            enable_adaln_gate(block.mlp)
 
 
 @pytest.fixture(params=["cpu", "cuda:0"])

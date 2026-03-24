@@ -137,6 +137,13 @@ def _zero_residual_outputs(*modules: nn.Linear) -> None:
         _zero_linear(module)
 
 
+@torch.no_grad()
+def _zero_mlp_residual_output(mlp: NormMLP) -> None:
+    if isinstance(mlp, AdaNormMLP):
+        return
+    _zero_linear(mlp.fc2)
+
+
 class TransformerEncoderLayer(nn.Module):
     def __init__(
         self,
@@ -203,7 +210,8 @@ class TransformerEncoderLayer(nn.Module):
             if layer_scale is not None
             else nn.Identity()
         )
-        _zero_residual_outputs(self.self_attention.out_proj, self.mlp.fc2)
+        _zero_residual_outputs(self.self_attention.out_proj)
+        _zero_mlp_residual_output(self.mlp)
         self.apply_quantization(mlp_quantization_config, qkv_quantization_config, attn_quantization_config)
 
     def apply_quantization(
@@ -320,7 +328,8 @@ class TransformerDecoderLayer(nn.Module):
             if layer_scale is not None
             else nn.Identity()
         )
-        _zero_residual_outputs(self.self_attention.out_proj, self.cross_attention.out_proj, self.mlp.fc2)
+        _zero_residual_outputs(self.self_attention.out_proj, self.cross_attention.out_proj)
+        _zero_mlp_residual_output(self.mlp)
         self.apply_quantization(mlp_quantization_config, qkv_quantization_config, attn_quantization_config)
 
     def apply_quantization(
@@ -444,7 +453,8 @@ class CrossAttentionTransformer(nn.Module):
             if layer_scale is not None
             else nn.Identity()
         )
-        _zero_residual_outputs(self.cross_attention.out_proj, self.mlp.fc2)
+        _zero_residual_outputs(self.cross_attention.out_proj)
+        _zero_mlp_residual_output(self.mlp)
         self.apply_quantization(mlp_quantization_config, qkv_quantization_config, attn_quantization_config)
 
     def apply_quantization(

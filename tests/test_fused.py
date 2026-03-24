@@ -31,13 +31,6 @@ def _apply_norm_manual(
     return x
 
 
-def _enable_adaln_gate(layer: AdaNormMLP) -> None:
-    with torch.no_grad():
-        assert layer.modulation.bias is not None
-        hidden_size = layer.fc2.out_features
-        layer.modulation.bias[2 * hidden_size :].fill_(1.0)
-
-
 class TestNormLinear:
     def test_reset_parameters_zeros_bias(self):
         layer = NormLinear(10, 20)
@@ -196,7 +189,6 @@ class TestAdaNormMLP:
     @pytest.mark.parametrize("norm_type", ["rmsnorm", "layernorm"])
     def test_forward(self, device, activation, norm_type):
         layer = AdaNormMLP(10, 20, activation=activation, norm_type=norm_type).to(device)
-        _enable_adaln_gate(layer)
         x = torch.randn(2, 4, 10, device=device)
         conditioning = torch.randn(2, 10, device=device)
         with torch.autocast(device_type=device.type, dtype=torch.float32, enabled=True):
@@ -206,7 +198,6 @@ class TestAdaNormMLP:
     @pytest.mark.parametrize("norm_type", ["rmsnorm", "layernorm"])
     def test_backward(self, device, norm_type):
         layer = AdaNormMLP(10, 20, norm_type=norm_type).to(device)
-        _enable_adaln_gate(layer)
         x = torch.randn(2, 4, 10, device=device)
         conditioning = torch.randn(2, 10, device=device)
         with torch.autocast(device_type=device.type, dtype=torch.float32, enabled=True):
@@ -219,7 +210,6 @@ class TestAdaNormMLP:
     def test_quantization(self, device):
         torch.random.manual_seed(0)
         layer = AdaNormMLP(10, 20).to(device)
-        _enable_adaln_gate(layer)
         layer.eval()
         quantized_layer = deepcopy(layer)
         quantized_layer.apply_quantization(Int8WeightOnlyConfig())

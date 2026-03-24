@@ -8,7 +8,6 @@ from unittest.mock import patch
 import pytest
 import torch
 import torch.nn as nn
-from conftest import enable_model_adaln_gates
 from torch.testing import assert_close
 from torchao.quantization import Int8WeightOnlyConfig
 
@@ -375,7 +374,6 @@ class TestViT:
         x = torch.randn(2, 3, *config.img_size, device=device)
         conditioning = torch.randn(2, 32, device=device)
         model = ViT(config).to(device)
-        enable_model_adaln_gates(model)
         out = model(x, conditioning=conditioning)
         L = math.prod(model.stem.tokenized_size(config.img_size))
         assert out.visual_tokens.shape == (2, L, config.hidden_size)
@@ -454,7 +452,6 @@ class TestViT:
         x = torch.randn(2, 3, *config.img_size, device=device, requires_grad=True)
         conditioning = torch.randn(2, 32, device=device)
         model = ViT(config).to(device)
-        enable_model_adaln_gates(model)
         out = model(x, conditioning=conditioning)
         out.dense_features.sum().backward()
         for name, param in model.named_parameters():
@@ -594,7 +591,6 @@ class TestViT:
         x = torch.randn(2, 3, *config.img_size, device=device)
         conditioning = torch.randn(2, 32, device=device)
         model = ViT(config).to(device)
-        enable_model_adaln_gates(model)
         weights = model.forward_attention_weights(x, conditioning=conditioning)
         assert len(weights) == config.depth
 

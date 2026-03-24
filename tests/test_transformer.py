@@ -1,6 +1,5 @@
 import pytest
 import torch
-from conftest import enable_adaln_gate
 from torch.testing import assert_close
 
 from vit.fused import AdaNormMLP
@@ -91,11 +90,24 @@ class TestTransformerEncoderLayer:
     def test_forward_with_conditioning(self, device):
         layer = TransformerEncoderLayer(64, 128, 4, conditioning_size=32).to(device)
         assert isinstance(layer.mlp, AdaNormMLP)
-        enable_adaln_gate(layer.mlp)
         x = torch.randn(2, 12, 64, device=device)
         conditioning = torch.randn(2, 32, device=device)
         y = layer(x, conditioning=conditioning)
         assert y.shape == x.shape
+
+    def test_conditioned_gate_receives_gradient_at_init(self, device):
+        hidden_size, conditioning_size = 64, 32
+        layer = TransformerEncoderLayer(hidden_size, 128, 4, conditioning_size=conditioning_size).to(device)
+        assert isinstance(layer.mlp, AdaNormMLP)
+        x = torch.randn(2, 12, hidden_size, device=device)
+        conditioning = torch.randn(2, conditioning_size, device=device)
+
+        layer(x, conditioning=conditioning).sum().backward()
+
+        assert layer.mlp.modulation.bias is not None
+        assert layer.mlp.modulation.bias.grad is not None
+        gate_grad = layer.mlp.modulation.bias.grad[2 * hidden_size :]
+        assert torch.count_nonzero(gate_grad).item() > 0
 
     def test_conditioning_requires_conditioning_size(self, device):
         layer = TransformerEncoderLayer(64, 128, 4).to(device)
@@ -328,7 +340,6 @@ class TestTransformerDecoderLayer:
     def test_forward_with_conditioning(self, device):
         layer = TransformerDecoderLayer(64, 128, 4, conditioning_size=32).to(device)
         assert isinstance(layer.mlp, AdaNormMLP)
-        enable_adaln_gate(layer.mlp)
         x = torch.randn(2, 12, 64, device=device)
         kv = torch.randn(2, 8, 64, device=device)
         conditioning = torch.randn(2, 32, device=device)
@@ -518,7 +529,6 @@ class TestCrossAttentionTransformer:
     def test_forward_with_conditioning(self, device):
         layer = CrossAttentionTransformer(64, 128, 4, conditioning_size=32).to(device)
         assert isinstance(layer.mlp, AdaNormMLP)
-        enable_adaln_gate(layer.mlp)
         x = torch.randn(2, 12, 64, device=device)
         kv = torch.randn(2, 8, 64, device=device)
         conditioning = torch.randn(2, 32, device=device)
