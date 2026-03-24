@@ -1,7 +1,9 @@
 import pytest
 import torch
+from conftest import enable_adaln_gate
 from torch.testing import assert_close
 
+from vit.fused import AdaNormMLP
 from vit.transformer import (
     CrossAttentionTransformer,
     TransformerDecoderLayer,
@@ -57,6 +59,10 @@ class TestTransformerEncoderLayer:
         assert isinstance(layer.self_attention.q_norm, norm_cls)
         assert isinstance(layer.self_attention.k_norm, norm_cls)
 
+    def test_conditioning_size_uses_adanorm_mlp(self):
+        layer = TransformerEncoderLayer(64, 128, 4, conditioning_size=32)
+        assert isinstance(layer.mlp, AdaNormMLP)
+
     @pytest.mark.parametrize("layer_scale", [None, 1e-5])
     @pytest.mark.parametrize("norm_type", ["rmsnorm", "layernorm"])
     def test_forward(self, device, layer_scale, norm_type):
@@ -81,6 +87,54 @@ class TestTransformerEncoderLayer:
             y = transformer_layer(x)
         y.sum().backward()
         _assert_parameter_grads_finite(transformer_layer)
+
+    def test_forward_with_conditioning(self, device):
+        layer = TransformerEncoderLayer(64, 128, 4, conditioning_size=32).to(device)
+        assert isinstance(layer.mlp, AdaNormMLP)
+        enable_adaln_gate(layer.mlp)
+        x = torch.randn(2, 12, 64, device=device)
+        conditioning = torch.randn(2, 32, device=device)
+        y = layer(x, conditioning=conditioning)
+        assert y.shape == x.shape
+
+    def test_conditioning_requires_conditioning_size(self, device):
+        layer = TransformerEncoderLayer(64, 128, 4).to(device)
+        x = torch.randn(2, 12, 64, device=device)
+        conditioning = torch.randn(2, 64, device=device)
+        with pytest.raises(ValueError, match="conditioning is not supported"):
+            layer(x, conditioning=conditioning)
+
+    def test_conditioning_is_subset_with_stochastic_depth(self, device, monkeypatch):
+        batch_size, seq_len, hidden_size, conditioning_size = 8, 16, 64, 32
+        drop_path_rate = 0.25
+        expected_keep_count = _expected_keep_count(batch_size, drop_path_rate)
+        layer = TransformerEncoderLayer(
+            hidden_size=hidden_size,
+            ffn_hidden_size=hidden_size * 2,
+            num_attention_heads=4,
+            hidden_dropout=0.0,
+            attention_dropout=0.0,
+            drop_path_rate=drop_path_rate,
+            conditioning_size=conditioning_size,
+        ).to(device)
+        layer.train()
+        assert isinstance(layer.mlp, AdaNormMLP)
+
+        conditioning_batches: list[int] = []
+        original_mlp_forward = layer.mlp.forward
+
+        def record_mlp_batch(x: torch.Tensor, *, conditioning: torch.Tensor | None = None, **kwargs) -> torch.Tensor:
+            assert conditioning is not None
+            conditioning_batches.append(conditioning.shape[0])
+            return original_mlp_forward(x, conditioning=conditioning, **kwargs)
+
+        monkeypatch.setattr(layer.mlp, "forward", record_mlp_batch)
+
+        x = torch.randn(batch_size, seq_len, hidden_size, device=device)
+        conditioning = torch.randn(batch_size, conditioning_size, device=device)
+        y = layer(x, conditioning=conditioning)
+        assert y.shape == (batch_size, seq_len, hidden_size)
+        assert conditioning_batches == [expected_keep_count]
 
     def test_forward_determinstic(self, device):
         B, L, D = 16, 128, 128
@@ -240,6 +294,10 @@ class TestTransformerDecoderLayer:
         assert isinstance(layer.cross_attention.q_norm, norm_cls)
         assert isinstance(layer.cross_attention.k_norm, norm_cls)
 
+    def test_conditioning_size_uses_adanorm_mlp(self):
+        layer = TransformerDecoderLayer(64, 128, 4, conditioning_size=32)
+        assert isinstance(layer.mlp, AdaNormMLP)
+
     @pytest.mark.parametrize("layer_scale", [None, 1e-5])
     @pytest.mark.parametrize("norm_type", ["rmsnorm", "layernorm"])
     def test_forward(self, device, layer_scale, norm_type):
@@ -266,6 +324,16 @@ class TestTransformerDecoderLayer:
             y = transformer_layer(x, kv)
         y.sum().backward()
         _assert_parameter_grads_finite(transformer_layer)
+
+    def test_forward_with_conditioning(self, device):
+        layer = TransformerDecoderLayer(64, 128, 4, conditioning_size=32).to(device)
+        assert isinstance(layer.mlp, AdaNormMLP)
+        enable_adaln_gate(layer.mlp)
+        x = torch.randn(2, 12, 64, device=device)
+        kv = torch.randn(2, 8, 64, device=device)
+        conditioning = torch.randn(2, 32, device=device)
+        y = layer(x, kv, conditioning=conditioning)
+        assert y.shape == x.shape
 
     def test_forward_determinstic(self, device):
         B, L, D = 16, 128, 128
@@ -419,6 +487,10 @@ class TestCrossAttentionTransformer:
         assert isinstance(layer.cross_attention.q_norm, norm_cls)
         assert isinstance(layer.cross_attention.k_norm, norm_cls)
 
+    def test_conditioning_size_uses_adanorm_mlp(self):
+        layer = CrossAttentionTransformer(64, 128, 4, conditioning_size=32)
+        assert isinstance(layer.mlp, AdaNormMLP)
+
     @pytest.mark.parametrize("layer_scale", [None, 1e-5])
     @pytest.mark.parametrize("norm_type", ["rmsnorm", "layernorm"])
     def test_forward(self, device, layer_scale, norm_type):
@@ -442,6 +514,16 @@ class TestCrossAttentionTransformer:
             y = transformer_layer(x, kv)
         y.sum().backward()
         _assert_parameter_grads_finite(transformer_layer)
+
+    def test_forward_with_conditioning(self, device):
+        layer = CrossAttentionTransformer(64, 128, 4, conditioning_size=32).to(device)
+        assert isinstance(layer.mlp, AdaNormMLP)
+        enable_adaln_gate(layer.mlp)
+        x = torch.randn(2, 12, 64, device=device)
+        kv = torch.randn(2, 8, 64, device=device)
+        conditioning = torch.randn(2, 32, device=device)
+        y = layer(x, kv, conditioning=conditioning)
+        assert y.shape == x.shape
 
     def test_forward_determinstic(self, device):
         B, L, D = 16, 128, 128

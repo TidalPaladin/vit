@@ -89,6 +89,7 @@ class ViTConfig:
 
     # Memory optimization
     activation_checkpointing: bool = False
+    conditioning_size: int | None = None
 
     # Master weight dtype (default BF16)
     dtype: torch.dtype = torch.bfloat16
@@ -110,6 +111,8 @@ class ViTConfig:
             raise ValueError(f"Unsupported norm_type: {self.norm_type}")
         if self.pos_enc == "fourier" and self.hidden_size % 2 != 0:
             raise ValueError(f"hidden_size ({self.hidden_size}) must be even when using Fourier positional encoding")
+        if self.conditioning_size is not None and self.conditioning_size <= 0:
+            raise ValueError(f"conditioning_size must be positive when provided, got {self.conditioning_size}")
 
     def instantiate(self, device: torch.device | None = None) -> "ViT":
         return ViT(self, device=device)
@@ -350,6 +353,7 @@ class ViT(nn.Module):
             attn_quantization_config=attn_quantization_config,
             device=device,
             dtype=self.config.dtype,
+            conditioning_size=self.config.conditioning_size,
         )
 
     def create_decoder_layer(
@@ -379,6 +383,7 @@ class ViT(nn.Module):
             attn_quantization_config=attn_quantization_config,
             device=device,
             dtype=self.config.dtype,
+            conditioning_size=self.config.conditioning_size,
         )
 
     def create_cross_attention_layer(
@@ -408,6 +413,7 @@ class ViT(nn.Module):
             attn_quantization_config=attn_quantization_config,
             device=device,
             dtype=self.config.dtype,
+            conditioning_size=self.config.conditioning_size,
         )
 
     def get_head(self, name: str) -> Head | TransposedConv2dHead | UpsampleHead:
@@ -496,13 +502,23 @@ class ViT(nn.Module):
     def normalize_patch_embeddings(self, x: Tensor) -> Tensor:
         return self.patch_embed_norm(x) if self.patch_embed_norm is not None else x
 
+    def _validate_conditioning(self, conditioning: Tensor | None) -> None:
+        if self.config.conditioning_size is None:
+            if conditioning is not None:
+                raise ValueError("conditioning is not supported unless config.conditioning_size is set")
+        elif conditioning is None:
+            raise ValueError("conditioning is required when config.conditioning_size is set")
+
     def forward(
         self,
         x: Tensor,
         mask: Tensor | None = None,
         rope_seed: int | None = None,
         output_norm: bool = True,
+        conditioning: Tensor | None = None,
     ) -> ViTFeatures:
+        self._validate_conditioning(conditioning)
+
         # Prepare transformer input
         tokenized_size = self.stem.tokenized_size(x.shape[2:])
         x = self.stem(x)
@@ -517,9 +533,9 @@ class ViT(nn.Module):
         for block in self.blocks:
             assert isinstance(block, TransformerEncoderLayer)
             if self.config.activation_checkpointing and self.training:
-                x = cast(Tensor, checkpoint(block, x, rope, use_reentrant=False))
+                x = cast(Tensor, checkpoint(block, x, rope, conditioning, use_reentrant=False))
             else:
-                x = block(x, rope=rope)
+                x = block(x, rope=rope, conditioning=conditioning)
 
         # Prepare output
         x = self.output_norm(x) if output_norm else x
@@ -533,8 +549,9 @@ class ViT(nn.Module):
             mask: Tensor | None = None,
             rope_seed: int | None = None,
             output_norm: bool = True,
+            conditioning: Tensor | None = None,
         ) -> ViTFeatures:
-            return self.forward(x, mask, rope_seed, output_norm)
+            return self.forward(x, mask, rope_seed, output_norm, conditioning)
 
     @torch.no_grad()
     def _reshape_attention_weights(self, w: Tensor, tokenized_size: Sequence[int]) -> Tensor:
@@ -543,7 +560,9 @@ class ViT(nn.Module):
         w = w[..., self.config.num_register_tokens :].view(B, H, Lq, *tokenized_size)
         return w.contiguous()
 
-    def forward_attention_weights(self, x: Tensor) -> dict[str, Tensor]:
+    def forward_attention_weights(self, x: Tensor, conditioning: Tensor | None = None) -> dict[str, Tensor]:
+        self._validate_conditioning(conditioning)
+
         # Prepare transformer input
         tokenized_size = self.stem.tokenized_size(x.shape[2:])
         x = self.stem(x)
@@ -556,7 +575,7 @@ class ViT(nn.Module):
             assert isinstance(block, TransformerEncoderLayer)
             w_i = block.self_attention.forward_weights(x)
             weights[f"layer_{i}"] = self._reshape_attention_weights(w_i, tokenized_size)
-            x = block(x)
+            x = block(x, conditioning=conditioning)
 
         return weights
 
