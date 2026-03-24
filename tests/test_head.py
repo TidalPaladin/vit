@@ -1,7 +1,10 @@
 import pytest
 import torch
 
+from vit import AttentivePoolHead as PublicAttentivePoolHead, AttentivePoolHeadConfig as PublicAttentivePoolHeadConfig
 from vit.head import (
+    AttentivePoolHead,
+    AttentivePoolHeadConfig,
     Head,
     HeadConfig,
     TransposedConv2dHead,
@@ -44,6 +47,60 @@ class TestHeadConfig:
         assert isinstance(model, Head)
         assert model.proj.in_features == 256
         assert model.proj.out_features == 64
+
+
+class TestAttentivePoolHeadConfig:
+    def test_top_level_exports(self):
+        assert PublicAttentivePoolHead is AttentivePoolHead
+        assert PublicAttentivePoolHeadConfig is AttentivePoolHeadConfig
+
+    def test_instantiate(self):
+        config = AttentivePoolHeadConfig(out_features=128)
+        vit_config = ViTConfig(
+            in_channels=3,
+            patch_size=(16, 16),
+            img_size=(224, 224),
+            depth=3,
+            hidden_size=128,
+            ffn_hidden_size=256,
+            num_attention_heads=128 // 16,
+        )
+        model = config.instantiate(vit_config)
+        assert isinstance(model, AttentivePoolHead)
+        assert model.pool.query.shape == (1, 1, 128)
+        assert model.proj.proj.in_features == 128
+        assert model.proj.proj.out_features == 128
+
+    def test_instantiate_custom_dims(self):
+        config = AttentivePoolHeadConfig(
+            in_features=256,
+            out_features=64,
+            num_attention_heads=8,
+            num_queries=2,
+            hidden_dropout=0.1,
+            attention_dropout=0.2,
+            dropout=0.3,
+        )
+        vit_config = ViTConfig(
+            in_channels=3,
+            patch_size=(16, 16),
+            img_size=(224, 224),
+            depth=3,
+            hidden_size=128,
+            ffn_hidden_size=256,
+            num_attention_heads=128 // 16,
+            qk_normalization=True,
+        )
+        model = config.instantiate(vit_config)
+        assert isinstance(model, AttentivePoolHead)
+        assert model.pool.query.shape == (1, 2, 256)
+        assert model.proj.proj.in_features == 256
+        assert model.proj.proj.out_features == 64
+        assert model.pool.cross_attention.dropout.p == 0.1
+        assert model.pool.cross_attention.attention_dropout.p == 0.2
+        assert model.proj.dropout.p == 0.3
+        assert model.pool.cross_attention.q_norm is not None
+        assert model.pool.cross_attention.k_norm is not None
 
 
 class TestTransposedConv2dHeadConfig:
@@ -125,6 +182,36 @@ class TestHead:
         assert model.dropout.p == dropout
         out = model(x)
         assert out.shape == (2, 196, 64)
+
+
+class TestAttentivePoolHead:
+    def test_forward(self, device):
+        x = torch.randn(2, 196, 128, device=device)
+        model = AttentivePoolHead(128, 64, 8).to(device)
+        out = model(x)
+        assert out.shape == (2, 64)
+
+    def test_forward_multi_query(self, device):
+        x = torch.randn(2, 196, 128, device=device)
+        model = AttentivePoolHead(128, 64, 8, num_queries=3).to(device)
+        out = model(x)
+        assert out.shape == (2, 3, 64)
+
+    def test_backward(self, device):
+        x = torch.randn(2, 196, 128, device=device, requires_grad=True)
+        model = AttentivePoolHead(128, 64, 8).to(device)
+        out = model(x)
+        out.sum().backward()
+        for name, param in model.named_parameters():
+            assert param.grad is not None, f"{name} has no gradient"
+            assert not param.grad.isnan().any(), f"{name} has nan gradient"
+
+    def test_forward_weights(self, device):
+        B, L, D, H, Q = 2, 196, 128, 8, 3
+        x = torch.randn(B, L, D, device=device)
+        model = AttentivePoolHead(D, 64, H, num_queries=Q).to(device)
+        weights = model.forward_weights(x)
+        assert weights.shape == (B, H, Q, L)
 
 
 class TestTransposedConv2dHead:

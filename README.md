@@ -23,20 +23,19 @@ pip install "vit[benchmarking] @ git+https://github.com/TidalPaladin/vit.git"
 
 ```python
 import torch
-from vit import ViTConfig, HeadConfig
+from vit import AttentivePoolHeadConfig, ViTConfig
 
 # Create ViT-B/14, RMSNorm + SwiGLU, no biases
 config = ViTConfig(
     in_channels=3,
     patch_size=(14, 14),
-    img_size=(224, 224)
+    img_size=(224, 224),
     depth=12,
     hidden_size=768,
     ffn_hidden_size=3072,
     num_attention_heads=12,
     hidden_dropout=0.1,
     attention_dropout=0.1,
-    bias=False,
     activation="swiglu", # or srelu, gelu, etc.
     patch_embed_normalization=True,  # Apply backbone norm after patch embedding
     drop_path_rate=0.1,
@@ -44,19 +43,18 @@ config = ViTConfig(
     pos_enc="fourier",
     layer_scale=1e-5,
     heads={
-        "cls": HeadConfig(pool_type="attentive", out_dim=10)
-    }
+        "cls": AttentivePoolHeadConfig(out_features=10),
+    },
 )
 model = config.instantiate()
 
 # Forward pass for features
 B, C, H, W = 1, 3, 224, 224
 x = torch.randn(B, C, H, W)
-features = model(x) # B, L, D
-features_with_register_tokens = model(x, return_register_tokens=True)
+features = model(x)
 
 # Apply classification head
-logits = model.heads["cls"](features) # B, 10
+logits = model.heads["cls"](features.visual_tokens)  # B, 10
 ```
 
 ## Activation Checkpointing

@@ -161,29 +161,6 @@ def project_q_kv_packed(
 
 
 @torch.compile(fullgraph=True)
-def project_q_kv_packed_static_query(
-    # fmt: off
-    q: Tensor,
-    kv: Tensor,
-    w_kv: Tensor,
-    b_kv: Tensor | None,
-    head_dim: int,
-    rope_q: Tensor | None = None,
-    rope_k: Tensor | None = None,
-    # fmt: on
-) -> tuple[Tensor, Tensor, Tensor]:
-    k, v = F.linear(kv, w_kv, b_kv).chunk(2, dim=-1)
-    q = _unfold_head_and_permute(q, head_dim)
-    k = _unfold_head_and_permute(k, head_dim)
-    v = _unfold_head_and_permute(v, head_dim)
-    if rope_q is not None:
-        q = apply_rope(q, rope_q)
-    if rope_k is not None:
-        k = apply_rope(k, rope_k)
-    return q, k, v
-
-
-@torch.compile(fullgraph=True)
 def attention_qkv_packed(
     # fmt: off
     x: Tensor,
@@ -301,47 +278,6 @@ def attention_q_kv_packed(
     return o
 
 
-@torch.compile(fullgraph=True)
-def attention_q_kv_packed_static_query(
-    # fmt: off
-    q: Tensor,
-    kv: Tensor,
-    w_kv: Tensor,
-    b_kv: Tensor | None,
-    head_dim: int,
-    w_out: Tensor,
-    b_out: Tensor | None,
-    attn_mask: Tensor | None,
-    attention_dropout: float,
-    dropout: float,
-    training: bool,
-    rope_q: Tensor | None = None,
-    rope_k: Tensor | None = None,
-    # fmt: on
-) -> Tensor:
-    q, k, v = project_q_kv_packed_static_query(q, kv, w_kv, b_kv, head_dim, rope_q, rope_k)
-    attention_dropout = 0.0 if not training else attention_dropout
-    o = F.scaled_dot_product_attention(
-        q, k, v, attn_mask=attn_mask, dropout_p=attention_dropout, is_causal=False, enable_gqa=True
-    )
-    o = _permute_and_fold_head(o)
-    o = F.linear(o, w_out, b_out)
-    o = F.dropout(o, p=dropout, training=training, inplace=True)
-    return o
-
-
-@torch.compile(fullgraph=True)
-def attentive_pool_weights(x: Tensor, w: Tensor, b: Tensor | None, rope: Tensor | None = None) -> Tensor:
-    if rope is not None:
-        B, S, D = x.shape
-        D_head = rope.shape[-1]
-        x = x.view(B, S, -1, D_head).movedim(-2, 1)
-        x = apply_rope(x, rope)
-        x = x.movedim(1, -2).reshape(B, S, D)
-    weights = F.linear(x, w, b)  # B, S, H
-    return F.softmax(weights, dim=-2)
-
-
 @torch.no_grad()
 @torch.compile(fullgraph=True)
 def attention_weights_qkv_packed(
@@ -433,23 +369,6 @@ def attention_weights_q_kv_packed(
         rope_q,
         rope_k,
     )
-    return (q @ k.mT * (head_dim**-0.5)).softmax(dim=-1)
-
-
-@torch.no_grad()
-@torch.compile(fullgraph=True)
-def attention_weights_q_kv_packed_static_query(
-    # fmt: off
-    q: Tensor,
-    kv: Tensor,
-    w_kv: Tensor,
-    b_kv: Tensor | None,
-    head_dim: int,
-    rope_q: Tensor | None = None,
-    rope_k: Tensor | None = None,
-    # fmt: on
-) -> Tensor:
-    q, k, _ = project_q_kv_packed_static_query(q, kv, w_kv, b_kv, head_dim, rope_q, rope_k)
     return (q @ k.mT * (head_dim**-0.5)).softmax(dim=-1)
 
 
@@ -691,8 +610,6 @@ class CrossAttention(nn.Module):
 
 
 class AttentivePool(nn.Module):
-    attention_weights: Tensor | None = None
-
     def __init__(
         self,
         hidden_size: int,
@@ -703,56 +620,48 @@ class AttentivePool(nn.Module):
         bias: bool = True,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
+        norm_type: NormType = "rmsnorm",
+        qk_normalization: bool = False,
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
-        self._head_dim = hidden_size // num_attention_heads
-        self.dropout = nn.Dropout(hidden_dropout)
-        self.attention_dropout = nn.Dropout(attention_dropout)
+        if hidden_size % num_attention_heads != 0:
+            raise ValueError(
+                f"hidden_size ({hidden_size}) must be divisible by num_attention_heads ({num_attention_heads})"
+            )
+        if num_queries < 1:
+            raise ValueError(f"num_queries must be positive, got {num_queries}")
         self.query = nn.Parameter(torch.empty(1, num_queries, hidden_size, **factory_kwargs))
-        self.kv_proj = nn.Linear(hidden_size, 2 * hidden_size, bias=bias, **factory_kwargs)
-        self.out_proj = nn.Linear(hidden_size, hidden_size, bias=bias, **factory_kwargs)
+        self.cross_attention = CrossAttention(
+            hidden_size,
+            num_attention_heads,
+            hidden_dropout=hidden_dropout,
+            attention_dropout=attention_dropout,
+            bias=bias,
+            device=device,
+            dtype=dtype,
+            norm_type=norm_type,
+            qk_normalization=qk_normalization,
+        )
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
         trunc_normal_(self.query)
-        init_linear(self.kv_proj)
-        init_linear(self.out_proj)
+        self.cross_attention.reset_parameters()
 
-    def forward(self, x: Tensor, rope: Tensor | None = None) -> Tensor:
-        y = attention_q_kv_packed_static_query(
-            # fmt: off
-            self.query,
-            x,
-            self.kv_proj.weight,
-            self.kv_proj.bias,
-            self._head_dim,
-            self.out_proj.weight,
-            self.out_proj.bias,
-            None,
-            self.attention_dropout.p,
-            self.dropout.p,
-            self.training,
-            rope_k=rope,
-            # fmt: on
-        )
+    def _expand_query(self, batch_size: int) -> Tensor:
+        return self.query.expand(batch_size, -1, -1)
+
+    def forward(self, x: Tensor) -> Tensor:
+        y = self.cross_attention(self._expand_query(x.shape[0]), x)
         if y.shape[1] == 1:
             y = y.squeeze(1)
         return y
 
     if TYPE_CHECKING:
 
-        def __call__(self, x: Tensor, rope: Tensor | None = None) -> Tensor:
-            return self.forward(x, rope)
+        def __call__(self, x: Tensor) -> Tensor:
+            return self.forward(x)
 
-    def forward_weights(self, x: Tensor, rope: Tensor | None = None) -> Tensor:
-        return attention_weights_q_kv_packed_static_query(
-            # fmt: off
-            self.query,
-            x,
-            self.kv_proj.weight,
-            self.kv_proj.bias,
-            self._head_dim,
-            rope_k=rope,
-            # fmt: on
-        )
+    def forward_weights(self, x: Tensor) -> Tensor:
+        return self.cross_attention.forward_weights(self._expand_query(x.shape[0]), x)
