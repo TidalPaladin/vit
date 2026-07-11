@@ -9,6 +9,9 @@ from torchao.quantization import Int8DynamicActivationInt8WeightConfig
 from vit import ViT, ViTConfig
 
 
+TORCHAO_QUANTIZATION_CONFIG_VERSION = 2
+
+
 def parse_args() -> Namespace:
     parser = ArgumentParser()
     parser.add_argument("--hidden-size", type=int, default=768)
@@ -60,7 +63,7 @@ def main(args: Namespace):
     model.eval()
     quantized_model = deepcopy(model)
 
-    quantization_config = Int8DynamicActivationInt8WeightConfig()
+    quantization_config = Int8DynamicActivationInt8WeightConfig(version=TORCHAO_QUANTIZATION_CONFIG_VERSION)
     quantized_model.apply_quantization(
         mlp_quantization_config=quantization_config,
         qkv_quantization_config=quantization_config,
