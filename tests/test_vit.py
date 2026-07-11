@@ -23,6 +23,7 @@ HEAD_FACTORY_CASES = (
 )
 FACTORY_OVERRIDE_DTYPE = torch.float32
 FACTORY_CONFIG_DTYPE = torch.bfloat16
+TORCHAO_QUANTIZATION_CONFIG_VERSION = 2
 
 
 @pytest.fixture(params=[pytest.param(False, id="2d"), pytest.param(True, id="3d")])
@@ -621,7 +622,9 @@ class TestViT:
         model = ViT(config).to(device)
         model.eval()
         quantized_model = deepcopy(model)
-        quantized_model.apply_quantization(mlp_quantization_config=Int8WeightOnlyConfig())
+        quantized_model.apply_quantization(
+            mlp_quantization_config=Int8WeightOnlyConfig(version=TORCHAO_QUANTIZATION_CONFIG_VERSION)
+        )
 
         x = torch.randn(2, 3, *config.img_size, device=device)
         with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=True):

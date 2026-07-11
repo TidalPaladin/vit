@@ -4,10 +4,12 @@ import pytest
 import torch
 import torch.nn.functional as F
 from torch.testing import assert_close
-from torchao.dtypes import AffineQuantizedTensor
-from torchao.quantization import Int8WeightOnlyConfig
+from torchao.quantization import Int8Tensor, Int8WeightOnlyConfig
 
 from vit.fused import VALID_ADALN_GATE_INITS, AdaNormMLP, NormLinear, NormMLP
+
+
+TORCHAO_QUANTIZATION_CONFIG_VERSION = 2
 
 
 def _apply_norm_manual(
@@ -76,15 +78,18 @@ class TestNormLinear:
         layer_norm_linear = NormLinear(10, 20).to(device)
         layer_norm_linear.eval()
         quantized_layer_norm_linear = deepcopy(layer_norm_linear)
-        quantized_layer_norm_linear.apply_quantization(Int8WeightOnlyConfig())
+        quantized_layer_norm_linear.apply_quantization(
+            Int8WeightOnlyConfig(version=TORCHAO_QUANTIZATION_CONFIG_VERSION)
+        )
         weight = quantized_layer_norm_linear.linear.weight
-        assert isinstance(weight, AffineQuantizedTensor)
+        assert isinstance(weight, Int8Tensor)
 
         x = torch.randn(10, device=device)
         with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=True):
             y = layer_norm_linear(x)
             y_quant = quantized_layer_norm_linear(x)
-        assert_close(y, y_quant, atol=1e-2, rtol=0)
+        # TorchAO v2 accumulates directly quantized linear outputs in float32.
+        assert_close(y.float(), y_quant.float(), atol=1e-2, rtol=0)
 
 
 class TestNormMLP:
@@ -162,17 +167,18 @@ class TestNormMLP:
         layer_norm_mlp = NormMLP(10, 20).to(device)
         layer_norm_mlp.eval()
         quantized_layer_norm_mlp = deepcopy(layer_norm_mlp)
-        quantized_layer_norm_mlp.apply_quantization(Int8WeightOnlyConfig())
+        quantized_layer_norm_mlp.apply_quantization(Int8WeightOnlyConfig(version=TORCHAO_QUANTIZATION_CONFIG_VERSION))
         weight1 = quantized_layer_norm_mlp.fc1.weight
         weight2 = quantized_layer_norm_mlp.fc2.weight
-        assert isinstance(weight1, AffineQuantizedTensor)
-        assert isinstance(weight2, AffineQuantizedTensor)
+        assert isinstance(weight1, Int8Tensor)
+        assert isinstance(weight2, Int8Tensor)
 
         x = torch.randn(10, device=device)
         with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=True):
             y = layer_norm_mlp(x)
             y_quant = quantized_layer_norm_mlp(x)
-        assert_close(y, y_quant, atol=1e-2, rtol=0)
+        # TorchAO v2 accumulates directly quantized linear outputs in float32.
+        assert_close(y.float(), y_quant.float(), atol=1e-2, rtol=0)
 
 
 class TestAdaNormMLP:
@@ -231,15 +237,16 @@ class TestAdaNormMLP:
         layer = AdaNormMLP(10, 20).to(device)
         layer.eval()
         quantized_layer = deepcopy(layer)
-        quantized_layer.apply_quantization(Int8WeightOnlyConfig())
+        quantized_layer.apply_quantization(Int8WeightOnlyConfig(version=TORCHAO_QUANTIZATION_CONFIG_VERSION))
         weight1 = quantized_layer.fc1.weight
         weight2 = quantized_layer.fc2.weight
-        assert isinstance(weight1, AffineQuantizedTensor)
-        assert isinstance(weight2, AffineQuantizedTensor)
+        assert isinstance(weight1, Int8Tensor)
+        assert isinstance(weight2, Int8Tensor)
 
         x = torch.randn(2, 4, 10, device=device)
         conditioning = torch.randn(2, 10, device=device)
         with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=True):
             y = layer(x, conditioning=conditioning)
             y_quant = quantized_layer(x, conditioning=conditioning)
-        assert_close(y, y_quant, atol=1e-2, rtol=0)
+        # TorchAO v2 accumulates directly quantized linear outputs in float32.
+        assert_close(y.float(), y_quant.float(), atol=1e-2, rtol=0)

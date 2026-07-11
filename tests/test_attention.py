@@ -5,13 +5,13 @@ import pytest
 import torch
 import torch.nn.functional as F
 from torch.testing import assert_close
-from torchao.dtypes import AffineQuantizedTensor
-from torchao.quantization import Int8WeightOnlyConfig
+from torchao.quantization import Int8Tensor, Int8WeightOnlyConfig
 
 from vit import AttentivePool as PublicAttentivePool
 from vit.attention import AttentivePool, CrossAttention, SelfAttention
 
 
+TORCHAO_QUANTIZATION_CONFIG_VERSION = 2
 NormModule = torch.nn.LayerNorm | torch.nn.RMSNorm
 
 
@@ -98,9 +98,9 @@ class TestSelfAttention:
         layer = SelfAttention(D, H).to(device)
         layer.eval()
         quantized_layer = deepcopy(layer)
-        quantized_layer.apply_quantization(Int8WeightOnlyConfig())
+        quantized_layer.apply_quantization(Int8WeightOnlyConfig(version=TORCHAO_QUANTIZATION_CONFIG_VERSION))
         weight = quantized_layer.qkv_proj.weight
-        assert isinstance(weight, AffineQuantizedTensor)
+        assert isinstance(weight, Int8Tensor)
 
         x = torch.randn(B, L, D, device=device)
         with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=True):
@@ -179,11 +179,11 @@ class TestCrossAttention:
         layer = CrossAttention(D, H).to(device)
         layer.eval()
         quantized_layer = deepcopy(layer)
-        quantized_layer.apply_quantization(Int8WeightOnlyConfig())
+        quantized_layer.apply_quantization(Int8WeightOnlyConfig(version=TORCHAO_QUANTIZATION_CONFIG_VERSION))
         weight1 = quantized_layer.q_proj.weight
         weight2 = quantized_layer.kv_proj.weight
-        assert isinstance(weight1, AffineQuantizedTensor)
-        assert isinstance(weight2, AffineQuantizedTensor)
+        assert isinstance(weight1, Int8Tensor)
+        assert isinstance(weight2, Int8Tensor)
 
         x = torch.randn(B, L, D, device=device)
         kv = torch.randn(B, L // 2, D, device=device)

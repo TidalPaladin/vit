@@ -4,6 +4,9 @@ from torch.testing import assert_close
 from vit.drop_path import DropPath, drop_path
 
 
+STOCHASTIC_TEST_BATCH_SIZE = 64
+
+
 class TestDropPath:
     def test_forward_no_drop(self, device):
         """Test that drop_prob=0 returns input unchanged."""
@@ -36,11 +39,11 @@ class TestDropPath:
         """Test that train mode with drop_prob>0 produces different outputs."""
         layer = DropPath(drop_prob=0.5).to(device)
         layer.train()
-        x = torch.randn(4, 16, 64, device=device)
+        x = torch.randn(STOCHASTIC_TEST_BATCH_SIZE, 16, 64, device=device)
         # Run multiple times to ensure stochasticity
         y1 = layer(x)
         y2 = layer(x)
-        # With 50% drop rate, outputs should differ (very unlikely to be same)
+        # With 64 independent masks, an accidental match is negligibly likely.
         assert not torch.allclose(y1, y2)
 
     def test_scaling(self, device):

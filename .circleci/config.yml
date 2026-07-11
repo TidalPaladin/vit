@@ -2,7 +2,7 @@ version: 2.1
 
 
 orbs:
-  codecov: codecov/codecov@3.2.4
+  codecov: codecov/codecov@5.4.3
 
 
 jobs:
@@ -16,7 +16,7 @@ jobs:
                   - v1-dependencies-{{ checksum "uv.lock" }}
             - run:
                 name: Install uv
-                command: pip install --user uv
+                command: python -m pip install --user "uv==0.11.28"
             - run:
                 name: Install dependencies
                 command: uv sync --group dev --no-install-project
@@ -52,7 +52,7 @@ jobs:
                 name: Run static type checking
                 command: make types
             - codecov/upload:
-                file: coverage.xml
+                files: coverage.xml
 
 
 workflow_filters: &workflow_filters

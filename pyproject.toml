@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling", "hatch-vcs"]
+requires = ["hatchling==1.31.0", "hatch-vcs==0.5.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -10,10 +10,11 @@ authors = [
     {name = "Scott Chase Waggener", email = "chase.waggener@icloud.com"},
 ]
 dependencies = [
-  "torch",
-  "numpy",
-  "pyyaml",
-  "torchao",
+  "torch==2.13.0",
+  "numpy==2.4.6; python_version < '3.12'",
+  "numpy==2.5.1; python_version >= '3.12'",
+  "pyyaml==6.0.3",
+  "torchao==0.17.0",
 ]
 
 readme = "README.md"
@@ -52,6 +53,9 @@ pythonVersion = "3.14"
 pythonPlatform = "Linux"
 typeCheckingMode = "standard"
 
+[tool.uv]
+required-version = "==0.11.28"
+
 [tool.hatch.version]
 source = "vcs"
 
@@ -71,18 +75,18 @@ vit-component-benchmark = "benchmark.component_cli:main"
 
 [dependency-groups]
 benchmarking = [
-    "matplotlib",
-    "tqdm",
+    "matplotlib==3.11.0",
+    "tqdm==4.68.4",
 ]
 
 dev = [
-    "ruff",
-    "basedpyright",
-    "pytest",
-    "pytest-mock",
-    "pytest-cov",
-    "pytest-env",
-    "coverage",
-    "pdbpp",
+    "ruff==0.15.21",
+    "basedpyright==1.39.9",
+    "pytest==9.1.1",
+    "pytest-mock==3.15.1",
+    "pytest-cov==7.1.0",
+    "pytest-env==1.6.0",
+    "coverage==7.15.0",
+    "pdbpp==0.12.1",
     {include-group = "benchmarking"},
 ]

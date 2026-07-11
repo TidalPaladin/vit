@@ -3,7 +3,10 @@
 PROJECT=vit
 QUALITY_DIRS=$(PROJECT) tests benchmark
 CLEAN_DIRS=$(PROJECT) tests benchmark
-PYTHON=uv run python
+UV_VERSION=0.11.28
+UVX=uvx
+UV=$(UVX) --from uv==$(UV_VERSION) uv
+PYTHON=$(UV) run python
 
 CONFIG_FILE := config.mk
 ifneq ($(wildcard $(CONFIG_FILE)),)
@@ -30,23 +33,23 @@ clean-env: ## remove the virtual environment directory
 
 deploy: ## installs from lockfile
 	git submodule update --init --recursive
-	which uv || pip install --user uv
-	uv sync --frozen --no-dev
+	which $(UVX) || python -m pip install --user "uv==$(UV_VERSION)"
+	$(UV) sync --frozen --no-dev
 
 
 init: ## pulls submodules and initializes virtual environment
 	git submodule update --init --recursive
-	which uv || pip install --user uv
-	uv sync --all-groups
+	which $(UVX) || python -m pip install --user "uv==$(UV_VERSION)"
+	$(UV) sync --all-groups
 
 quality:
 	$(MAKE) clean
-	uv run ruff check $(QUALITY_DIRS)
-	uv run ruff format --check $(QUALITY_DIRS)
+	$(UV) run ruff check $(QUALITY_DIRS)
+	$(UV) run ruff format --check $(QUALITY_DIRS)
 
 style:
-	uv run ruff check --fix $(QUALITY_DIRS)
-	uv run ruff format $(QUALITY_DIRS)
+	$(UV) run ruff check --fix $(QUALITY_DIRS)
+	$(UV) run ruff format $(QUALITY_DIRS)
 
 test: ## run unit tests
 	$(PYTHON) -m pytest \
@@ -72,7 +75,7 @@ test-ci: ## runs CI-only tests (excludes cuda and compile tests)
 		./tests/
 
 types: ## run static type checking
-	uv run basedpyright 
+	$(UV) run basedpyright
 
 help: ## display this help message
 	@echo "Please use \`make <target>' where <target> is one of"
