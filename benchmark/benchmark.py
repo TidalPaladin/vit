@@ -247,6 +247,12 @@ def benchmark_memory(
     max_memory_mb = 0.0
 
     for _ in range(num_iters):
+        backward_loss: Tensor | None = None
+        if pass_mode == "backward":
+            model.train()
+            model.zero_grad()
+            backward_loss = _benchmark_loss(model(input_tensor))
+
         # Reset memory stats
         torch.cuda.reset_peak_memory_stats(device)
         torch.cuda.empty_cache()
@@ -255,6 +261,10 @@ def benchmark_memory(
             model.eval()
             with torch.inference_mode():
                 _ = model(input_tensor)
+        elif pass_mode == "backward":
+            assert backward_loss is not None
+            backward_loss.backward()
+            model.zero_grad()
         else:
             model.train()
             _benchmark_loss(model(input_tensor)).backward()

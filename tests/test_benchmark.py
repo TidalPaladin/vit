@@ -204,6 +204,30 @@ def test_benchmark_memory(small_config: ViTConfig, device: torch.device) -> None
     assert memory_mb >= 0  # May be 0 for CPU
 
 
+def test_backward_memory_excludes_forward_peak(mocker) -> None:
+    """Backward-only memory tracking must reset peak stats after graph construction."""
+    events: list[str] = []
+    model = RecordingModel(events)
+    mocker.patch(
+        "benchmark.benchmark.torch.cuda.reset_peak_memory_stats", side_effect=lambda _device: events.append("reset")
+    )
+    mocker.patch("benchmark.benchmark.torch.cuda.empty_cache", side_effect=lambda: events.append("empty_cache"))
+    mocker.patch(
+        "benchmark.benchmark.torch.cuda.max_memory_allocated",
+        side_effect=lambda _device: events.append("peak") or 0,
+    )
+
+    benchmark_memory(
+        model,
+        torch.ones(1),
+        num_iters=1,
+        pass_mode="backward",
+        device=torch.device("cuda"),
+    )
+
+    assert events == ["forward", "reset", "empty_cache", "backward", "peak"]
+
+
 @pytest.mark.parametrize("pass_mode", ["forward", "backward", "forward_backward"])
 def test_run_full_benchmark(small_config: ViTConfig, device: torch.device, pass_mode: str) -> None:
     """Test full benchmark suite."""
