@@ -51,6 +51,9 @@ jobs:
             - run:
                 name: Run static type checking
                 command: make types
+            - run:
+                name: Validate distribution artifacts
+                command: make check-distribution
             - codecov/upload:
                 files: coverage.xml
 
