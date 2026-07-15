@@ -2,6 +2,7 @@
 """Core benchmarking functions for ViT models."""
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
@@ -10,7 +11,7 @@ import torch.nn as nn
 from torch import Tensor
 from tqdm import tqdm
 
-from vit import ViT, ViTConfig
+from vit import ViT, ViTConfig, ViTFeatures
 
 
 PassMode = Literal["forward", "backward", "forward_backward"]
@@ -70,18 +71,8 @@ def warmup_model(
     else:
         model.train()
         for _ in range(num_warmup_iters):
-            output = model(input_tensor)
-
-            # Compute a simple loss for backward pass
-            if isinstance(output, torch.Tensor):
-                loss = output.mean()
-            else:
-                # For ViTFeatures, use the dense features
-                loss = output.dense_features.mean()
-
-            if pass_mode in ["backward", "forward_backward"]:
-                loss.backward()
-                model.zero_grad()
+            _benchmark_loss(model(input_tensor)).backward()
+            model.zero_grad()
 
 
 def compute_gflops(model: ViT, input_shape: tuple[int, ...]) -> float:
@@ -172,7 +163,7 @@ def benchmark_latency(
     if device is None:
         device = next(model.parameters()).device
 
-    latencies = []
+    latencies: list[float] = []
 
     if pass_mode == "forward":
         model.eval()
@@ -192,31 +183,40 @@ def benchmark_latency(
     else:
         model.train()
         for _ in range(num_iters):
-            if device.type == "cuda":
-                torch.cuda.synchronize(device)
-
-            start_time = time.perf_counter()
-
-            output = model(input_tensor)
-
-            # Compute loss
-            if isinstance(output, torch.Tensor):
-                loss = output.mean()
+            model.zero_grad()
+            if pass_mode == "backward":
+                output = model(input_tensor)
+                loss = _benchmark_loss(output)
+                latency_ms = _time_work(device, loss.backward)
             else:
-                loss = output.dense_features.mean()
-
-            if pass_mode in ["backward", "forward_backward"]:
-                loss.backward()
-
-            if device.type == "cuda":
-                torch.cuda.synchronize(device)
-
-            end_time = time.perf_counter()
-            latencies.append((end_time - start_time) * 1000)  # Convert to ms
-
+                latency_ms = _time_work(device, lambda: _forward_and_backward(model, input_tensor))
+            latencies.append(latency_ms)
             model.zero_grad()
 
     return sum(latencies) / len(latencies)
+
+
+def _benchmark_loss(output: Tensor | ViTFeatures) -> Tensor:
+    """Create the scalar loss used by training-pass benchmarks."""
+    if isinstance(output, torch.Tensor):
+        return output.mean()
+    return output.dense_features.mean()
+
+
+def _forward_and_backward(model: nn.Module, input_tensor: Tensor) -> None:
+    """Run the complete training workload measured by forward_backward."""
+    _benchmark_loss(model(input_tensor)).backward()
+
+
+def _time_work(device: torch.device, work: Callable[[], None]) -> float:
+    """Synchronize a device and time one benchmark workload."""
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+    start_time = time.perf_counter()
+    work()
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+    return (time.perf_counter() - start_time) * 1000
 
 
 def benchmark_memory(
@@ -257,17 +257,7 @@ def benchmark_memory(
                 _ = model(input_tensor)
         else:
             model.train()
-            output = model(input_tensor)
-
-            # Compute loss
-            if isinstance(output, torch.Tensor):
-                loss = output.mean()
-            else:
-                loss = output.dense_features.mean()
-
-            if pass_mode in ["backward", "forward_backward"]:
-                loss.backward()
-
+            _benchmark_loss(model(input_tensor)).backward()
             model.zero_grad()
 
         # Get peak memory
