@@ -1,6 +1,8 @@
 """Tests for installed-distribution metadata and contents."""
 
 import shlex
+import subprocess
+import sys
 import tomllib
 from pathlib import Path
 from zipfile import ZipFile
@@ -14,6 +16,31 @@ PROJECT_ROOT = Path(__file__).parents[1]
 BENCHMARK_DEPENDENCIES = {"matplotlib==3.11.0", "tqdm==4.68.4"}
 BENCHMARK_PACKAGES = {"vit", "benchmark"}
 ENTRY_POINTS_PATH = "vit-0.1.1.dist-info/entry_points.txt"
+OPTIONAL_DEPENDENCY_BLOCKER = """
+import importlib
+import importlib.abc
+import importlib.util
+import sys
+
+
+class OptionalDependencyBlocker(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+    def find_spec(self, fullname, path, target=None):
+        if fullname.partition(".")[0] in {"matplotlib", "tqdm"}:
+            return importlib.util.spec_from_loader(fullname, self)
+        return None
+
+    def create_module(self, spec):
+        return None
+
+    def exec_module(self, module):
+        raise ModuleNotFoundError(f"No module named {module.__name__!r}", name=module.__name__)
+
+
+sys.meta_path.insert(0, OptionalDependencyBlocker())
+entrypoint = importlib.import_module(sys.argv[1])
+sys.argv = [sys.argv[1], "--help"]
+entrypoint.main()
+"""
 
 
 def test_benchmark_distribution_configuration() -> None:
@@ -39,6 +66,20 @@ def test_readme_git_install_commands_are_single_requirements() -> None:
         assert len(arguments) == 3
         assert arguments[:2] == ["pip", "install"]
         assert " @ git+https://github.com/TidalPaladin/vit.git" in arguments[2]
+
+
+@pytest.mark.parametrize("entrypoint", ["benchmark.cli", "benchmark.component_cli"])
+def test_benchmark_entrypoint_help_without_optional_dependencies(entrypoint: str) -> None:
+    """Always-installed benchmark commands must provide help without the benchmarking extra."""
+    result = subprocess.run(
+        [sys.executable, "-c", OPTIONAL_DEPENDENCY_BLOCKER, entrypoint],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_wheel_validation_rejects_missing_console_script_module(tmp_path: Path) -> None:
