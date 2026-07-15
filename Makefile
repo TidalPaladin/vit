@@ -1,8 +1,8 @@
-.PHONY: audit-dependencies clean clean-env check quality style tag-version test env upload upload-test
+.PHONY: audit-dependencies check-distribution clean clean-env check quality style tag-version test env upload upload-test
 
 PROJECT=vit
-QUALITY_DIRS=$(PROJECT) tests benchmark
-CLEAN_DIRS=$(PROJECT) tests benchmark
+QUALITY_DIRS=$(PROJECT) tests benchmark tools
+CLEAN_DIRS=$(PROJECT) tests benchmark tools
 UV_VERSION=0.11.28
 UVX=uvx
 UV=$(UVX) --from uv==$(UV_VERSION) uv
@@ -20,6 +20,7 @@ check: ## run quality checks and unit tests
 	$(MAKE) style
 	$(MAKE) quality
 	$(MAKE) types
+	$(MAKE) check-distribution
 	$(MAKE) test
 
 audit-dependencies: ## audit locked Python dependencies for known public vulnerabilities
@@ -42,6 +43,12 @@ audit-dependencies: ## audit locked Python dependencies for known public vulnera
 		--progress-spinner=off \
 		--vulnerability-service pypi \
 		--requirement "$$requirements_file"
+
+check-distribution: ## build a wheel and validate its console-script targets
+	@dist_dir="$$(mktemp -d)"; \
+	trap 'rm -rf "$$dist_dir"' EXIT; \
+	$(UV) build --wheel --out-dir "$$dist_dir"; \
+	$(PYTHON) tools/validate_wheel.py "$$dist_dir"/*.whl
 
 clean: ## remove cache files
 	find $(CLEAN_DIRS) -path '*/__pycache__/*' -delete

@@ -10,7 +10,7 @@ Transformer residual output projections are zero-initialized by default (`attn o
 This library can be installed with the following command
 
 ```bash
-pip install vit @ git+https://github.com/TidalPaladin/vit.git
+pip install "vit @ git+https://github.com/TidalPaladin/vit.git"
 ```
 
 For benchmarking capabilities, install with the benchmarking extras:

@@ -195,7 +195,10 @@ Run complete benchmark suite on a ViT configuration.
 - `config`: ViTConfig to benchmark
 - `batch_size`: Batch size for benchmarking
 - `device`: Device to run benchmark on
-- `pass_mode`: "forward", "backward", or "forward_backward"
+- `pass_mode`: workload measured by the benchmark:
+  - `"forward"`: inference-mode model forward pass
+  - `"backward"`: autograd backward pass after untimed graph construction
+  - `"forward_backward"`: model forward pass, loss construction, and autograd backward pass
 - `num_warmup_iters`: Number of warmup iterations
 - `num_latency_iters`: Number of iterations for latency measurement
 - `num_memory_iters`: Number of iterations for memory measurement

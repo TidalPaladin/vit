@@ -3,15 +3,16 @@
 
 import argparse
 import csv
+import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 import torch
-from tqdm import tqdm
 
 from vit import ViTConfig
 
-from .benchmark import run_full_benchmark
-from .plotting import plot_benchmark_results, plot_multi_metric_comparison, plot_throughput_analysis
+
+OPTIONAL_DEPENDENCY_MODULES = {"matplotlib", "tqdm"}
 
 
 def parse_resolution(resolution_str: str) -> tuple[int, ...]:
@@ -23,7 +24,10 @@ def parse_resolution(resolution_str: str) -> tuple[int, ...]:
     Returns:
         Tuple of resolution dimensions.
     """
-    return tuple(int(x.strip()) for x in resolution_str.split(","))
+    resolution = tuple(int(x.strip()) for x in resolution_str.split(","))
+    if len(resolution) == 1:
+        return resolution * 2
+    return resolution
 
 
 def save_results_to_csv(results: list, output_path: Path) -> None:
@@ -69,7 +73,7 @@ def save_results_to_csv(results: list, output_path: Path) -> None:
             )
 
 
-def main() -> None:
+def main(argv: Sequence[str] | None = None) -> int:
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
         description="Benchmark ViT models with various configurations and resolutions.",
@@ -87,7 +91,7 @@ def main() -> None:
         "--resolutions",
         nargs="+",
         required=True,
-        help="Resolution(s) to benchmark (e.g., '224' or '224,224' for 2D, '64,224,224' for 3D)",
+        help="Resolution(s) to benchmark (e.g., '224' for square 2D, '224,224' for 2D, '64,224,224' for 3D)",
     )
 
     parser.add_argument(
@@ -109,7 +113,7 @@ def main() -> None:
         type=str,
         choices=["forward", "backward", "forward_backward"],
         default="forward",
-        help="Type of pass to benchmark",
+        help="Workload to time: inference forward, autograd backward only, or combined forward and backward",
     )
 
     parser.add_argument(
@@ -161,44 +165,66 @@ def main() -> None:
         help="Skip generating plots",
     )
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+
+    try:
+        from tqdm import tqdm
+
+        from .benchmark import run_full_benchmark
+        from .plotting import plot_benchmark_results, plot_multi_metric_comparison, plot_throughput_analysis
+    except ModuleNotFoundError as error:
+        missing_module = error.name.partition(".")[0] if error.name else None
+        if missing_module in OPTIONAL_DEPENDENCY_MODULES:
+            parser.error("benchmark dependencies are not installed; install 'vit[benchmarking]'")
+        raise
 
     # Parse resolutions
     resolutions = [parse_resolution(r) for r in args.resolutions]
+
+    try:
+        device = torch.device(args.device)
+    except RuntimeError as error:
+        print(f"vit-benchmark failed: invalid device {args.device!r}: {error}", file=sys.stderr)
+        return 2
 
     # Load configs
     configs = []
     for config_path in args.configs:
         config_path = Path(config_path)
-        config = ViTConfig.from_yaml(config_path)
+        try:
+            config = ViTConfig.from_yaml(config_path)
+        except Exception as error:
+            print(f"vit-benchmark failed: could not load {config_path}: {error}", file=sys.stderr)
+            return 2
         config_name = config_path.stem
         configs.append((config_name, config))
 
     print(f"Loaded {len(configs)} configuration(s)")
     print(f"Testing {len(resolutions)} resolution(s)")
-    print(f"Device: {args.device}")
+    print(f"Device: {device}")
     print(f"Pass mode: {args.pass_mode}")
     print(f"Batch size: {args.batch_size}")
     print()
 
     # Run benchmarks
     all_results = []
+    runtime_errors = 0
 
     total_benchmarks = len(configs) * len(resolutions)
     with tqdm(total=total_benchmarks, desc="Overall progress") as overall_pbar:
         for config_name, config in configs:
             for resolution in resolutions:
-                # Create modified config with new resolution
-                config_dict = config.__dict__.copy()
-                config_dict["img_size"] = resolution
-                modified_config = ViTConfig(**config_dict)
-
-                # Run benchmark
                 try:
+                    # Create modified config with new resolution
+                    config_dict = config.__dict__.copy()
+                    config_dict["img_size"] = resolution
+                    modified_config = ViTConfig(**config_dict)
+
+                    # Run benchmark
                     result = run_full_benchmark(
                         config=modified_config,
                         batch_size=args.batch_size,
-                        device=args.device,
+                        device=device,
                         pass_mode=args.pass_mode,
                         num_warmup_iters=args.warmup_iters,
                         num_latency_iters=args.latency_iters,
@@ -215,17 +241,22 @@ def main() -> None:
                         f"{result.memory_mb:.0f}MB, "
                         f"{result.gflops:.1f} GFLOPs"
                     )
-                except Exception as e:
-                    print(f"\nError benchmarking {config_name} @ {resolution}: {e}")
+                except Exception as error:
+                    runtime_errors += 1
+                    print(
+                        f"vit-benchmark failed: {config_name} @ {resolution}: {error}",
+                        file=sys.stderr,
+                    )
 
                 overall_pbar.update(1)
 
     print(f"\nCompleted {len(all_results)} benchmark(s)")
 
     # Save results to CSV
-    csv_path = args.output_dir / "benchmark_results.csv"
-    save_results_to_csv(all_results, csv_path)
-    print(f"Saved results to {csv_path}")
+    if all_results:
+        csv_path = args.output_dir / "benchmark_results.csv"
+        save_results_to_csv(all_results, csv_path)
+        print(f"Saved results to {csv_path}")
 
     # Generate plots
     if not args.no_plots and all_results:
@@ -261,11 +292,17 @@ def main() -> None:
             )
             print(f"  Created throughput plot(s): {', '.join(str(p) for p in paths)}")
 
-        except Exception as e:
-            print(f"Error generating plots: {e}")
+        except Exception as error:
+            runtime_errors += 1
+            print(f"vit-benchmark failed: could not generate plots: {error}", file=sys.stderr)
+
+    if runtime_errors:
+        print(f"vit-benchmark failed: {runtime_errors} runtime error(s)", file=sys.stderr)
+        return 2
 
     print("\nBenchmarking complete!")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
