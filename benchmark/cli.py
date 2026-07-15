@@ -6,6 +6,7 @@ import csv
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import torch
 
@@ -13,6 +14,13 @@ from vit import ViTConfig
 
 
 OPTIONAL_DEPENDENCY_MODULES = {"matplotlib", "tqdm"}
+
+
+def run_full_benchmark(*args: Any, **kwargs: Any) -> Any:
+    """Lazily invoke the full benchmark while preserving the CLI patch point."""
+    from .benchmark import run_full_benchmark as implementation
+
+    return implementation(*args, **kwargs)
 
 
 def parse_resolution(resolution_str: str) -> tuple[int, ...]:
@@ -170,7 +178,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         from tqdm import tqdm
 
-        from .benchmark import run_full_benchmark
         from .plotting import plot_benchmark_results, plot_multi_metric_comparison, plot_throughput_analysis
     except ModuleNotFoundError as error:
         missing_module = error.name.partition(".")[0] if error.name else None
