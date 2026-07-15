@@ -8,6 +8,9 @@ from torch.testing import assert_close
 from vit.tokens import apply_mask, create_mask, generate_non_overlapping_mask, mask_is_ragged, unapply_mask
 
 
+NON_DIVISIBLE_SCALE_SEED = 1
+
+
 @pytest.mark.parametrize(
     "mask, exp",
     [
@@ -120,6 +123,13 @@ class TestCreateMask:
             for column in range(0, size[1], scale):
                 block = mask_grid[row : row + scale, column : column + scale]
                 assert (block == block[0, 0]).all()
+
+    def test_non_divisible_scale_has_equal_counts_per_sample(self):
+        """Scaled masks remain non-ragged after cropping partial boundary blocks."""
+        torch.manual_seed(NON_DIVISIBLE_SCALE_SEED)
+        mask = create_mask((5, 5), 0.5, batch_size=2, scale=2)
+
+        assert not mask_is_ragged(mask)
 
     def test_create_device(self):
         size = (16, 16)
