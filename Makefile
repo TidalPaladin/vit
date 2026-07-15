@@ -23,7 +23,8 @@ check: ## run quality checks and unit tests
 	$(MAKE) test
 
 audit-dependencies: ## audit locked Python dependencies for known public vulnerabilities
-	@audit_directory="$$(mktemp -d)"; \
+	@set -e; \
+	audit_directory="$$(mktemp -d)"; \
 	requirements_file="$$audit_directory/requirements.txt"; \
 	trap 'rm -rf "$$audit_directory"' EXIT; \
 	$(UV) export \

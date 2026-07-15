@@ -41,3 +41,16 @@ def test_dependency_audit_target_propagates_scanner_status(scanner: str, should_
     )
 
     assert (result.returncode == 0) is should_succeed, result.stderr
+
+
+def test_dependency_audit_target_propagates_export_failure() -> None:
+    """The scanner must not mask a failed locked-dependency export."""
+    result = subprocess.run(
+        ["make", "audit-dependencies", "UV=false", "PIP_AUDIT=true"],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
