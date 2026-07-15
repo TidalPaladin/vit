@@ -6,12 +6,11 @@ import csv
 from pathlib import Path
 
 import torch
-from tqdm import tqdm
 
 from vit import ViTConfig
 
-from .benchmark import run_full_benchmark
-from .plotting import plot_benchmark_results, plot_multi_metric_comparison, plot_throughput_analysis
+
+OPTIONAL_DEPENDENCY_MODULES = {"matplotlib", "tqdm"}
 
 
 def parse_resolution(resolution_str: str) -> tuple[int, ...]:
@@ -162,6 +161,17 @@ def main() -> None:
     )
 
     args = parser.parse_args()
+
+    try:
+        from tqdm import tqdm
+
+        from .benchmark import run_full_benchmark
+        from .plotting import plot_benchmark_results, plot_multi_metric_comparison, plot_throughput_analysis
+    except ModuleNotFoundError as error:
+        missing_module = error.name.partition(".")[0] if error.name else None
+        if missing_module in OPTIONAL_DEPENDENCY_MODULES:
+            parser.error("benchmark dependencies are not installed; install 'vit[benchmarking]'")
+        raise
 
     # Parse resolutions
     resolutions = [parse_resolution(r) for r in args.resolutions]
