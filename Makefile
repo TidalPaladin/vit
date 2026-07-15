@@ -1,4 +1,4 @@
-.PHONY: clean clean-env check quality style tag-version test env upload upload-test
+.PHONY: audit-dependencies clean clean-env check quality style tag-version test env upload upload-test
 
 PROJECT=vit
 QUALITY_DIRS=$(PROJECT) tests benchmark
@@ -7,6 +7,9 @@ UV_VERSION=0.11.28
 UVX=uvx
 UV=$(UVX) --from uv==$(UV_VERSION) uv
 PYTHON=$(UV) run python
+PIP_AUDIT_VERSION=2.10.1
+PIP_AUDIT=$(UVX) --python $(PYTHON_VERSION) --from pip-audit==$(PIP_AUDIT_VERSION) pip-audit
+PYTHON_VERSION?=3.14
 
 CONFIG_FILE := config.mk
 ifneq ($(wildcard $(CONFIG_FILE)),)
@@ -18,6 +21,26 @@ check: ## run quality checks and unit tests
 	$(MAKE) quality
 	$(MAKE) types
 	$(MAKE) test
+
+audit-dependencies: ## audit locked Python dependencies for known public vulnerabilities
+	@audit_directory="$$(mktemp -d)"; \
+	requirements_file="$$audit_directory/requirements.txt"; \
+	trap 'rm -rf "$$audit_directory"' EXIT; \
+	$(UV) export \
+		--frozen \
+		--all-groups \
+		--no-emit-project \
+		--quiet \
+		--python "$(PYTHON_VERSION)" \
+		--output-file "$$requirements_file"; \
+	$(PIP_AUDIT) \
+		--strict \
+		--disable-pip \
+		--require-hashes \
+		--cache-dir "$$audit_directory/cache" \
+		--progress-spinner=off \
+		--vulnerability-service pypi \
+		--requirement "$$requirements_file"
 
 clean: ## remove cache files
 	find $(CLEAN_DIRS) -path '*/__pycache__/*' -delete
