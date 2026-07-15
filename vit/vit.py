@@ -31,19 +31,21 @@ from .transformer import CrossAttentionTransformer, TransformerDecoderLayer, Tra
 
 HeadConfigType = HeadConfig | AttentivePoolHeadConfig | TransposedConv2dHeadConfig | UpsampleHeadConfig
 HeadModuleType = Head | AttentivePoolHead | TransposedConv2dHead | UpsampleHead
+_DTYPE_BY_NAME = {
+    "bfloat16": torch.bfloat16,
+    "float16": torch.float16,
+    "float32": torch.float32,
+    "float64": torch.float64,
+}
 
 
-def _parse_dtype(dtype_str: str | None) -> torch.dtype | None:
+def _parse_dtype(dtype_str: str) -> torch.dtype:
     """Convert string dtype representation to torch.dtype."""
-    if dtype_str is None:
-        return None
-    dtype_map = {
-        "float32": torch.float32,
-        "float16": torch.float16,
-        "bfloat16": torch.bfloat16,
-        "float64": torch.float64,
-    }
-    return dtype_map.get(dtype_str, None)
+    try:
+        return _DTYPE_BY_NAME[dtype_str]
+    except KeyError:
+        supported_dtypes = ", ".join(sorted(_DTYPE_BY_NAME))
+        raise ValueError(f"Unsupported dtype {dtype_str!r}. Expected one of: {supported_dtypes}") from None
 
 
 def vit_config_constructor(loader, node):

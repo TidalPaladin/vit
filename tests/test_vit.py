@@ -24,6 +24,12 @@ HEAD_FACTORY_CASES = (
 FACTORY_OVERRIDE_DTYPE = torch.float32
 FACTORY_CONFIG_DTYPE = torch.bfloat16
 TORCHAO_QUANTIZATION_CONFIG_VERSION = 2
+SUPPORTED_YAML_DTYPES = {
+    "bfloat16": torch.bfloat16,
+    "float16": torch.float16,
+    "float32": torch.float32,
+    "float64": torch.float64,
+}
 
 
 @pytest.fixture(params=[pytest.param(False, id="2d"), pytest.param(True, id="3d")])
@@ -363,6 +369,26 @@ class TestViT:
             f.write(config.to_yaml())
         config_from_path = ViTConfig.from_yaml(path)
         assert config == config_from_path
+
+    def test_config_from_yaml_rejects_unsupported_dtype(self, config):
+        """A dtype typo fails during configuration loading."""
+        config_yaml = config.to_yaml()
+        assert "dtype: float32" in config_yaml
+
+        with pytest.raises(ValueError, match=r"Unsupported dtype 'float23'.*bfloat16.*float64"):
+            ViTConfig.from_yaml(config_yaml.replace("dtype: float32", "dtype: float23"))
+
+    @pytest.mark.parametrize(("dtype_name", "dtype"), SUPPORTED_YAML_DTYPES.items())
+    def test_config_yaml_dtype_roundtrip_controls_parameters(self, config, dtype_name, dtype):
+        """Every serialized dtype round-trips and controls instantiated parameters."""
+        config_yaml = replace(config, depth=0, dtype=dtype).to_yaml()
+
+        loaded_config = ViTConfig.from_yaml(config_yaml)
+        model = loaded_config.instantiate()
+
+        assert f"dtype: {dtype_name}" in config_yaml
+        assert loaded_config.dtype == dtype
+        assert model.stem.patch.weight.dtype == dtype
 
     def test_config_from_yaml_with_attentive_pool_head(self, config):
         config_with_head = replace(config, heads={"cls": AttentivePoolHeadConfig(out_features=32, num_queries=2)})
