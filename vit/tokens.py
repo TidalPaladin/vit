@@ -103,6 +103,40 @@ def unapply_mask(mask: Tensor, x: Tensor) -> Tensor:
     return result
 
 
+def _scaled_block_volumes(size: Sequence[int], scaled_size: Sequence[int], scale: int, device: torch.device) -> Tensor:
+    """Return the expanded token count for each cell in a cropped coarse grid."""
+    block_volumes = torch.ones(tuple(scaled_size), dtype=torch.long, device=device)
+    dimensions = len(scaled_size)
+
+    for axis, (dimension, scaled_dimension) in enumerate(zip(size, scaled_size, strict=True)):
+        axis_lengths = torch.full((scaled_dimension,), scale, dtype=torch.long, device=device)
+        axis_lengths[-1] = dimension - scale * (scaled_dimension - 1)
+        axis_shape = [1] * dimensions
+        axis_shape[axis] = scaled_dimension
+        block_volumes *= axis_lengths.view(axis_shape)
+
+    return block_volumes.flatten()
+
+
+def _create_equal_volume_mask(block_volumes: Tensor, mask_ratio: float, batch_size: int) -> Tensor:
+    """Create independent coarse masks with equal expanded token counts."""
+    coarse_tokens = block_volumes.numel()
+    masked_tokens = int(torch.tensor(coarse_tokens * mask_ratio).round().item())
+    random_scores = torch.rand((batch_size, coarse_tokens), device=block_volumes.device)
+    reference_masked_indices = random_scores[0].argsort()[:masked_tokens]
+    reference_masked_volumes = block_volumes[reference_masked_indices]
+    mask = torch.ones((batch_size, coarse_tokens), dtype=torch.bool, device=block_volumes.device)
+
+    for block_volume in block_volumes.unique():
+        group_indices = torch.where(block_volumes == block_volume)[0]
+        group_masked_tokens = int((reference_masked_volumes == block_volume).sum().item())
+        group_rankings = random_scores[:, group_indices].argsort(dim=-1)
+        masked_indices = group_indices[group_rankings[:, :group_masked_tokens]]
+        mask.scatter_(1, masked_indices, False)
+
+    return mask
+
+
 def create_mask(
     size: Sequence[int],
     mask_ratio: float,
@@ -143,11 +177,14 @@ def create_mask(
 
     # When scale > 1, reformulate the problem as a recursive call over smaller mask and upsample
     if scale > 1:
-        scaled_size = tuple(s // scale for s in size)
-        mask = create_mask(scaled_size, mask_ratio, batch_size, scale=1, device=device)
+        scaled_size = tuple((dimension + scale - 1) // scale for dimension in size)
+        block_volumes = _scaled_block_volumes(size, scaled_size, scale, device)
+        mask = _create_equal_volume_mask(block_volumes, mask_ratio, batch_size)
         mask = mask.view(batch_size, 1, *scaled_size).float()
         mask = F.interpolate(mask, scale_factor=scale, mode="nearest")
-        mask = mask.view(batch_size, -1).bool()
+        spatial_slices = tuple(slice(dimension) for dimension in size)
+        mask = mask[(slice(None), slice(None), *spatial_slices)]
+        mask = mask.reshape(batch_size, -1).bool()
 
         # roll the mask (rolling is only defined for scale > 1)
         if roll:

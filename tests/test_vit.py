@@ -480,6 +480,30 @@ class TestViT:
         L = math.prod(model.stem.tokenized_size(config.img_size))
         assert out.visual_tokens.shape == (2, L // 2, 128)
 
+    @pytest.mark.parametrize("token_grid_size", [(5, 5), (5, 5, 5)])
+    def test_forward_with_non_divisible_scaled_mask(self, device, token_grid_size):
+        """Every scaled mask returned by the model fits its tokenized input."""
+        patch_size = (4,) * len(token_grid_size)
+        config = ViTConfig(
+            in_channels=3,
+            patch_size=patch_size,
+            img_size=tuple(grid * patch for grid, patch in zip(token_grid_size, patch_size)),
+            depth=1,
+            hidden_size=8,
+            ffn_hidden_size=16,
+            num_attention_heads=2,
+            pos_enc="learnable",
+            dtype=torch.float32,
+        )
+        model = ViT(config).to(device)
+        input_tensor = torch.randn(1, config.in_channels, *config.img_size, device=device)
+
+        mask = model.create_mask(input_tensor, unmasked_ratio=0.5, scale=2)
+        output = model(input_tensor, mask=mask)
+
+        assert mask.shape == (1, math.prod(token_grid_size))
+        assert output.visual_tokens.shape[1] == mask.sum()
+
     @pytest.mark.parametrize("num_register_tokens", [0, 2])
     def test_backward(self, device, config, num_register_tokens):
         config = replace(config, num_register_tokens=num_register_tokens)
