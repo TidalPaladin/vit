@@ -1,3 +1,5 @@
+import math
+
 import pytest
 import torch
 import torch.nn.functional as F
@@ -99,6 +101,25 @@ class TestCreateMask:
         # so pooled entries should be all 1.0 or 0.0
         pooled = F.adaptive_avg_pool2d(mask_grid.float(), target_size).view(*target_size)
         assert ((pooled == 1.0) | (pooled == 0.0)).all()
+
+    @pytest.mark.parametrize("size", [(5, 5), (5, 7, 9)])
+    def test_non_divisible_scale_preserves_token_grid_size(self, size):
+        """Scaled masks retain every token in non-divisible 2D and 3D grids."""
+        batch_size = 2
+        mask = create_mask(size, 0.5, batch_size=batch_size, scale=2)
+
+        assert mask.shape == (batch_size, math.prod(size))
+
+    def test_non_divisible_scale_keeps_boundary_blocks_contiguous(self):
+        """Cropped boundary blocks retain the requested maximum block width."""
+        size = (5, 5)
+        scale = 2
+        mask_grid = create_mask(size, 0.5, scale=scale).view(*size)
+
+        for row in range(0, size[0], scale):
+            for column in range(0, size[1], scale):
+                block = mask_grid[row : row + scale, column : column + scale]
+                assert (block == block[0, 0]).all()
 
     def test_create_device(self):
         size = (16, 16)

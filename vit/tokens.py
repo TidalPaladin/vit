@@ -143,11 +143,13 @@ def create_mask(
 
     # When scale > 1, reformulate the problem as a recursive call over smaller mask and upsample
     if scale > 1:
-        scaled_size = tuple(s // scale for s in size)
+        scaled_size = tuple((dimension + scale - 1) // scale for dimension in size)
         mask = create_mask(scaled_size, mask_ratio, batch_size, scale=1, device=device)
         mask = mask.view(batch_size, 1, *scaled_size).float()
         mask = F.interpolate(mask, scale_factor=scale, mode="nearest")
-        mask = mask.view(batch_size, -1).bool()
+        spatial_slices = tuple(slice(dimension) for dimension in size)
+        mask = mask[(slice(None), slice(None), *spatial_slices)]
+        mask = mask.reshape(batch_size, -1).bool()
 
         # roll the mask (rolling is only defined for scale > 1)
         if roll:
