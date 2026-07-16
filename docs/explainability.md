@@ -23,6 +23,13 @@ pip install "vit[explainability] @ git+https://github.com/TidalPaladin/vit.git"
 The extra pins Captum 0.9.0, Matplotlib 3.11.0, and Pillow 12.3.0. Importing `vit.explain` and running
 `vit-explain --help` do not import those optional packages.
 
+## Citing the methods
+
+When publishing results, cite each attribution method and evaluation metric used. Cite Captum as well when using
+`Saliency`, `InputXGradient`, `IntegratedGradients`, `SmoothGrad`, or `PatchOcclusion`. The tables below map every
+public method to its primary source and state where this toolbox implements an adaptation rather than an exact
+reproduction. Copy-ready entries are in [`explainability-references.bib`](explainability-references.bib).
+
 ## Prediction adapter and targets
 
 `output_fn` maps `ViTFeatures` to the downstream output tensor. This boundary preserves the model's real pooling and
@@ -109,18 +116,18 @@ explanation = explainer.attribute(
 `Explanation.token_attributions`, `pixel_attributions`, and `layer_attributions` contain raw method outputs. Signed
 gradient methods preserve negative values. Native positive-relevance methods remain nonnegative by definition.
 
-| Method | Meaning | Main cost and sensitivity |
-|---|---|---|
-| `RawAttention(query=...)` | One layer's attention from selected queries to visual keys | One trace; target-independent; choose a head or average heads |
-| `AttentionRollout(query=...)` | Residual-aware attention flow composed across layers | One trace; target-independent; query choice changes the result |
-| `GradientAttentionRollout(query=...)` | Positive gradient-times-attention relevance composed across layers | One forward and one backward |
-| `LeGrad()` | Positive attention gradients from intermediate post-block predictions, averaged over heads, queries, and layers | One trace plus one gradient call per selected layer |
-| `LayerGradCAM(layer=...)` | Channel-weighted post-block visual-token activations | One forward and one backward; layer choice matters |
-| `Saliency()` | Input gradient | One forward and one backward; signed unless `absolute=True` |
-| `InputXGradient()` | Input multiplied by its gradient | One forward and one backward; signed |
-| `IntegratedGradients()` | Path integral from a baseline to the input | `n_steps` model evaluations; baseline-sensitive; signed and approximately complete |
-| `SmoothGrad()` | Average saliency under input noise | `samples` gradient evaluations; noise-scale-sensitive and reproducible through `seed` |
-| `PatchOcclusion()` | Score change after replacing patch-sized windows | Many model evaluations; baseline-sensitive; supports models without gradients |
+| Method | Meaning | Main cost and sensitivity | Primary reference |
+|---|---|---|---|
+| `RawAttention(query=...)` | One layer's attention from selected queries to visual keys | One trace; target-independent; choose a head or average heads | [Vaswani et al. (2017)](https://arxiv.org/abs/1706.03762); interpretation caveats in [Abnar and Zuidema (2020)](https://aclanthology.org/2020.acl-main.385/) |
+| `AttentionRollout(query=...)` | Residual-aware attention flow composed across layers | One trace; target-independent; query choice changes the result | [Abnar and Zuidema (2020)](https://aclanthology.org/2020.acl-main.385/) |
+| `GradientAttentionRollout(query=...)` | Positive gradient-times-attention relevance composed across layers | One forward and one backward | Implementation-specific method inspired by [Chefer et al. (2021)](https://openaccess.thecvf.com/content/CVPR2021/html/Chefer_Transformer_Interpretability_Beyond_Attention_Visualization_CVPR_2021_paper.html) |
+| `LeGrad()` | Positive attention gradients from intermediate post-block predictions, averaged over heads, queries, and layers | One trace plus one gradient call per selected layer | [Bousselham et al. (2025)](https://openaccess.thecvf.com/content/ICCV2025/html/Bousselham_LeGrad_An_Explainability_Method_for_Vision_Transformers_via_Feature_Formation_ICCV_2025_paper.html) |
+| `LayerGradCAM(layer=...)` | Channel-weighted post-block visual-token activations | One forward and one backward; layer choice matters | ViT token-grid adaptation of [Selvaraju et al. (2017)](https://openaccess.thecvf.com/content_iccv_2017/html/Selvaraju_Grad-CAM_Visual_Explanations_ICCV_2017_paper.html) |
+| `Saliency()` | Input gradient | One forward and one backward; signed unless `absolute=True` | [Simonyan et al. (2014)](https://arxiv.org/abs/1312.6034) |
+| `InputXGradient()` | Input multiplied by its gradient | One forward and one backward; signed | Baseline in [Shrikumar et al. (2017)](https://proceedings.mlr.press/v70/shrikumar17a.html); formal analysis in [Ancona et al. (2018)](https://arxiv.org/abs/1711.06104) |
+| `IntegratedGradients()` | Path integral from a baseline to the input | `n_steps` model evaluations; baseline-sensitive; signed and approximately complete | [Sundararajan et al. (2017)](https://proceedings.mlr.press/v70/sundararajan17a.html) |
+| `SmoothGrad()` | Average saliency under input noise | `samples` gradient evaluations; noise-scale-sensitive and reproducible through `seed` | [Smilkov et al. (2017)](https://arxiv.org/abs/1706.03825) |
+| `PatchOcclusion()` | Score change after replacing patch-sized windows | Many model evaluations; baseline-sensitive; supports models without gradients | Sliding-occlusion method from [Zeiler and Fergus (2014)](https://link.springer.com/chapter/10.1007/978-3-319-10590-1_53) |
 
 LeGrad is the default recommendation for class-specific ViT inspection because it uses feature formation across
 multiple layers. Integrated Gradients and patch occlusion are useful checks with different assumptions.
@@ -129,16 +136,16 @@ Raw attention is not causal evidence. An attention matrix records routing weight
 does not show that changing those routes changes the selected prediction. Use interventions or deletion metrics for
 that question. Attention-method artifact metadata records the explicit query selector used to produce each map.
 
-Method background:
+`GradientAttentionRollout` uses positive gradient times attention, residual identity, row normalization, and layer
+composition. It does not implement the Deep Taylor Decomposition relevance rule in Chefer et al. `LayerGradCAM`
+applies Grad-CAM's channel-weighting rule to a block's visual tokens rather than to convolutional feature maps. The
+five generic input-attribution methods use [Captum](https://arxiv.org/abs/2009.07896); cite both Captum and the
+original algorithm when reporting them.
 
-- [Attention rollout](https://arxiv.org/abs/2005.00928)
-- [LeGrad, ICCV 2025](https://openaccess.thecvf.com/content/ICCV2025/html/Bousselham_LeGrad_An_Explainability_Method_for_Vision_Transformers_via_Feature_Formation_ICCV_2025_paper.html)
-- [Integrated Gradients](https://proceedings.mlr.press/v70/sundararajan17a.html)
-- [SaCo and ViT explanation faithfulness, CVPR 2024](https://openaccess.thecvf.com/content/CVPR2024/html/Wu_On_the_Faithfulness_of_Vision_Transformer_Explanations_CVPR_2024_paper.html)
-- [Parameter-randomization sanity checks](https://proceedings.neurips.cc/paper_files/paper/2018/hash/294a8ed24b1ad22ec2e7efea049b8737-Abstract.html)
-
-LibraGrad and metric-driven attribution are candidates for later `AttributionMethod` implementations. Both require
-validation beyond the backward and optimization paths in this release.
+[LibraGrad](https://openaccess.thecvf.com/content/CVPR2025/html/Mehri_LibraGrad_Balancing_Gradient_Flow_for_Universally_Better_Vision_Transformer_Attributions_CVPR_2025_paper.html)
+and [Metric-Driven Attributions](https://proceedings.iclr.cc/paper_files/paper/2025/hash/4e21153e79aff242492146d78d09fcdb-Abstract-Conference.html)
+are candidates for later `AttributionMethod` implementations. Both require validation beyond the backward and
+optimization paths in this release.
 
 ## Traces
 
@@ -185,7 +192,9 @@ Use `mode="reference"` and `reference_inputs=...` for activation patching. Refer
 same token layout, including masks and original image size. The code rejects incompatible references instead of
 broadcasting them. `explainer.sweep(...)` evaluates a list of interventions independently while sharing the clean
 and reference traces; the changed examples run as one expanded batch, so sweep memory scales with the number of
-interventions.
+interventions. Reference replacement adapts the activation-patching practice surveyed by
+[Zhang and Nanda (2024)](https://arxiv.org/abs/2309.16042) from language models to ViT residual, head, attention, and
+MLP sites.
 
 ## Dataset top activations
 
@@ -227,11 +236,20 @@ report = explainer.evaluate(
 )
 ```
 
-Available metrics are deletion/insertion curves, SaCo, infidelity, sensitivity, completeness residual, localization
-(pointing game and positive relevance mass), and parameter-randomization similarity. Baseline-dependent metrics
-accept an explicit baseline. Metrics exclude masked and padded patches through `TokenLayout.visual_validity`; valid
-patches must have finite attribution values. Evaluation rejects inputs or masks whose token layout differs from the
-explanation. Report baseline choices with results.
+| Metric | Toolbox result | Primary reference |
+|---|---|---|
+| `DeletionInsertion` | Patch-ranked deletion and insertion curves plus area under each curve | Patch-grid adaptation of [Petsiuk et al. (2018)](https://bmva-archive.org.uk/bmvc/2018/contents/papers/1064.pdf) |
+| `SaCo` | Signed pairwise concordance between group relevance and ablation-induced score change | [Wu et al. (2024)](https://openaccess.thecvf.com/content/CVPR2024/html/Wu_On_the_Faithfulness_of_Vision_Transformer_Explanations_CVPR_2024_paper.html) |
+| `Infidelity` | Expected squared mismatch between attribution response and output response | [Yeh et al. (2019)](https://papers.nips.cc/paper_files/paper/2019/hash/a7471fdc77b3435276507cc8f2dc2569-Abstract.html) |
+| `Sensitivity` | Sampled maximum attribution change under bounded Gaussian perturbations | Sampled variant of max-sensitivity from [Yeh et al. (2019)](https://papers.nips.cc/paper_files/paper/2019/hash/a7471fdc77b3435276507cc8f2dc2569-Abstract.html) |
+| `Completeness` | Absolute residual between attribution sum and baseline-to-input score change | Completeness property used by [Sundararajan et al. (2017)](https://proceedings.mlr.press/v70/sundararajan17a.html) |
+| `Localization` | Pointing-game hit and fraction of positive relevance inside a supplied region | [Zhang et al. (2016)](https://arxiv.org/abs/1608.00507); positive-mass form follows the energy-based pointing game used by [Wang et al. (2020)](https://openaccess.thecvf.com/content_CVPRW_2020/html/w1/Wang_Score-CAM_Score-Weighted_Visual_Explanations_for_Convolutional_Neural_Networks_CVPRW_2020_paper.html) |
+| `ParameterRandomizationSanity` | Centered cosine similarity after deterministic full-model randomization | Single-randomization variant of [Adebayo et al. (2018)](https://proceedings.neurips.cc/paper_files/paper/2018/hash/294a8ed24b1ad22ec2e7efea049b8737-Abstract.html) |
+
+Baseline-dependent metrics accept an explicit baseline. Metrics exclude masked and padded patches through
+`TokenLayout.visual_validity`; valid patches must have finite attribution values. Evaluation rejects inputs or masks
+whose token layout differs from the explanation. Report baseline choices, perturbation settings, and adaptation
+details with results.
 
 ## Artifacts and CLI
 
@@ -290,7 +308,11 @@ device; reconstructed trace tensors return to the trace device.
 
 This namespace is experimental and may change independently of the stable toolbox. Interpretable feature claims
 need top-activation inspection, decoded steering, and downstream score recovery, not reconstruction error alone.
-Relevant background includes [residual-stream SAEs for ViTs](https://proceedings.neurips.cc/paper_files/paper/2025/hash/50cf815fac839ac68846304ea1613aaa-Abstract-Conference.html), [Anthropic circuit tracing](https://www.anthropic.com/research/tracing-thoughts-language-model), and [OpenAI's sparse-feature analysis](https://openai.com/index/extracting-concepts-from-gpt-4/).
+The Top-K training design follows [Gao et al. (2024)](https://arxiv.org/abs/2406.04093). ViT-specific evidence comes
+from [Kim et al. (2025)](https://proceedings.neurips.cc/paper_files/paper/2025/hash/50cf815fac839ac68846304ea1613aaa-Abstract-Conference.html),
+which applies sparse autoencoders to ViT residual streams. Broader mechanistic context includes
+[Anthropic's circuit-tracing work](https://www.anthropic.com/research/tracing-thoughts-language-model) and
+[OpenAI's sparse-feature analysis](https://openai.com/index/extracting-concepts-from-gpt-4/).
 
 ## Validation and performance measurement
 

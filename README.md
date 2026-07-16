@@ -79,12 +79,15 @@ print(explanation.token_attributions.shape)
 print(explanation.layout.visual_validity)
 ```
 
-LeGrad is the recommended class-specific ViT method. Raw attention and attention rollout require an explicit query
-selector because they describe attention structure, not a class prediction. Attribution arrays remain unnormalized;
-normalization and image interpolation are separate visualization operations.
+LeGrad is the recommended class-specific ViT method and is based on
+[Bousselham et al. (ICCV 2025)](https://openaccess.thecvf.com/content/ICCV2025/html/Bousselham_LeGrad_An_Explainability_Method_for_Vision_Transformers_via_Feature_Formation_ICCV_2025_paper.html).
+Raw attention and attention rollout require an explicit query selector because they describe attention structure, not
+a class prediction. Attribution arrays remain unnormalized; normalization and image interpolation are separate
+visualization operations.
 
 See [`docs/explainability.md`](docs/explainability.md) for methods, targets, masking, interventions, metrics,
-artifacts, and the experimental sparse autoencoder. Run the synthetic example with:
+artifacts, the experimental sparse autoencoder, and a method-by-method citation guide. Copy-ready references are in
+[`docs/explainability-references.bib`](docs/explainability-references.bib). Run the synthetic example with:
 
 ```bash
 uv run python examples/explain_synthetic.py

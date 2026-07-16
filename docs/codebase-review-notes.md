@@ -63,3 +63,10 @@ storage dtype.
 Helpers that combine independently constructed PyTorch modules cannot assume their parameters share a device.
 Choose which module owns the computation, transfer inputs at that boundary, and return outputs on the device required
 by the caller. Cover both the common same-device path and at least one deliberate mismatch in tests.
+
+## Record provenance and implementation differences for named algorithms
+
+An API that uses a published algorithm's name can still differ in its propagation rule, spatial domain, sampling
+scheme, or randomization procedure. Documentation and artifact metadata should record both the primary source and the
+local differences so downstream users do not report an adaptation as an exact reproduction. Machine-readable method
+metadata should include a stable variant identifier when two implementations share the same broad method name.
