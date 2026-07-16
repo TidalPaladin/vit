@@ -19,6 +19,23 @@ wheels = [
 ]
 
 [[package]]
+name = "captum"
+version = "0.9.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "matplotlib" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "packaging" },
+    { name = "torch" },
+    { name = "tqdm" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f7/9e/f31758e20c3d2b42b05420936b75f663e7aeae9ba63b84aee5cad1b044a3/captum-0.9.0.tar.gz", hash = "sha256:e4868e22b68224f1a5355d2b7966803c021cf9fe5d893f51f587b4002a666b54", size = 363381, upload-time = "2026-04-17T06:11:39.577Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/01/75/c99571fee171bb9d34d3e1df5fdb16d57e2c4c15339eb220e6e6e4539f1c/captum-0.9.0-py3-none-any.whl", hash = "sha256:cda38e1d42c37591d71560bb2f5813ac4cae8d8543afac45279c7efd5945997e", size = 455196, upload-time = "2026-04-17T06:11:38.229Z" },
+]
+
+[[package]]
 name = "colorama"
 version = "0.4.6"
 source = { registry = "https://pypi.org/simple" }
@@ -1430,6 +1447,11 @@ benchmarking = [
     { name = "matplotlib" },
     { name = "tqdm" },
 ]
+explainability = [
+    { name = "captum" },
+    { name = "matplotlib" },
+    { name = "pillow" },
+]
 
 [package.dev-dependencies]
 benchmarking = [
@@ -1438,9 +1460,11 @@ benchmarking = [
 ]
 dev = [
     { name = "basedpyright" },
+    { name = "captum" },
     { name = "coverage" },
     { name = "matplotlib" },
     { name = "pdbpp" },
+    { name = "pillow" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "pytest-env" },
@@ -1448,18 +1472,26 @@ dev = [
     { name = "ruff" },
     { name = "tqdm" },
 ]
+explainability = [
+    { name = "captum" },
+    { name = "matplotlib" },
+    { name = "pillow" },
+]
 
 [package.metadata]
 requires-dist = [
+    { name = "captum", marker = "extra == 'explainability'", specifier = "==0.9.0" },
     { name = "matplotlib", marker = "extra == 'benchmarking'", specifier = "==3.11.0" },
+    { name = "matplotlib", marker = "extra == 'explainability'", specifier = "==3.11.0" },
     { name = "numpy", marker = "python_full_version < '3.12'", specifier = "==2.4.6" },
     { name = "numpy", marker = "python_full_version >= '3.12'", specifier = "==2.5.1" },
+    { name = "pillow", marker = "extra == 'explainability'", specifier = "==12.3.0" },
     { name = "pyyaml", specifier = "==6.0.3" },
     { name = "torch", specifier = "==2.13.0" },
     { name = "torchao", specifier = "==0.17.0" },
     { name = "tqdm", marker = "extra == 'benchmarking'", specifier = "==4.68.4" },
 ]
-provides-extras = ["benchmarking"]
+provides-extras = ["benchmarking", "explainability"]
 
 [package.metadata.requires-dev]
 benchmarking = [
@@ -1468,13 +1500,20 @@ benchmarking = [
 ]
 dev = [
     { name = "basedpyright", specifier = "==1.39.9" },
+    { name = "captum", specifier = "==0.9.0" },
     { name = "coverage", specifier = "==7.15.0" },
     { name = "matplotlib", specifier = "==3.11.0" },
     { name = "pdbpp", specifier = "==0.12.1" },
+    { name = "pillow", specifier = "==12.3.0" },
     { name = "pytest", specifier = "==9.1.1" },
     { name = "pytest-cov", specifier = "==7.1.0" },
     { name = "pytest-env", specifier = "==1.6.0" },
     { name = "pytest-mock", specifier = "==3.15.1" },
     { name = "ruff", specifier = "==0.15.21" },
     { name = "tqdm", specifier = "==4.68.4" },
+]
+explainability = [
+    { name = "captum", specifier = "==0.9.0" },
+    { name = "matplotlib", specifier = "==3.11.0" },
+    { name = "pillow", specifier = "==12.3.0" },
 ]

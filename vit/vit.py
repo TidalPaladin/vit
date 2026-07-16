@@ -1,3 +1,4 @@
+import math
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -517,7 +518,7 @@ class ViT(nn.Module):
 
     @property
     def prefix_length(self) -> int:
-        return self.config.num_register_tokens
+        return self.config.num_cls_tokens + self.config.num_register_tokens
 
     @torch.compile(fullgraph=True)
     def add_prefix_tokens(self, x: Tensor) -> Tensor:
@@ -605,28 +606,46 @@ class ViT(nn.Module):
             return self.forward(x, mask, rope_seed, output_norm, conditioning)
 
     @torch.no_grad()
-    def _reshape_attention_weights(self, w: Tensor, tokenized_size: Sequence[int]) -> Tensor:
+    def _reshape_attention_weights(
+        self, w: Tensor, tokenized_size: Sequence[int], mask: Tensor | None = None
+    ) -> Tensor:
         B, H, Lq, Lk = w.shape
         assert Lq == Lk, f"Query and key lengths must match, got {Lq} and {Lk}"
-        w = w[..., self.config.num_register_tokens :].view(B, H, Lq, *tokenized_size)
+        w = w[..., self.prefix_length :]
+        if mask is not None:
+            full = w.new_zeros((B, H, Lq, math.prod(tokenized_size)))
+            for batch_index in range(B):
+                key_count = int(mask[batch_index].sum().item())
+                full[batch_index, ..., mask[batch_index]] = w[batch_index, ..., :key_count]
+            w = full
+        w = w.view(B, H, Lq, *tokenized_size)
         return w.contiguous()
 
-    def forward_attention_weights(self, x: Tensor, conditioning: Tensor | None = None) -> dict[str, Tensor]:
+    def forward_attention_weights(
+        self,
+        x: Tensor,
+        conditioning: Tensor | None = None,
+        *,
+        mask: Tensor | None = None,
+        rope_seed: int | None = None,
+    ) -> dict[str, Tensor]:
         self._validate_conditioning(conditioning)
 
         # Prepare transformer input
         tokenized_size = self.stem.tokenized_size(x.shape[2:])
         x = self.stem(x)
         x = self.normalize_patch_embeddings(x)
+        x = apply_mask(mask, x) if mask is not None else x
         x = self.add_prefix_tokens(x)
+        rope = self.prepare_rope(tokenized_size, mask, rope_seed) if self.rope is not None else None
 
         # Apply transformer
         weights: dict[str, Tensor] = {}
         for i, block in enumerate(self.blocks):
             assert isinstance(block, TransformerEncoderLayer)
-            w_i = block.self_attention.forward_weights(x)
-            weights[f"layer_{i}"] = self._reshape_attention_weights(w_i, tokenized_size)
-            x = block(x, conditioning=conditioning)
+            w_i = block.self_attention.forward_weights(x, rope=rope)
+            weights[f"layer_{i}"] = self._reshape_attention_weights(w_i, tokenized_size, mask)
+            x = block(x, rope=rope, conditioning=conditioning)
 
         return weights
 

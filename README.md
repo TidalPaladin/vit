@@ -1,7 +1,7 @@
 # ViT
 
 Implementation of Vision Transformer (ViT) in native PyTorch, accelerated by `torch.compile`.
-Supports modern enhancements like RMSNorm, SwiGLU, Squared ReLU, register tokens, and different positional encodings. This implementation does not incorporate a `CLS` token.
+Supports RMSNorm, SwiGLU, Squared ReLU, optional CLS and register tokens, and several positional encodings.
 
 Transformer residual output projections are zero-initialized by default (`attn out_proj` and `mlp fc2`) for stable deep-stack initialization.
 
@@ -17,6 +17,12 @@ For benchmarking capabilities, install with the benchmarking extras:
 
 ```bash
 pip install "vit[benchmarking] @ git+https://github.com/TidalPaladin/vit.git"
+```
+
+Install Captum and artifact-rendering dependencies for the explainability toolbox:
+
+```bash
+pip install "vit[explainability] @ git+https://github.com/TidalPaladin/vit.git"
 ```
 
 ## Usage
@@ -57,6 +63,36 @@ features = model(x)
 logits = model.heads["cls"](features.visual_tokens)  # B, 10
 ```
 
+## Explainability
+
+`vit.explain` traces the native 2D `ViT`, attributes selected outputs, runs causal interventions, and evaluates
+explanations. The caller supplies the downstream prediction through `output_fn`; the toolbox never guesses how a
+plain linear head should pool tokens.
+
+```python
+from vit.explain import LeGrad, ViTExplainer
+
+explainer = ViTExplainer.from_head(model, "cls")
+explanation = explainer.attribute(x, target=3, method=LeGrad())
+
+print(explanation.token_attributions.shape)
+print(explanation.layout.visual_validity)
+```
+
+LeGrad is the recommended class-specific ViT method and is based on
+[Bousselham et al. (ICCV 2025)](https://openaccess.thecvf.com/content/ICCV2025/html/Bousselham_LeGrad_An_Explainability_Method_for_Vision_Transformers_via_Feature_Formation_ICCV_2025_paper.html).
+Raw attention and attention rollout require an explicit query selector because they describe attention structure, not
+a class prediction. Attribution arrays remain unnormalized; normalization and image interpolation are separate
+visualization operations.
+
+See [`docs/explainability.md`](docs/explainability.md) for methods, targets, masking, interventions, metrics,
+artifacts, the experimental sparse autoencoder, and a method-by-method citation guide. Copy-ready references are in
+[`docs/explainability-references.bib`](docs/explainability-references.bib). Run the synthetic example with:
+
+```bash
+uv run python examples/explain_synthetic.py
+```
+
 ## Activation Checkpointing
 
 Enable activation checkpointing to reduce memory usage during training at the cost of additional compute:
@@ -85,7 +121,7 @@ uv run python -m benchmark.checkpoint_memory --depths 12 24 --hidden-sizes 768 -
 
 ## Benchmarking
 
-The library includes a comprehensive benchmarking suite for measuring model performance:
+The library includes benchmarks for latency, peak memory, and floating-point operations:
 
 ```bash
 # Install benchmarking dependencies

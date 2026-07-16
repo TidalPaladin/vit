@@ -1,8 +1,8 @@
 .PHONY: audit-dependencies check-distribution clean clean-env check quality style tag-version test env upload upload-test
 
 PROJECT=vit
-QUALITY_DIRS=$(PROJECT) tests benchmark tools
-CLEAN_DIRS=$(PROJECT) tests benchmark tools
+QUALITY_DIRS=$(PROJECT) tests benchmark tools examples
+CLEAN_DIRS=$(PROJECT) tests benchmark tools examples
 UV_VERSION=0.11.28
 UVX=uvx
 UV=$(UVX) --from uv==$(UV_VERSION) uv
