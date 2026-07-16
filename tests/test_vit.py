@@ -664,6 +664,32 @@ class TestViT:
         weights = model.forward_attention_weights(x, conditioning=conditioning)
         assert len(weights) == config.depth
 
+    def test_forward_attention_weights_counts_cls_prefix_and_scatters_masked_keys(self):
+        config = ViTConfig(
+            in_channels=1,
+            patch_size=(2, 2),
+            img_size=(4, 4),
+            depth=1,
+            hidden_size=8,
+            ffn_hidden_size=16,
+            num_attention_heads=2,
+            num_cls_tokens=1,
+            num_register_tokens=2,
+            hidden_dropout=0.0,
+            attention_dropout=0.0,
+            pos_enc="rope",
+            dtype=torch.float32,
+        )
+        model = ViT(config).eval()
+        inputs = torch.randn(1, 1, 4, 4)
+        mask = torch.tensor([[True, False, True, False]])
+
+        weights = model.forward_attention_weights(inputs, mask=mask, rope_seed=7)["layer_0"]
+
+        assert weights.shape == (1, 2, 5, 2, 2)
+        assert_close(weights[..., 0, 1], torch.zeros_like(weights[..., 0, 1]))
+        assert_close(weights[..., 1, 1], torch.zeros_like(weights[..., 1, 1]))
+
     def test_quantization(self, device, config):
         torch.random.manual_seed(0)
         D = config.hidden_size
