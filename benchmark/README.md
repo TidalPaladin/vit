@@ -58,6 +58,41 @@ The component benchmark CLI supports:
 - `compare`
 - `list-baselines`
 - `--norm-type` to switch between `rmsnorm` and `layernorm` for `mlp` and `self_attention` runs
+- `--glu-max-autotune-gemm` to measure the opt-in CUDA Inductor GEMM autotuning path for GLU MLPs
+
+The autotuning setting is recorded in each result but omitted from `case_id`, so matching enabled and disabled cases
+compare directly. For example:
+
+```bash
+vit-component-benchmark run \
+    --save-as glu-default \
+    --components mlp \
+    --device cuda \
+    --activation swiglu \
+    --batch-sizes 4 \
+    --seq-lens 256 \
+    --hidden-sizes 768 \
+    --ffn-mults 4
+
+vit-component-benchmark run \
+    --save-as glu-autotuned \
+    --components mlp \
+    --device cuda \
+    --activation swiglu \
+    --batch-sizes 4 \
+    --seq-lens 256 \
+    --hidden-sizes 768 \
+    --ffn-mults 4 \
+    --glu-max-autotune-gemm
+
+vit-component-benchmark compare \
+    --baseline glu-default \
+    --candidate glu-autotuned
+```
+
+This option applies only to CUDA inputs with an MLP input width of at least 512. CPU inputs and smaller MLPs keep the
+default compiled path. Inductor evaluates more GEMM choices during the first compile, so use fresh cache directories
+when measuring compile latency and exclude compilation from steady-state measurements.
 
 Detailed workflows, recipes, and interpretation guidance are maintained in:
 - `.agents/skills/vit-component-benchmark/SKILL.md`

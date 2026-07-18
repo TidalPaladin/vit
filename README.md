@@ -63,6 +63,35 @@ features = model(x)
 logits = model.heads["cls"](features.visual_tokens)  # B, 10
 ```
 
+## CUDA GLU GEMM Autotuning
+
+Compiled GLU MLPs can opt into PyTorch Inductor GEMM autotuning when steady-state CUDA throughput is more important
+than compilation time:
+
+```python
+config = ViTConfig(
+    # ... other params ...
+    activation="swiglu",
+    glu_max_autotune_gemm=True,
+)
+```
+
+The option requires a GLU activation and is not supported with MLP quantization. It applies only to CUDA inputs when
+the MLP input width is at least 512. CPU inputs and smaller MLPs use the default compiled GLU path.
+
+On an RTX 3090 with PyTorch 2.13.0, native BF16, and `B=4, S=256, D=768, FFN=3072`, the opt-in changed the measured
+steady-state latency as follows:
+
+| Pass | Default | Autotuned | Change |
+|------|--------:|----------:|-------:|
+| Forward | 0.413 ms | 0.331 ms | 19.9% faster |
+| Backward | 0.853 ms | 0.752 ms | 11.9% faster |
+| Forward + backward | 1.157 ms | 1.016 ms | 12.2% faster |
+
+A fresh-cache forward-backward compile increased from 4.53 seconds to 21.40 seconds. Results vary by GPU, PyTorch
+version, shape, and dtype, so keep the option disabled unless steady-state measurements on the target workload justify
+the compile-time cost.
+
 ## Explainability
 
 `vit.explain` traces the native 2D `ViT`, attributes selected outputs, runs causal interventions, and evaluates

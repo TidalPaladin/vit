@@ -6,7 +6,13 @@ import torch.nn.functional as F
 from torch.testing import assert_close
 from torchao.quantization import Int8Tensor, Int8WeightOnlyConfig
 
-from vit.fused import VALID_ADALN_GATE_INITS, AdaNormMLP, NormLinear, NormMLP
+from vit.fused import (
+    MIN_GLU_AUTOTUNE_HIDDEN_SIZE,
+    VALID_ADALN_GATE_INITS,
+    AdaNormMLP,
+    NormLinear,
+    NormMLP,
+)
 
 
 TORCHAO_QUANTIZATION_CONFIG_VERSION = 2
@@ -99,6 +105,71 @@ class TestNormMLP:
         assert layer.fc2.bias is not None
         assert torch.count_nonzero(layer.fc1.bias) == 0
         assert torch.count_nonzero(layer.fc2.bias) == 0
+
+    def test_glu_max_autotune_gemm_requires_glu_activation(self):
+        with pytest.raises(ValueError, match="glu_max_autotune_gemm requires a GLU activation"):
+            NormMLP(10, 20, activation="srelu", glu_max_autotune_gemm=True)
+
+    def test_glu_max_autotune_gemm_rejects_quantization(self):
+        layer = NormMLP(10, 20, activation="swiglu", glu_max_autotune_gemm=True)
+
+        with pytest.raises(ValueError, match="glu_max_autotune_gemm is not supported with quantization"):
+            layer.apply_quantization(Int8WeightOnlyConfig(version=TORCHAO_QUANTIZATION_CONFIG_VERSION))
+
+    def test_glu_max_autotune_gemm_falls_back_on_cpu(self, mocker):
+        layer = NormMLP(
+            MIN_GLU_AUTOTUNE_HIDDEN_SIZE,
+            2 * MIN_GLU_AUTOTUNE_HIDDEN_SIZE,
+            activation="swiglu",
+            glu_max_autotune_gemm=True,
+        )
+        x = torch.randn(1, 2, MIN_GLU_AUTOTUNE_HIDDEN_SIZE)
+        default_output = torch.ones_like(x)
+        default_glu = mocker.patch("vit.fused.norm_mlp_glu", return_value=default_output)
+        autotuned_glu = mocker.patch("vit.fused.norm_mlp_glu_max_autotune_gemm")
+
+        output = layer(x)
+
+        assert output is default_output
+        default_glu.assert_called_once()
+        autotuned_glu.assert_not_called()
+
+    @pytest.mark.cuda
+    def test_glu_max_autotune_gemm_falls_back_below_hidden_threshold(self, mocker):
+        hidden_size = MIN_GLU_AUTOTUNE_HIDDEN_SIZE - 1
+        layer = NormMLP(hidden_size, 2 * hidden_size, activation="swiglu", glu_max_autotune_gemm=True)
+        x = torch.randn(1, 2, hidden_size, device="cuda")
+        default_output = torch.ones_like(x)
+        default_glu = mocker.patch("vit.fused.norm_mlp_glu", return_value=default_output)
+        autotuned_glu = mocker.patch("vit.fused.norm_mlp_glu_max_autotune_gemm")
+
+        output = layer(x)
+
+        assert output is default_output
+        default_glu.assert_called_once()
+        autotuned_glu.assert_not_called()
+
+    @pytest.mark.cuda
+    def test_glu_max_autotune_gemm_selects_cuda_path_at_hidden_threshold(self, mocker):
+        layer = NormMLP(
+            MIN_GLU_AUTOTUNE_HIDDEN_SIZE,
+            2 * MIN_GLU_AUTOTUNE_HIDDEN_SIZE,
+            activation="swiglu",
+            glu_max_autotune_gemm=True,
+        )
+        x = torch.randn(1, 2, MIN_GLU_AUTOTUNE_HIDDEN_SIZE, device="cuda")
+        autotuned_output = torch.ones_like(x)
+        default_glu = mocker.patch("vit.fused.norm_mlp_glu")
+        autotuned_glu = mocker.patch(
+            "vit.fused.norm_mlp_glu_max_autotune_gemm",
+            return_value=autotuned_output,
+        )
+
+        output = layer(x)
+
+        assert output is autotuned_output
+        default_glu.assert_not_called()
+        autotuned_glu.assert_called_once()
 
     @pytest.mark.parametrize("activation", ["relu", "swiglu", "srelu"])
     @pytest.mark.parametrize("norm_type", ["rmsnorm", "layernorm"])
@@ -250,3 +321,61 @@ class TestAdaNormMLP:
             y_quant = quantized_layer(x, conditioning=conditioning)
         # TorchAO v2 accumulates directly quantized linear outputs in float32.
         assert_close(y.float(), y_quant.float(), atol=1e-2, rtol=0)
+
+
+@pytest.mark.compile
+@pytest.mark.cuda
+@pytest.mark.parametrize("conditioned", [False, True], ids=["norm_mlp", "ada_norm_mlp"])
+def test_glu_max_autotune_gemm_matches_default_cuda_forward_and_backward(conditioned):
+    torch.manual_seed(0)
+    hidden_size = MIN_GLU_AUTOTUNE_HIDDEN_SIZE
+    ffn_hidden_size = 2 * hidden_size
+    common_kwargs = {
+        "hidden_size": hidden_size,
+        "ffn_hidden_size": ffn_hidden_size,
+        "activation": "swiglu",
+        "dropout": 0.0,
+        "device": torch.device("cuda"),
+        "dtype": torch.bfloat16,
+    }
+    if conditioned:
+        baseline = AdaNormMLP(**common_kwargs, conditioning_size=hidden_size, adaln_gate_init=1.0)
+        candidate = AdaNormMLP(
+            **common_kwargs,
+            conditioning_size=hidden_size,
+            adaln_gate_init=1.0,
+            glu_max_autotune_gemm=True,
+        )
+    else:
+        baseline = NormMLP(**common_kwargs)
+        candidate = NormMLP(**common_kwargs, glu_max_autotune_gemm=True)
+    candidate.load_state_dict(baseline.state_dict())
+
+    baseline_input = torch.randn(2, 16, hidden_size, device="cuda", dtype=torch.bfloat16, requires_grad=True)
+    candidate_input = baseline_input.detach().clone().requires_grad_(True)
+    conditioning = torch.randn(2, hidden_size, device="cuda", dtype=torch.bfloat16) if conditioned else None
+
+    if conditioned:
+        assert isinstance(baseline, AdaNormMLP)
+        assert isinstance(candidate, AdaNormMLP)
+        baseline_output = baseline(baseline_input, conditioning=conditioning)
+        candidate_output = candidate(candidate_input, conditioning=conditioning)
+    else:
+        baseline_output = baseline(baseline_input)
+        candidate_output = candidate(candidate_input)
+
+    baseline_output.float().square().mean().backward()
+    candidate_output.float().square().mean().backward()
+
+    assert_close(candidate_output, baseline_output, rtol=1e-2, atol=1e-2)
+    assert baseline_input.grad is not None
+    assert candidate_input.grad is not None
+    assert_close(candidate_input.grad, baseline_input.grad, rtol=1e-2, atol=1e-2)
+    baseline_parameters = dict(baseline.named_parameters())
+    candidate_parameters = dict(candidate.named_parameters())
+    assert candidate_parameters.keys() == baseline_parameters.keys()
+    for name, baseline_parameter in baseline_parameters.items():
+        candidate_parameter = candidate_parameters[name]
+        assert baseline_parameter.grad is not None
+        assert candidate_parameter.grad is not None
+        assert_close(candidate_parameter.grad, baseline_parameter.grad, rtol=1e-2, atol=1e-2)

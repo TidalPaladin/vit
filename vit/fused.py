@@ -13,6 +13,7 @@ from .norm import NormType, apply_norm, get_norm_bias, is_layer_norm, make_norm,
 
 
 VALID_ADALN_GATE_INITS = (0.0, 1.0)
+MIN_GLU_AUTOTUNE_HIDDEN_SIZE = 512
 
 
 def validate_adaln_gate_init(adaln_gate_init: float) -> None:
@@ -200,6 +201,68 @@ def norm_mlp_glu(
     return x
 
 
+@torch.compile(
+    fullgraph=True,
+    dynamic=False,
+    options={
+        "layout_optimization": True,
+        "epilogue_fusion": True,
+        "aggressive_fusion": True,
+        "max_autotune_gemm": True,
+    },
+)
+def norm_mlp_glu_max_autotune_gemm(
+    # Keep this signature and body separate from norm_mlp_glu so each compiled path has its own Dynamo cache.
+    # fmt: off
+    x: Tensor,
+    fc1_weight: Tensor,
+    fc1_bias: Tensor | None,
+    fc2_weight: Tensor,
+    fc2_bias: Tensor | None,
+    norm_weight: Tensor | None,
+    norm_bias: Tensor | None,
+    use_layer_norm: bool,
+    activation: Callable[[Tensor], Tensor],
+    eps: float,
+    dropout: float,
+    training: bool,
+    limit: float | None = None,
+    extra_bias: float | None = None,
+    norm_scale_delta: Tensor | None = None,
+    norm_shift: Tensor | None = None,
+    output_gate: Tensor | None = None,
+    # fmt: on
+) -> Tensor:
+    if norm_weight is not None:
+        x = apply_norm(
+            x,
+            norm_weight,
+            norm_bias,
+            eps,
+            use_layer_norm=use_layer_norm,
+            scale_delta=norm_scale_delta,
+            shift=norm_shift,
+        )
+
+    # FC1 - GLU
+    x = F.linear(x, fc1_weight, fc1_bias)
+    x_linear, x_glu = x.chunk(2, dim=-1)
+    if limit is not None:
+        x_linear = x_linear.clamp(min=-limit, max=limit)
+        x_glu = x_glu.clamp(min=None, max=limit)
+    if extra_bias is not None:
+        x_linear = x_linear + extra_bias
+    x = activation(x_glu) * x_linear
+    x = F.dropout(x, p=dropout, training=training)
+
+    # FC2
+    x = F.linear(x, fc2_weight, fc2_bias)
+    x = F.dropout(x, p=dropout, training=training, inplace=True)
+    if output_gate is not None:
+        x = x * output_gate
+    return x
+
+
 class NormMLP(nn.Module):
     def __init__(
         self,
@@ -215,6 +278,7 @@ class NormMLP(nn.Module):
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
         norm_type: NormType = "rmsnorm",
+        glu_max_autotune_gemm: bool = False,
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -226,11 +290,14 @@ class NormMLP(nn.Module):
         else:
             self._is_glu = False
             self.fc1 = nn.Linear(hidden_size, ffn_hidden_size, bias=bias, **factory_kwargs)
+        if glu_max_autotune_gemm and not self._is_glu:
+            raise ValueError("glu_max_autotune_gemm requires a GLU activation")
         self.fc2 = nn.Linear(ffn_hidden_size, hidden_size, bias=bias, **factory_kwargs)
         self.dropout = nn.Dropout(dropout)
         self.activation = get_activation(activation)
         self.limit = limit
         self.extra_bias = extra_bias
+        self.glu_max_autotune_gemm = glu_max_autotune_gemm
         self.quantization_config = quantization_config
         self.reset_parameters()
 
@@ -245,6 +312,8 @@ class NormMLP(nn.Module):
         """Apply quantization to both linear layers using torchao."""
         if quantization_config is None:
             return
+        if self.glu_max_autotune_gemm:
+            raise ValueError("glu_max_autotune_gemm is not supported with quantization")
         quantize_(self.fc1, quantization_config)
         quantize_(self.fc2, quantization_config)
 
@@ -257,7 +326,14 @@ class NormMLP(nn.Module):
         output_gate: Tensor | None = None,
     ) -> Tensor:
         if self._is_glu:
-            return norm_mlp_glu(
+            glu_forward = norm_mlp_glu
+            if (
+                self.glu_max_autotune_gemm
+                and x.device.type == "cuda"
+                and self.fc1.in_features >= MIN_GLU_AUTOTUNE_HIDDEN_SIZE
+            ):
+                glu_forward = norm_mlp_glu_max_autotune_gemm
+            return glu_forward(
                 # fmt: off
                 x,
                 self.fc1.weight,
@@ -329,6 +405,7 @@ class AdaNormMLP(NormMLP):
         norm_type: NormType = "rmsnorm",
         conditioning_size: int | None = None,
         adaln_gate_init: float = 0.0,
+        glu_max_autotune_gemm: bool = False,
     ):
         super().__init__(
             hidden_size=hidden_size,
@@ -343,6 +420,7 @@ class AdaNormMLP(NormMLP):
             device=device,
             dtype=dtype,
             norm_type=norm_type,
+            glu_max_autotune_gemm=glu_max_autotune_gemm,
         )
         validate_adaln_gate_init(adaln_gate_init)
         factory_kwargs = {"device": device, "dtype": dtype}

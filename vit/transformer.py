@@ -91,6 +91,7 @@ def _make_mlp(
     quantization_config: Any | None,
     conditioning_size: int | None,
     adaln_gate_init: float,
+    glu_max_autotune_gemm: bool,
     device: torch.device | None,
     dtype: torch.dtype | None,
 ) -> NormMLP:
@@ -108,6 +109,7 @@ def _make_mlp(
             quantization_config=quantization_config,
             conditioning_size=conditioning_size,
             adaln_gate_init=adaln_gate_init,
+            glu_max_autotune_gemm=glu_max_autotune_gemm,
             device=device,
             dtype=dtype,
         )
@@ -122,6 +124,7 @@ def _make_mlp(
         limit=limit,
         extra_bias=extra_bias,
         quantization_config=quantization_config,
+        glu_max_autotune_gemm=glu_max_autotune_gemm,
         device=device,
         dtype=dtype,
     )
@@ -171,6 +174,7 @@ class TransformerEncoderLayer(nn.Module):
         qk_normalization: bool = False,
         conditioning_size: int | None = None,
         adaln_gate_init: float = 0.0,
+        glu_max_autotune_gemm: bool = False,
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -201,6 +205,7 @@ class TransformerEncoderLayer(nn.Module):
             quantization_config=None,
             conditioning_size=conditioning_size,
             adaln_gate_init=adaln_gate_init,
+            glu_max_autotune_gemm=glu_max_autotune_gemm,
             device=device,
             dtype=dtype,
         )
@@ -273,6 +278,7 @@ class TransformerDecoderLayer(nn.Module):
         qk_normalization: bool = False,
         conditioning_size: int | None = None,
         adaln_gate_init: float = 0.0,
+        glu_max_autotune_gemm: bool = False,
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -316,6 +322,7 @@ class TransformerDecoderLayer(nn.Module):
             quantization_config=None,
             conditioning_size=conditioning_size,
             adaln_gate_init=adaln_gate_init,
+            glu_max_autotune_gemm=glu_max_autotune_gemm,
             device=device,
             dtype=dtype,
         )
@@ -418,6 +425,7 @@ class CrossAttentionTransformer(nn.Module):
         qk_normalization: bool = False,
         conditioning_size: int | None = None,
         adaln_gate_init: float = 0.0,
+        glu_max_autotune_gemm: bool = False,
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -448,6 +456,7 @@ class CrossAttentionTransformer(nn.Module):
             quantization_config=None,
             conditioning_size=conditioning_size,
             adaln_gate_init=adaln_gate_init,
+            glu_max_autotune_gemm=glu_max_autotune_gemm,
             device=device,
             dtype=dtype,
         )
