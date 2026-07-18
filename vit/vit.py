@@ -100,6 +100,7 @@ class ViTConfig:
     layer_scale: float | None = None
     glu_limit: float | None = None
     glu_extra_bias: float | None = None
+    glu_max_autotune_gemm: bool = False
 
     # RoPE options
     rope_normalize_coords: Literal["min", "max", "separate"] = "separate"
@@ -139,6 +140,8 @@ class ViTConfig:
             raise ValueError(f"hidden_size ({self.hidden_size}) must be even when using Fourier positional encoding")
         if self.conditioning_size is not None and self.conditioning_size <= 0:
             raise ValueError(f"conditioning_size must be positive when provided, got {self.conditioning_size}")
+        if self.glu_max_autotune_gemm and not self.activation.endswith("glu"):
+            raise ValueError("glu_max_autotune_gemm requires a GLU activation")
         validate_adaln_gate_init(self.adaln_gate_init)
 
     def instantiate(self, device: torch.device | None = None) -> "ViT":
@@ -387,6 +390,7 @@ class ViT(nn.Module):
             dtype=resolved_dtype,
             conditioning_size=self.config.conditioning_size,
             adaln_gate_init=self.config.adaln_gate_init,
+            glu_max_autotune_gemm=self.config.glu_max_autotune_gemm,
         )
 
     def create_decoder_layer(
@@ -420,6 +424,7 @@ class ViT(nn.Module):
             dtype=resolved_dtype,
             conditioning_size=self.config.conditioning_size,
             adaln_gate_init=self.config.adaln_gate_init,
+            glu_max_autotune_gemm=self.config.glu_max_autotune_gemm,
         )
 
     def create_cross_attention_layer(
@@ -453,6 +458,7 @@ class ViT(nn.Module):
             dtype=resolved_dtype,
             conditioning_size=self.config.conditioning_size,
             adaln_gate_init=self.config.adaln_gate_init,
+            glu_max_autotune_gemm=self.config.glu_max_autotune_gemm,
         )
 
     def create_head(

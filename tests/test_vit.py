@@ -88,6 +88,30 @@ class TestViT:
     def test_patch_embed_normalization_defaults_to_false(self, config):
         assert config.patch_embed_normalization is False
 
+    def test_glu_max_autotune_gemm_requires_glu_activation(self, config):
+        with pytest.raises(ValueError, match="glu_max_autotune_gemm requires a GLU activation"):
+            replace(config, glu_max_autotune_gemm=True)
+
+    def test_glu_max_autotune_gemm_yaml_roundtrip(self, config):
+        autotuned_config = replace(config, activation="swiglu", glu_max_autotune_gemm=True)
+
+        loaded_config = ViTConfig.from_yaml(autotuned_config.to_yaml())
+
+        assert loaded_config.glu_max_autotune_gemm is True
+
+    def test_glu_max_autotune_gemm_is_forwarded_to_all_layer_factories(self):
+        model = ViT(
+            make_factory_override_config(
+                activation="swiglu",
+                glu_max_autotune_gemm=True,
+            )
+        )
+
+        assert model.get_block(0).mlp.glu_max_autotune_gemm is True
+        for factory_name in FACTORY_METHOD_NAMES:
+            layer = getattr(model, factory_name)()
+            assert layer.mlp.glu_max_autotune_gemm is True
+
     def test_default_dtype_is_bfloat16(self):
         """Verify that the default master weight dtype is BF16."""
         config = ViTConfig(

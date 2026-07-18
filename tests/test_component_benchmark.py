@@ -22,6 +22,24 @@ def test_build_component_benchmark_cases_default_grid() -> None:
     assert {case.component for case in cases} == {"mlp", "self_attention"}
     assert {case.pass_mode for case in cases} == {"forward"}
     assert {case.norm_type for case in cases} == {"rmsnorm"}
+    assert not any(case.glu_max_autotune_gemm for case in cases)
+
+
+def test_glu_max_autotune_gemm_is_recorded_without_changing_case_id() -> None:
+    common_kwargs = {
+        "components": ["mlp"],
+        "batch_sizes": [1],
+        "seq_lens": [8],
+        "hidden_sizes": [512],
+        "ffn_mults": [2],
+        "activation": "swiglu",
+    }
+    baseline = build_component_benchmark_cases(**common_kwargs)[0]
+    candidate = build_component_benchmark_cases(**common_kwargs, glu_max_autotune_gemm=True)[0]
+
+    assert baseline.glu_max_autotune_gemm is False
+    assert candidate.glu_max_autotune_gemm is True
+    assert candidate.case_id == baseline.case_id
 
 
 def test_run_component_benchmark_case_forward_mlp_cpu() -> None:
@@ -204,8 +222,11 @@ def test_component_cli_run_and_compare(tmp_path: Path) -> None:
 
     candidate_args = baseline_args.copy()
     candidate_args[candidate_args.index("baseline")] = "candidate"
-    candidate_args.extend(["--norm-type", "layernorm"])
+    candidate_args.extend(["--norm-type", "layernorm", "--glu-max-autotune-gemm"])
     assert component_benchmark_main(candidate_args) == 0
+
+    _, candidate_records = load_benchmark_run(tmp_path / "candidate")
+    assert candidate_records[0]["glu_max_autotune_gemm"] is True
 
     compare_args = [
         "compare",

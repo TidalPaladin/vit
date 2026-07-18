@@ -88,6 +88,7 @@ class ComponentBenchmarkCase:
     num_heads: int
     ffn_hidden_size: int
     activation: str
+    glu_max_autotune_gemm: bool
     use_rope: bool
     hidden_dropout: float
     attention_dropout: float
@@ -260,6 +261,7 @@ def build_component_benchmark_cases(
     num_heads: list[int] | None = None,
     ffn_mults: list[int] | None = None,
     activation: str | None = None,
+    glu_max_autotune_gemm: bool = False,
     use_rope: bool | None = None,
     hidden_dropout: float | None = None,
     attention_dropout: float | None = None,
@@ -307,6 +309,7 @@ def build_component_benchmark_cases(
                 "seq_len": seq_len,
                 "hidden_size": hidden_size,
                 "activation": resolved_activation,
+                "glu_max_autotune_gemm": glu_max_autotune_gemm,
                 "hidden_dropout": resolved_hidden_dropout,
                 "attention_dropout": resolved_attention_dropout,
                 "train_mode": resolved_train_mode,
@@ -375,6 +378,7 @@ def run_component_benchmark_suite(
     num_heads: list[int] | None = None,
     ffn_mults: list[int] | None = None,
     activation: str | None = None,
+    glu_max_autotune_gemm: bool = False,
     use_rope: bool | None = None,
     hidden_dropout: float | None = None,
     attention_dropout: float | None = None,
@@ -402,6 +406,7 @@ def run_component_benchmark_suite(
         num_heads=num_heads,
         ffn_mults=ffn_mults,
         activation=activation,
+        glu_max_autotune_gemm=glu_max_autotune_gemm,
         use_rope=use_rope,
         hidden_dropout=hidden_dropout,
         attention_dropout=attention_dropout,
@@ -730,6 +735,7 @@ def _build_mlp_target(
         ffn_hidden_size=case.ffn_hidden_size,
         bias=case.bias,
         activation=case.activation,
+        glu_max_autotune_gemm=case.glu_max_autotune_gemm,
         norm_type=case.norm_type,
         eps=case.eps,
         dropout=case.hidden_dropout,
