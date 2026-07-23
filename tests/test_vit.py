@@ -112,6 +112,22 @@ class TestViT:
             layer = getattr(model, factory_name)()
             assert layer.mlp.glu_max_autotune_gemm is True
 
+    def test_mlp_dropout_override_is_forwarded_without_changing_attention_dropout(self):
+        hidden_dropout = 0.2
+        mlp_dropout = 0.05
+        model = ViT(
+            make_factory_override_config(
+                hidden_dropout=hidden_dropout,
+                mlp_dropout=mlp_dropout,
+            )
+        )
+
+        layers = [model.get_block(0), *(getattr(model, factory_name)() for factory_name in FACTORY_METHOD_NAMES)]
+        for layer in layers:
+            attention = getattr(layer, "self_attention", None) or layer.cross_attention
+            assert attention.dropout.p == pytest.approx(hidden_dropout)
+            assert layer.mlp.dropout.p == pytest.approx(mlp_dropout)
+
     def test_default_dtype_is_bfloat16(self):
         """Verify that the default master weight dtype is BF16."""
         config = ViTConfig(

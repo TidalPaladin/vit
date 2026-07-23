@@ -175,6 +175,7 @@ class TransformerEncoderLayer(nn.Module):
         conditioning_size: int | None = None,
         adaln_gate_init: float = 0.0,
         glu_max_autotune_gemm: bool = False,
+        mlp_dropout: float | None = None,
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -199,7 +200,7 @@ class TransformerEncoderLayer(nn.Module):
             activation=activation,
             norm_type=norm_type,
             eps=eps,
-            dropout=hidden_dropout,
+            dropout=hidden_dropout if mlp_dropout is None else mlp_dropout,
             limit=glu_limit,
             extra_bias=glu_extra_bias,
             quantization_config=None,
@@ -279,6 +280,7 @@ class TransformerDecoderLayer(nn.Module):
         conditioning_size: int | None = None,
         adaln_gate_init: float = 0.0,
         glu_max_autotune_gemm: bool = False,
+        mlp_dropout: float | None = None,
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -316,7 +318,7 @@ class TransformerDecoderLayer(nn.Module):
             activation=activation,
             norm_type=norm_type,
             eps=eps,
-            dropout=hidden_dropout,
+            dropout=hidden_dropout if mlp_dropout is None else mlp_dropout,
             limit=glu_limit,
             extra_bias=glu_extra_bias,
             quantization_config=None,
@@ -426,6 +428,7 @@ class CrossAttentionTransformer(nn.Module):
         conditioning_size: int | None = None,
         adaln_gate_init: float = 0.0,
         glu_max_autotune_gemm: bool = False,
+        mlp_dropout: float | None = None,
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -450,7 +453,7 @@ class CrossAttentionTransformer(nn.Module):
             activation=activation,
             norm_type=norm_type,
             eps=eps,
-            dropout=hidden_dropout,
+            dropout=hidden_dropout if mlp_dropout is None else mlp_dropout,
             limit=glu_limit,
             extra_bias=glu_extra_bias,
             quantization_config=None,

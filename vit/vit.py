@@ -127,6 +127,9 @@ class ViTConfig:
     # Heads
     heads: dict[str, HeadConfigType] = field(default_factory=dict)
 
+    # Optional regularization overrides
+    mlp_dropout: float | None = None
+
     def __post_init__(self) -> None:
         """Validate configuration parameters."""
         if self.hidden_size % self.num_attention_heads != 0:
@@ -391,6 +394,7 @@ class ViT(nn.Module):
             conditioning_size=self.config.conditioning_size,
             adaln_gate_init=self.config.adaln_gate_init,
             glu_max_autotune_gemm=self.config.glu_max_autotune_gemm,
+            mlp_dropout=self.config.mlp_dropout,
         )
 
     def create_decoder_layer(
@@ -425,6 +429,7 @@ class ViT(nn.Module):
             conditioning_size=self.config.conditioning_size,
             adaln_gate_init=self.config.adaln_gate_init,
             glu_max_autotune_gemm=self.config.glu_max_autotune_gemm,
+            mlp_dropout=self.config.mlp_dropout,
         )
 
     def create_cross_attention_layer(
@@ -459,6 +464,7 @@ class ViT(nn.Module):
             conditioning_size=self.config.conditioning_size,
             adaln_gate_init=self.config.adaln_gate_init,
             glu_max_autotune_gemm=self.config.glu_max_autotune_gemm,
+            mlp_dropout=self.config.mlp_dropout,
         )
 
     def create_head(
