@@ -154,7 +154,7 @@ from vit.explain import TraceConfig
 
 trace = explainer.trace(
     inputs,
-    config=TraceConfig(layers=(0, 5, 11), retain_gradients=True),
+    config=TraceConfig(layers=(0, 5, 11), retain_gradients=True, mlp_internals=True),
     forward_args=forward_args,
 )
 ```
@@ -164,7 +164,14 @@ per-head value outputs, the projected attention output, the post-attention resid
 block residual. The eager path computes the block output from the captured attention probabilities. Gradients with
 respect to those probabilities therefore belong to the output that the caller scores.
 
-Traces retain their autograd graph. Release them after use instead of accumulating traces in a long-running process.
+Set `mlp_internals=True` to populate `LayerTrace.mlp` for the selected layers. Each `MLPTrace` contains the normalized
+input, raw `fc1` output, activation output, hidden tensor passed to `fc2`, and final output. GLU traces also contain
+the linear and gate branches after configured limits and extra bias are applied. These branch fields are `None` for
+non-GLU activations. `MLPTrace.output` and `LayerTrace.mlp_output` reference the same tensor.
+
+The option is disabled by default, so ordinary traces keep the fused MLP path and return `LayerTrace.mlp=None`.
+Traces retain their autograd graph. Enabling MLP internals retains more graph-connected tensors; release each trace
+after use instead of accumulating traces in a long-running process.
 
 ## Causal interventions
 

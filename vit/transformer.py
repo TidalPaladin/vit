@@ -5,7 +5,7 @@ import torch.nn as nn
 from torch import Tensor
 
 from .attention import CrossAttention, SelfAttention
-from .fused import AdaNormMLP, NormMLP
+from .fused import AdaNormMLP, NormMLP, _MLPIntermediates
 from .initialization import zero_bias_if_present
 from .layer_scale import LayerScale
 from .norm import NormType
@@ -75,6 +75,23 @@ def _forward_mlp(
     if conditioning is not None:
         raise ValueError("conditioning is not supported unless transformer conditioning_size is set")
     return mlp(x)
+
+
+def _forward_mlp_with_intermediates(
+    mlp: NormMLP,
+    x: Tensor,
+    conditioning: Tensor | None,
+    keep_indices: Tensor | None,
+    full_batch_size: int,
+) -> _MLPIntermediates:
+    if isinstance(mlp, AdaNormMLP):
+        if conditioning is None:
+            raise ValueError("conditioning is required when transformer conditioning_size is set")
+        conditioning = _subset_conditioning(conditioning, keep_indices, full_batch_size)
+        return mlp._forward_with_intermediates(x, conditioning=conditioning)
+    if conditioning is not None:
+        raise ValueError("conditioning is not supported unless transformer conditioning_size is set")
+    return mlp._forward_with_intermediates(x)
 
 
 def _make_mlp(

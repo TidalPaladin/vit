@@ -31,6 +31,7 @@ class TraceConfig:
 
     layers: tuple[int, ...] | None = None
     retain_gradients: bool = False
+    mlp_internals: bool = False
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,19 @@ class TokenLayout:
 
 
 @dataclass(frozen=True)
+class MLPTrace:
+    """Graph-connected tensors from one eager MLP forward."""
+
+    normalized_input: Tensor
+    fc1_output: Tensor
+    linear_branch: Tensor | None
+    gate_branch: Tensor | None
+    activation_output: Tensor
+    hidden: Tensor
+    output: Tensor
+
+
+@dataclass(frozen=True)
 class LayerTrace:
     """Captured tensors at one transformer encoder block."""
 
@@ -103,6 +117,7 @@ class LayerTrace:
     residual_post_attention: Tensor
     mlp_output: Tensor
     residual_post: Tensor
+    mlp: MLPTrace | None = None
 
 
 @dataclass(frozen=True)

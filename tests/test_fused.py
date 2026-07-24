@@ -195,6 +195,25 @@ class TestNormMLP:
         y4 = layer(x)
         assert not torch.allclose(y3, y4)
 
+    def test_eager_intermediates_follow_dropout_mode(self, device):
+        torch.random.manual_seed(0)
+        layer = NormMLP(16, 64, activation="swiglu", dropout=0.5).to(device)
+        x = torch.randn(8, 4, 16, device=device)
+
+        layer.eval()
+        eval_first = layer._forward_with_intermediates(x)
+        eval_second = layer._forward_with_intermediates(x)
+        assert_close(eval_first.output, layer(x))
+        assert_close(eval_first.hidden, eval_second.hidden)
+        assert_close(eval_first.output, eval_second.output)
+
+        layer.train()
+        train_first = layer._forward_with_intermediates(x)
+        train_second = layer._forward_with_intermediates(x)
+        assert not torch.allclose(train_first.hidden, train_second.hidden)
+        assert not torch.allclose(train_first.output, train_second.output)
+        assert layer.training
+
     @pytest.mark.parametrize("norm_type", ["rmsnorm", "layernorm"])
     def test_backward(self, device, norm_type):
         layer_norm_mlp = NormMLP(10, 20, norm_type=norm_type).to(device)
