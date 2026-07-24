@@ -13,10 +13,10 @@ from vit.attention import _permute_and_fold_head, project_qkv_packed
 from vit.norm import get_norm_bias
 from vit.patch_embed import PatchEmbed2d
 from vit.tokens import apply_mask
-from vit.transformer import _forward_mlp
+from vit.transformer import _forward_mlp, _forward_mlp_with_intermediates
 from vit.vit import ViT, ViTFeatures
 
-from .types import ForwardArgs, LayerTrace, TokenLayout, TraceConfig, ViTTrace
+from .types import ForwardArgs, LayerTrace, MLPTrace, TokenLayout, TraceConfig, ViTTrace
 
 
 class _StatefulExplainer(Protocol):
@@ -161,19 +161,43 @@ def trace_vit(
         residual_post_attention = x + block.layer_scale_attn(attention_output)
         if intervention is not None:
             residual_post_attention = intervention("post_attention", layer_index, residual_post_attention)
-        mlp_output = _forward_mlp(
-            block.mlp,
-            residual_post_attention,
-            forward_args.conditioning,
-            None,
-            inputs.shape[0],
-        )
+        mlp_intermediates = None
+        if config.mlp_internals and layer_index in selected_layers:
+            mlp_intermediates = _forward_mlp_with_intermediates(
+                block.mlp,
+                residual_post_attention,
+                forward_args.conditioning,
+                None,
+                inputs.shape[0],
+            )
+            mlp_output = mlp_intermediates.output
+        else:
+            mlp_output = _forward_mlp(
+                block.mlp,
+                residual_post_attention,
+                forward_args.conditioning,
+                None,
+                inputs.shape[0],
+            )
         if intervention is not None:
             mlp_output = intervention("mlp_output", layer_index, mlp_output)
         x = residual_post_attention + block.layer_scale_mlp(mlp_output)
         if intervention is not None:
             x = intervention("residual_post", layer_index, x)
         if layer_index in selected_layers:
+            mlp_trace = (
+                MLPTrace(
+                    normalized_input=mlp_intermediates.normalized_input,
+                    fc1_output=mlp_intermediates.fc1_output,
+                    linear_branch=mlp_intermediates.linear_branch,
+                    gate_branch=mlp_intermediates.gate_branch,
+                    activation_output=mlp_intermediates.activation_output,
+                    hidden=mlp_intermediates.hidden,
+                    output=mlp_output,
+                )
+                if mlp_intermediates is not None
+                else None
+            )
             layer_trace = LayerTrace(
                 layer=layer_index,
                 residual_pre=residual_pre,
@@ -183,9 +207,10 @@ def trace_vit(
                 residual_post_attention=residual_post_attention,
                 mlp_output=mlp_output,
                 residual_post=x,
+                mlp=mlp_trace,
             )
             if config.retain_gradients:
-                for tensor in (
+                retained_tensors: list[Tensor | None] = [
                     layer_trace.residual_pre,
                     layer_trace.attention_probabilities,
                     layer_trace.head_outputs,
@@ -193,8 +218,20 @@ def trace_vit(
                     layer_trace.residual_post_attention,
                     layer_trace.mlp_output,
                     layer_trace.residual_post,
-                ):
-                    if tensor.requires_grad:
+                ]
+                if layer_trace.mlp is not None:
+                    retained_tensors.extend(
+                        [
+                            layer_trace.mlp.normalized_input,
+                            layer_trace.mlp.fc1_output,
+                            layer_trace.mlp.linear_branch,
+                            layer_trace.mlp.gate_branch,
+                            layer_trace.mlp.activation_output,
+                            layer_trace.mlp.hidden,
+                        ]
+                    )
+                for tensor in retained_tensors:
+                    if tensor is not None and tensor.requires_grad:
                         tensor.retain_grad()
             layers.append(layer_trace)
     if forward_args.output_norm:

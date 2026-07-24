@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import torch
@@ -14,6 +15,17 @@ from .norm import NormType, apply_norm, get_norm_bias, is_layer_norm, make_norm,
 
 VALID_ADALN_GATE_INITS = (0.0, 1.0)
 MIN_GLU_AUTOTUNE_HIDDEN_SIZE = 512
+
+
+@dataclass(frozen=True)
+class _MLPIntermediates:
+    normalized_input: Tensor
+    fc1_output: Tensor
+    linear_branch: Tensor | None
+    gate_branch: Tensor | None
+    activation_output: Tensor
+    hidden: Tensor
+    output: Tensor
 
 
 def validate_adaln_gate_init(adaln_gate_init: float) -> None:
@@ -317,6 +329,54 @@ class NormMLP(nn.Module):
         quantize_(self.fc1, quantization_config)
         quantize_(self.fc2, quantization_config)
 
+    def _forward_with_intermediates(
+        self,
+        x: Tensor,
+        *,
+        norm_scale_delta: Tensor | None = None,
+        norm_shift: Tensor | None = None,
+        output_gate: Tensor | None = None,
+    ) -> _MLPIntermediates:
+        """Run the eager MLP path and return graph-connected intermediates."""
+        normalized_input = apply_norm(
+            x,
+            self.norm.weight,
+            get_norm_bias(self.norm),
+            self.norm.eps or 1e-5,
+            use_layer_norm=self._use_layer_norm,
+            scale_delta=norm_scale_delta,
+            shift=norm_shift,
+        )
+        fc1_output = F.linear(normalized_input, self.fc1.weight, self.fc1.bias)
+        linear_branch: Tensor | None = None
+        gate_branch: Tensor | None = None
+        if self._is_glu:
+            linear_branch, gate_branch = fc1_output.chunk(2, dim=-1)
+            if self.limit is not None:
+                linear_branch = linear_branch.clamp(min=-self.limit, max=self.limit)
+                gate_branch = gate_branch.clamp(min=None, max=self.limit)
+            if self.extra_bias is not None:
+                linear_branch = linear_branch + self.extra_bias
+            activation_output = self.activation(gate_branch)
+            hidden = activation_output * linear_branch
+        else:
+            activation_output = self.activation(fc1_output)
+            hidden = activation_output
+        hidden = F.dropout(hidden, p=self.dropout.p, training=self.training)
+        output = F.linear(hidden, self.fc2.weight, self.fc2.bias)
+        output = F.dropout(output, p=self.dropout.p, training=self.training, inplace=True)
+        if output_gate is not None:
+            output = output * output_gate
+        return _MLPIntermediates(
+            normalized_input=normalized_input,
+            fc1_output=fc1_output,
+            linear_branch=linear_branch,
+            gate_branch=gate_branch,
+            activation_output=activation_output,
+            hidden=hidden,
+            output=output,
+        )
+
     def forward(
         self,
         x: Tensor,
@@ -454,6 +514,28 @@ class AdaNormMLP(NormMLP):
         modulation = self.modulation(self.conditioning_activation(conditioning))
         adaptive_shift, adaptive_scale_delta, adaptive_output_gate = modulation.chunk(3, dim=-1)
         return super().forward(
+            x,
+            norm_scale_delta=reshape_modulation(adaptive_scale_delta, x),
+            norm_shift=reshape_modulation(adaptive_shift, x),
+            output_gate=reshape_modulation(adaptive_output_gate, x),
+        )
+
+    def _forward_with_intermediates(
+        self,
+        x: Tensor,
+        *,
+        conditioning: Tensor | None = None,
+        norm_scale_delta: Tensor | None = None,
+        norm_shift: Tensor | None = None,
+        output_gate: Tensor | None = None,
+    ) -> _MLPIntermediates:
+        if conditioning is None:
+            raise ValueError("conditioning is required for AdaNormMLP")
+        if norm_scale_delta is not None or norm_shift is not None or output_gate is not None:
+            raise ValueError("AdaNormMLP does not accept manual modulation tensors when conditioning is provided")
+        modulation = self.modulation(self.conditioning_activation(conditioning))
+        adaptive_shift, adaptive_scale_delta, adaptive_output_gate = modulation.chunk(3, dim=-1)
+        return super()._forward_with_intermediates(
             x,
             norm_scale_delta=reshape_modulation(adaptive_scale_delta, x),
             norm_shift=reshape_modulation(adaptive_shift, x),

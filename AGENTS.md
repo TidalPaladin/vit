@@ -20,8 +20,8 @@ Main flow is `Images -> PatchEmbed -> Transformer -> ViTFeatures -> Heads`.
 ### Explainability architecture
 
 - Stable explainability supports the native repository `ViT` on 2D inputs. Reject 3D inputs with an actionable error.
-- Keep normal inference on the fused path. Capture graph-connected attention probabilities only through the eager
-  trace path in `vit/explain/trace.py`.
+- Keep normal inference and default traces on the fused MLP path. Capture graph-connected attention probabilities
+  and opt-in MLP internals only through the eager trace path in `vit/explain/trace.py`.
 - Preserve caller-owned training flags, parameter gradient flags, and existing gradients around explanation calls.
 - Route masks, RoPE seeds, output-norm choices, and conditioning through `ForwardArgs` on every explanatory forward.
 - Keep raw attribution values unnormalized. Put interpolation and normalization in explicit visualization functions.
