@@ -509,15 +509,23 @@ class CrossAttentionTransformer(nn.Module):
         rope_q: Tensor | None = None,
         rope_k: Tensor | None = None,
         conditioning: Tensor | None = None,
+        attn_mask: Tensor | None = None,
     ) -> Tensor:
         batch_size = x.shape[0]
 
         x_residual, keep_indices, residual_scale = _select_residual_subset(x, self.drop_path_rate, self.training)
         kv_residual = _subset_batch(kv, keep_indices, batch_size)
+        attn_mask_residual = _subset_batch(attn_mask, keep_indices, batch_size) if attn_mask is not None else None
         rope_q_residual = _subset_batched_rope(rope_q, keep_indices, batch_size)
         rope_k_residual = _subset_batched_rope(rope_k, keep_indices, batch_size)
         o = self.layer_scale_cross(
-            self.cross_attention(x_residual, kv_residual, rope_q=rope_q_residual, rope_k=rope_k_residual)
+            self.cross_attention(
+                x_residual,
+                kv_residual,
+                attn_mask=attn_mask_residual,
+                rope_q=rope_q_residual,
+                rope_k=rope_k_residual,
+            )
         )
         x = _merge_residual_subset(x, o, keep_indices, residual_scale)
 
@@ -535,5 +543,6 @@ class CrossAttentionTransformer(nn.Module):
             rope_q: Tensor | None = None,
             rope_k: Tensor | None = None,
             conditioning: Tensor | None = None,
+            attn_mask: Tensor | None = None,
         ) -> Tensor:
-            return self.forward(x, kv, rope_q, rope_k, conditioning)
+            return self.forward(x, kv, rope_q, rope_k, conditioning, attn_mask)
