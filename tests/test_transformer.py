@@ -495,6 +495,45 @@ class TestCrossAttentionTransformer:
         y = layer(x, kv)
         assert_close(y, x)
 
+    def test_cross_attention_mask_tracks_stochastic_depth_batch_subset(self, device, monkeypatch):
+        batch_size, query_length, hidden_size, context_length = 8, 12, 64, 6
+        drop_path_rate = 0.5
+        expected_keep_count = _expected_keep_count(batch_size, drop_path_rate)
+        layer = CrossAttentionTransformer(
+            hidden_size=hidden_size,
+            ffn_hidden_size=hidden_size * 2,
+            num_attention_heads=4,
+            hidden_dropout=0.0,
+            attention_dropout=0.0,
+            drop_path_rate=drop_path_rate,
+        ).to(device)
+        layer.train()
+
+        observed_mask_shapes: list[tuple[int, ...]] = []
+        original_cross_attention_forward = layer.cross_attention.forward
+
+        def record_cross_attention_mask(
+            q: torch.Tensor,
+            kv: torch.Tensor,
+            attn_mask: torch.Tensor | None = None,
+            rope_q: torch.Tensor | None = None,
+            rope_k: torch.Tensor | None = None,
+        ) -> torch.Tensor:
+            assert attn_mask is not None
+            observed_mask_shapes.append(tuple(attn_mask.shape))
+            return original_cross_attention_forward(q, kv, attn_mask=attn_mask, rope_q=rope_q, rope_k=rope_k)
+
+        monkeypatch.setattr(layer.cross_attention, "forward", record_cross_attention_mask)
+
+        x = torch.randn(batch_size, query_length, hidden_size, device=device)
+        kv = torch.randn(batch_size, context_length, hidden_size, device=device)
+        attention_mask = torch.ones(batch_size, 1, query_length, context_length, dtype=torch.bool, device=device)
+
+        output = layer(x, kv, attn_mask=attention_mask)
+
+        assert output.shape == x.shape
+        assert observed_mask_shapes == [(expected_keep_count, 1, query_length, context_length)]
+
     @pytest.mark.parametrize(
         ("norm_type", "norm_cls"), [("rmsnorm", torch.nn.RMSNorm), ("layernorm", torch.nn.LayerNorm)]
     )
