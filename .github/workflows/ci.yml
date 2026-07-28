@@ -43,7 +43,7 @@ jobs:
         env:
           PYTHON_VERSION: "3.14"
         run: |
-          test "$(uv --version)" = "uv 0.11.28"
+          test "$(uv --version | cut -d ' ' -f 1-2)" = "uv 0.11.28"
           uv python install "$PYTHON_VERSION"
           uv run --no-project --python "$PYTHON_VERSION" python -c \
             'import os, sys; assert sys.version_info[:2] == tuple(map(int, os.environ["PYTHON_VERSION"].split(".")))'
@@ -106,7 +106,7 @@ jobs:
         env:
           PYTHON_VERSION: ${{ matrix.python-version }}
         run: |
-          test "$(uv --version)" = "uv 0.11.28"
+          test "$(uv --version | cut -d ' ' -f 1-2)" = "uv 0.11.28"
           uv python install "$PYTHON_VERSION"
           uv run --no-project --python "$PYTHON_VERSION" python -c \
             'import os, sys; assert sys.version_info[:2] == tuple(map(int, os.environ["PYTHON_VERSION"].split(".")))'

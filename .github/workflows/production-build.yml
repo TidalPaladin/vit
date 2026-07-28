@@ -42,7 +42,7 @@ jobs:
           cache-suffix: ubuntu-x64-uv-0.11.28-python-3.11-3.14-torch-2.13.0-production
       - name: Verify pinned tools and Python boundaries
         run: |
-          test "$(uv --version)" = "uv 0.11.28"
+          test "$(uv --version | cut -d ' ' -f 1-2)" = "uv 0.11.28"
           uv python install 3.11 3.14
           uv run --no-project --python 3.11 python -c 'import sys; assert sys.version_info[:2] == (3, 11)'
           uv run --no-project --python 3.14 python -c 'import sys; assert sys.version_info[:2] == (3, 14)'
@@ -106,7 +106,7 @@ jobs:
             uv.lock
           cache-suffix: ubuntu-x64-uv-0.11.28-python-3.14-torch-2.13.0-compile
       - name: Verify pinned tools
-        run: test "$(uv --version)" = "uv 0.11.28"
+        run: test "$(uv --version | cut -d ' ' -f 1-2)" = "uv 0.11.28"
       - name: Install locked dependencies
         run: uv sync --frozen --all-groups --python 3.14
       - name: Verify CPU runtime

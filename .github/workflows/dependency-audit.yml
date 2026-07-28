@@ -43,7 +43,7 @@ jobs:
           cache-suffix: ubuntu-x64-uv-0.11.28-python-3.14-torch-2.13.0-security
       - name: Verify pinned tools
         run: |
-          test "$(uv --version)" = "uv 0.11.28"
+          test "$(uv --version | cut -d ' ' -f 1-2)" = "uv 0.11.28"
           uv run --no-project --python 3.14 python -c 'import sys; assert sys.version_info[:2] == (3, 14)'
       - name: Install locked security tools
         run: uv sync --frozen --only-group ci-security --python 3.14
@@ -101,7 +101,7 @@ jobs:
           cache-suffix: ubuntu-x64-uv-0.11.28-python-3.14-torch-2.13.0-dependency-report
       - name: Verify pinned tools
         run: |
-          test "$(uv --version)" = "uv 0.11.28"
+          test "$(uv --version | cut -d ' ' -f 1-2)" = "uv 0.11.28"
           uv run --no-project --python 3.14 python -c 'import sys; assert sys.version_info[:2] == (3, 14)'
       - name: Install locked reporting tools
         run: uv sync --frozen --only-group ci-dependency-report --python 3.14
