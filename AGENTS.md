@@ -7,7 +7,8 @@ The Python-first explainability toolbox lives in `vit/explain/`; its sparse auto
 Unit tests live in `tests/` and follow module-level coverage (`tests/test_vit.py`, `tests/test_attention.py`, etc.).  
 Benchmark tooling and CLI entrypoints live in `benchmark/`; generated benchmark outputs are typically written to
 `benchmark_results/`.  
-Build metadata and tooling configuration are in `pyproject.toml`, `Makefile`, and `.circleci/config.yml`.
+Build metadata and tooling configuration are in `pyproject.toml`, `Makefile`, and `.github/workflows/`. CircleCI
+remains enabled only while the GitHub Actions migration is validated.
 
 ## Architecture & Core Patterns
 Main flow is `Images -> PatchEmbed -> Transformer -> ViTFeatures -> Heads`.
@@ -41,7 +42,16 @@ Use `uv` and Make targets to keep local and CI behavior aligned.
 - `make types`: run static typing with `basedpyright`.
 - `make test`: run pytest with coverage on `vit/`.
 - `make test-ci`: run CI-equivalent tests (`not cuda and not compile`).
+- `make test-compile-cpu`: run CPU `torch.compile` tests with Dynamo enabled and CUDA hidden.
+- `make test-deprecations`: run CPU tests with default deprecation warnings.
+- `make audit-workflows`: audit GitHub Actions with the locked strict `zizmor` configuration.
+- `make report-deprecations REPORT_DIR=<path>`: report yanked, inactive, and Python-incompatible direct pins.
 - `make test-<pattern>`: run targeted tests, e.g. `make test-attention`.
+
+GitHub Actions runs required Linux CPU checks on Python 3.11 and 3.14. The independent Monday dependency-health
+workflow writes security and deprecation reports, and the manual production workflow validates distributions and CPU
+compilation. CUDA CI is deferred until a suitable self-hosted runner is available; GitHub-hosted GPU larger runners
+are not part of the free public-repository runner allocation.
 
 ## Component Benchmark Tool
 Use the local skill `$vit-component-benchmark` for detailed guidance.
@@ -64,7 +74,8 @@ Use `pytest` with `pytest-cov`, `pytest-mock`, and project fixtures in `tests/co
 - Test files should be named `test_<feature>.py`.
 - Prefer parametrized tests for shape/dtype/device combinations.
 - Use markers intentionally: `@pytest.mark.cuda` for GPU-required tests, `@pytest.mark.compile` for `torch.compile`.
-- Run `make test-ci` before opening a PR to match CI filtering.
+- Run `make quality`, `make types`, and `make test-ci` before opening a PR to match required CI.
+- Run `make test-compile-cpu` after changing compilation or activation-checkpointing behavior.
 
 ## Commit & Pull Request Guidelines
 Recent history follows imperative, sentence-style subjects (for example: `Add ...`, `Fix ...`, `Improve ...`), often

@@ -1,4 +1,4 @@
-.PHONY: audit-dependencies check-distribution clean clean-env check quality style tag-version test env upload upload-test
+.PHONY: audit-dependencies audit-workflows check check-distribution clean clean-env deploy init quality report-deprecations style test test-ci test-compile-cpu test-deprecations types
 
 PROJECT=vit
 QUALITY_DIRS=$(PROJECT) tests benchmark tools examples
@@ -7,9 +7,9 @@ UV_VERSION=0.11.28
 UVX=uvx
 UV=$(UVX) --from uv==$(UV_VERSION) uv
 PYTHON=$(UV) run python
-PIP_AUDIT_VERSION=2.10.1
-PIP_AUDIT=$(UVX) --python $(PYTHON_VERSION) --from pip-audit==$(PIP_AUDIT_VERSION) pip-audit
 PYTHON_VERSION?=3.14
+REPORT_DIR?=dependency_reports
+PIP_AUDIT=$(UV) run --isolated --frozen --only-group ci-security --python 3.14 pip-audit
 
 CONFIG_FILE := config.mk
 ifneq ($(wildcard $(CONFIG_FILE)),)
@@ -42,7 +42,18 @@ audit-dependencies: ## audit locked Python dependencies for known public vulnera
 		--cache-dir "$$audit_directory/cache" \
 		--progress-spinner=off \
 		--vulnerability-service pypi \
-		--requirement "$$requirements_file"
+		--requirement "$$requirements_file" \
+		$(if $(AUDIT_REPORT),--format json --output "$(AUDIT_REPORT)")
+
+audit-workflows: ## audit GitHub Actions workflows with locked zizmor
+	$(UV) run --isolated --frozen --only-group ci-security --python 3.14 zizmor \
+		--strict-collection \
+		--pedantic \
+		--offline \
+		--min-severity low \
+		--format json \
+		.github/workflows \
+		$(if $(ZIZMOR_REPORT),> "$(ZIZMOR_REPORT)")
 
 check-distribution: ## build a wheel and validate its console-script targets
 	@dist_dir="$$(mktemp -d)"; \
@@ -96,13 +107,33 @@ test-pdb-%: ## run unit tests matching a pattern with PDB fallback
 	$(PYTHON) -m pytest -rs --pdb -k $* -v ./tests/ 
 
 test-ci: ## runs CI-only tests (excludes cuda and compile tests)
-	export "CUDA_VISIBLE_DEVICES=''" && \
+	export CUDA_VISIBLE_DEVICES="" && \
 	$(PYTHON) -m pytest \
 		-rs \
 		-m "not cuda and not compile" \
 		--cov=./$(PROJECT) \
 		--cov-report=xml \
 		--cov-report=term \
+		./tests/
+
+test-compile-cpu: ## run CPU-only torch.compile tests with Dynamo enabled
+	export CUDA_VISIBLE_DEVICES="" TORCHDYNAMO_DISABLE="0" && \
+	$(PYTHON) -m pytest \
+		-rs \
+		-m "compile and not cuda" \
+		./tests/
+
+report-deprecations: ## report direct dependency yanks, inactivity, and Python conflicts
+	$(UV) run --isolated --frozen --only-group ci-dependency-report --python 3.14 python tools/dependency_report.py \
+		--json-output "$(REPORT_DIR)/dependency-deprecations.json" \
+		--summary-output "$(REPORT_DIR)/dependency-deprecations.md"
+
+test-deprecations: ## run CPU tests with default deprecation warnings
+	export CUDA_VISIBLE_DEVICES="" TORCHDYNAMO_DISABLE="1" && \
+	$(PYTHON) -m pytest \
+		-rs \
+		-m "not cuda and not compile" \
+		-W default \
 		./tests/
 
 types: ## run static type checking

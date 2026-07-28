@@ -49,7 +49,7 @@ def pytest_runtest_setup(item):
     handle_cuda_mark(item)
 
 
-@pytest.fixture(params=["cpu", "cuda:0"])
+@pytest.fixture(params=["cpu", pytest.param("cuda:0", marks=pytest.mark.cuda)])
 def device(request):
     if request.param == "cuda:0" and not cuda_available():
         pytest.skip("Test requires CUDA and device is not ready")

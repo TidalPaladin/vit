@@ -7,15 +7,20 @@ import yaml
 
 PROJECT_ROOT = Path(__file__).parents[1]
 DEPENDENCY_AUDIT_WORKFLOW = PROJECT_ROOT / ".github" / "workflows" / "dependency-audit.yml"
-SUPPORTED_PYTHON_BOUNDS = {"3.11", "3.14"}
 
 
 def test_dependency_audit_workflow_is_scheduled_and_covers_supported_python_bounds() -> None:
     workflow = yaml.safe_load(DEPENDENCY_AUDIT_WORKFLOW.read_text())
 
     assert workflow["permissions"] == {"contents": "read"}
-    assert workflow["on"]["schedule"]
-    assert set(workflow["jobs"]["audit"]["strategy"]["matrix"]["python-version"]) == SUPPORTED_PYTHON_BOUNDS
+    assert workflow["on"]["schedule"] == [{"cron": "17 6 * * 1"}]
+    assert set(workflow["jobs"]) == {"security-audit", "deprecation-report"}
+    security_command = next(
+        step["run"]
+        for step in workflow["jobs"]["security-audit"]["steps"]
+        if step.get("name") == "Run every security scanner"
+    )
+    assert "tools/run_security_audit.py" in security_command
 
 
 def test_dependency_audit_target_runs_scanner_on_requested_python() -> None:
@@ -27,7 +32,9 @@ def test_dependency_audit_target_runs_scanner_on_requested_python() -> None:
         check=True,
     )
 
-    assert "uvx --python 3.11 --from pip-audit==2.10.1 pip-audit" in result.stdout
+    assert '--python "3.11"' in result.stdout
+    assert "--only-group ci-security" in result.stdout
+    assert "pip-audit" in result.stdout
 
 
 @pytest.mark.parametrize(("scanner", "should_succeed"), [("true", True), ("false", False)])

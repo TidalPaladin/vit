@@ -1,0 +1,130 @@
+name: Production build
+run-name: Production build ${{ inputs.validation_id || github.run_id }}
+
+"on":
+  workflow_dispatch:
+    inputs:
+      validation_id:
+        description: Correlation UUID for exact-run validation
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-build
+  cancel-in-progress: false
+
+jobs:
+  distributions:
+    name: Distributions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.28"
+          checksum: e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224
+          python-version: "3.14"
+          enable-cache: true
+          restore-cache: true
+          save-cache: true
+          cache-dependency-glob: |-
+            pyproject.toml
+            uv.lock
+          cache-suffix: ubuntu-x64-uv-0.11.28-python-3.11-3.14-torch-2.13.0-production
+      - name: Verify pinned tools and Python boundaries
+        run: |
+          test "$(uv --version)" = "uv 0.11.28"
+          uv python install 3.11 3.14
+          uv run --no-project --python 3.11 python -c 'import sys; assert sys.version_info[:2] == (3, 11)'
+          uv run --no-project --python 3.14 python -c 'import sys; assert sys.version_info[:2] == (3, 14)'
+      - name: Build source distributions
+        run: uv build --no-sources --wheel --sdist --out-dir dist
+      - name: Rebuild wheel from sdist
+        run: |
+          sdist_path="$(find dist -maxdepth 1 -type f -name '*.tar.gz' -print -quit)"
+          test -n "$sdist_path"
+          mkdir rebuilt
+          uv build --no-sources --wheel --out-dir rebuilt "$sdist_path"
+      - name: Validate console scripts in both wheels
+        run: uv run --no-project --python 3.14 python tools/validate_wheel.py dist/*.whl rebuilt/*.whl
+      - name: Clean-install and smoke-test distributions
+        env:
+          SOURCE_ENV: ${{ runner.temp }}/vit-source-wheel
+          REBUILT_ENV: ${{ runner.temp }}/vit-rebuilt-wheel
+        run: |
+          uv venv --python 3.11 "$SOURCE_ENV"
+          uv pip install --python "$SOURCE_ENV/bin/python" dist/*.whl
+          uv venv --python 3.14 "$REBUILT_ENV"
+          uv pip install --python "$REBUILT_ENV/bin/python" rebuilt/*.whl
+
+          "$SOURCE_ENV/bin/python" -c \
+            'import importlib.metadata, sys; assert sys.version_info[:2] == (3, 11); assert importlib.metadata.version("torch").partition("+")[0] == "2.13.0"; assert importlib.metadata.version("torchao") == "0.17.0"'
+          "$REBUILT_ENV/bin/python" -c \
+            'import importlib.metadata, sys; assert sys.version_info[:2] == (3, 14); assert importlib.metadata.version("torch").partition("+")[0] == "2.13.0"; assert importlib.metadata.version("torchao") == "0.17.0"'
+
+          for command in vit-benchmark vit-component-benchmark vit-explain; do
+            "$SOURCE_ENV/bin/$command" --help
+            "$REBUILT_ENV/bin/$command" --help
+          done
+      - name: Upload distributions
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vit-distributions-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  cpu-compile:
+    name: CPU compile
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.28"
+          checksum: e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224
+          python-version: "3.14"
+          enable-cache: true
+          restore-cache: true
+          save-cache: true
+          cache-dependency-glob: |-
+            pyproject.toml
+            uv.lock
+          cache-suffix: ubuntu-x64-uv-0.11.28-python-3.14-torch-2.13.0-compile
+      - name: Verify pinned tools
+        run: test "$(uv --version)" = "uv 0.11.28"
+      - name: Install locked dependencies
+        run: uv sync --frozen --all-groups --python 3.14
+      - name: Verify CPU runtime
+        env:
+          CUDA_VISIBLE_DEVICES: ""
+        run: |
+          uv run --frozen --no-sync python - <<'PY'
+          import importlib.metadata
+          import sys
+          import torch
+
+          assert sys.version_info[:2] == (3, 14)
+          assert importlib.metadata.version("torch").partition("+")[0] == "2.13.0"
+          assert importlib.metadata.version("torchao") == "0.17.0"
+          assert not torch.cuda.is_available()
+          PY
+      - name: Run CPU compile tests
+        env:
+          CUDA_VISIBLE_DEVICES: ""
+          TORCHDYNAMO_DISABLE: "0"
+        run: make test-compile-cpu

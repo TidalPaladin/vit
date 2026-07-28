@@ -1,41 +1,126 @@
-name: Dependency audit
+name: Dependency health
+run-name: Dependency health ${{ inputs.validation_id || github.run_id }}
 
 "on":
-  pull_request:
-    paths:
-      - .github/workflows/dependency-audit.yml
-      - Makefile
-      - pyproject.toml
-      - uv.lock
-  push:
-    branches:
-      - master
-    paths:
-      - .github/workflows/dependency-audit.yml
-      - Makefile
-      - pyproject.toml
-      - uv.lock
   schedule:
     - cron: "17 6 * * 1"
   workflow_dispatch:
+    inputs:
+      validation_id:
+        description: Correlation UUID for exact-run validation
+        required: false
+        type: string
 
 permissions:
   contents: read
 
+concurrency:
+  group: dependency-health
+  cancel-in-progress: false
+
 jobs:
-  audit:
-    name: Python ${{ matrix.python-version }}
+  security-audit:
+    name: Security audit
     runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version:
-          - "3.11"
-          - "3.14"
+    timeout-minutes: 20
     steps:
       - name: Check out repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Install uv
-        run: python -m pip install "uv==0.11.28"
-      - name: Audit locked dependencies
-        run: make audit-dependencies PYTHON_VERSION="${{ matrix.python-version }}"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.28"
+          checksum: e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224
+          python-version: "3.14"
+          enable-cache: true
+          restore-cache: true
+          save-cache: true
+          cache-dependency-glob: |-
+            pyproject.toml
+            uv.lock
+          cache-suffix: ubuntu-x64-uv-0.11.28-python-3.14-torch-2.13.0-security
+      - name: Verify pinned tools
+        run: |
+          test "$(uv --version)" = "uv 0.11.28"
+          uv run --no-project --python 3.14 python -c 'import sys; assert sys.version_info[:2] == (3, 14)'
+      - name: Install locked security tools
+        run: uv sync --frozen --only-group ci-security --python 3.14
+      - name: Run every security scanner
+        id: security
+        continue-on-error: true
+        run: |
+          uv run --frozen --no-sync --only-group ci-security \
+            python tools/run_security_audit.py --report-dir dependency-security
+      - name: Summarize security audit
+        if: ${{ always() }}
+        run: |
+          {
+            echo "## Dependency security audit"
+            echo
+            echo '```json'
+            cat dependency-security/manifest.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload security reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dependency-security-${{ github.run_id }}
+          path: dependency-security/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Enforce security result
+        if: ${{ always() }}
+        env:
+          SECURITY_OUTCOME: ${{ steps.security.outcome }}
+        run: test "$SECURITY_OUTCOME" = success
+
+  deprecation-report:
+    name: Deprecation report
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.28"
+          checksum: e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224
+          python-version: "3.14"
+          enable-cache: true
+          restore-cache: true
+          save-cache: true
+          cache-dependency-glob: |-
+            pyproject.toml
+            uv.lock
+          cache-suffix: ubuntu-x64-uv-0.11.28-python-3.14-torch-2.13.0-dependency-report
+      - name: Verify pinned tools
+        run: |
+          test "$(uv --version)" = "uv 0.11.28"
+          uv run --no-project --python 3.14 python -c 'import sys; assert sys.version_info[:2] == (3, 14)'
+      - name: Install locked reporting tools
+        run: uv sync --frozen --only-group ci-dependency-report --python 3.14
+      - name: Build dependency report
+        run: make report-deprecations REPORT_DIR=dependency-deprecations
+      - name: Install locked test dependencies
+        run: uv sync --frozen --all-groups --python 3.14
+      - name: Run tests with deprecation warnings
+        run: |
+          set -o pipefail
+          make test-deprecations 2>&1 | tee dependency-deprecations/deprecation-warnings.log
+      - name: Add dependency report to summary
+        if: ${{ always() }}
+        run: cat dependency-deprecations/dependency-deprecations.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload dependency reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dependency-deprecations-${{ github.run_id }}
+          path: dependency-deprecations/
+          if-no-files-found: error
+          retention-days: 7

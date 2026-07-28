@@ -1,0 +1,160 @@
+name: CI
+
+"on":
+  pull_request:
+    branches:
+      - master
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  quality:
+    name: Quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.28"
+          checksum: e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224
+          python-version: "3.14"
+          enable-cache: true
+          restore-cache: true
+          save-cache: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+          cache-dependency-glob: |-
+            pyproject.toml
+            uv.lock
+          cache-suffix: ubuntu-x64-uv-0.11.28-python-3.14-torch-2.13.0
+      - name: Verify pinned tools
+        env:
+          PYTHON_VERSION: "3.14"
+        run: |
+          test "$(uv --version)" = "uv 0.11.28"
+          uv python install "$PYTHON_VERSION"
+          uv run --no-project --python "$PYTHON_VERSION" python -c \
+            'import os, sys; assert sys.version_info[:2] == tuple(map(int, os.environ["PYTHON_VERSION"].split(".")))'
+      - name: Install locked dependencies
+        env:
+          PYTHON_VERSION: "3.14"
+        run: uv sync --frozen --all-groups --python "$PYTHON_VERSION"
+      - name: Verify runtime versions
+        env:
+          PYTHON_VERSION: "3.14"
+          TORCH_VERSION: "2.13.0"
+          TORCHAO_VERSION: "0.17.0"
+        run: |
+          uv run --frozen --no-sync python - <<'PY'
+          import importlib.metadata
+          import os
+          import sys
+
+          assert sys.version_info[:2] == tuple(map(int, os.environ["PYTHON_VERSION"].split(".")))
+          assert importlib.metadata.version("torch").partition("+")[0] == os.environ["TORCH_VERSION"]
+          assert importlib.metadata.version("torchao") == os.environ["TORCHAO_VERSION"]
+          PY
+      - name: Check formatting and lint
+        run: make quality
+      - name: Check types
+        run: make types
+
+  tests:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: "3.11"
+            artifact-suffix: py311
+          - python-version: "3.14"
+            artifact-suffix: py314
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.28"
+          checksum: e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+          restore-cache: true
+          save-cache: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+          cache-dependency-glob: |-
+            pyproject.toml
+            uv.lock
+          cache-suffix: ubuntu-x64-uv-0.11.28-python-${{ matrix.python-version }}-torch-2.13.0
+      - name: Verify pinned tools
+        env:
+          PYTHON_VERSION: ${{ matrix.python-version }}
+        run: |
+          test "$(uv --version)" = "uv 0.11.28"
+          uv python install "$PYTHON_VERSION"
+          uv run --no-project --python "$PYTHON_VERSION" python -c \
+            'import os, sys; assert sys.version_info[:2] == tuple(map(int, os.environ["PYTHON_VERSION"].split(".")))'
+      - name: Install locked dependencies
+        env:
+          PYTHON_VERSION: ${{ matrix.python-version }}
+        run: uv sync --frozen --all-groups --python "$PYTHON_VERSION"
+      - name: Verify runtime versions
+        env:
+          PYTHON_VERSION: ${{ matrix.python-version }}
+          TORCH_VERSION: "2.13.0"
+          TORCHAO_VERSION: "0.17.0"
+        run: |
+          uv run --frozen --no-sync python - <<'PY'
+          import importlib.metadata
+          import os
+          import sys
+
+          assert sys.version_info[:2] == tuple(map(int, os.environ["PYTHON_VERSION"].split(".")))
+          assert importlib.metadata.version("torch").partition("+")[0] == os.environ["TORCH_VERSION"]
+          assert importlib.metadata.version("torchao") == os.environ["TORCHAO_VERSION"]
+          PY
+      - name: Run CPU tests
+        run: make test-ci
+      - name: Validate distribution
+        run: make check-distribution
+      - name: Upload coverage
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-${{ matrix.artifact-suffix }}-${{ github.sha }}
+          path: coverage.xml
+          if-no-files-found: error
+          retention-days: 7
+
+  required:
+    name: Required
+    if: ${{ always() }}
+    needs:
+      - quality
+      - tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every CI job
+        env:
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          TESTS_RESULT: ${{ needs.tests.result }}
+        run: |
+          test "$QUALITY_RESULT" = success
+          test "$TESTS_RESULT" = success
