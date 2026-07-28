@@ -134,12 +134,13 @@ def test_dependency_health_workflow_contract() -> None:
     assert all(step["with"]["retention-days"] == 7 for step in artifact_steps)
 
 
-def test_production_build_is_manual_only_during_overlap() -> None:
+def test_production_build_workflow_contract() -> None:
     workflow = load_workflow("production-build.yml")
 
     assert workflow["name"] == "Production build"
     assert workflow["permissions"] == {"contents": "read"}
-    assert set(workflow["on"]) == {"workflow_dispatch"}
+    assert set(workflow["on"]) == {"schedule", "workflow_dispatch"}
+    assert workflow["on"]["schedule"] == [{"cron": "37 5 * * 0"}]
     assert workflow["on"]["workflow_dispatch"]["inputs"]["validation_id"]["required"] is False
     assert workflow["concurrency"] == {"group": "production-build", "cancel-in-progress": False}
 
@@ -162,9 +163,9 @@ def test_production_build_is_manual_only_during_overlap() -> None:
     assert artifact_steps[0]["with"]["retention-days"] == 7
 
 
-def test_circleci_and_codecov_remain_enabled_during_overlap() -> None:
-    assert CIRCLECI_CONFIGURATION.is_file()
-    assert CODECOV_CONFIGURATION.is_file()
+def test_circleci_and_codecov_are_removed_after_cutover() -> None:
+    assert not CIRCLECI_CONFIGURATION.exists()
+    assert not CODECOV_CONFIGURATION.exists()
 
 
 def test_makefile_selects_only_cpu_compile_tests() -> None:

@@ -2,6 +2,8 @@ name: Production build
 run-name: Production build ${{ inputs.validation_id || github.run_id }}
 
 "on":
+  schedule:
+    - cron: "37 5 * * 0"
   workflow_dispatch:
     inputs:
       validation_id:
