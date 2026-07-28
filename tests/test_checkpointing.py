@@ -236,7 +236,7 @@ class TestActivationCheckpointing:
         # Checkpointing should use less memory
         assert mem_ckpt < mem_no_ckpt, f"Expected memory reduction, got {mem_ckpt} vs {mem_no_ckpt}"
 
-    @pytest.mark.ci_skip
+    @pytest.mark.compile
     def test_checkpointing_with_torch_compile(self, device, config):
         """Verify checkpointing works when model is torch.compiled."""
         config = replace(config, activation_checkpointing=True)

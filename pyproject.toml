@@ -42,7 +42,7 @@ force-single-line = false
 combine-as-imports = true
 
 [tool.basedpyright]
-include = ["vit", "tests", "benchmark", "examples"]
+include = ["vit", "tests", "benchmark", "tools", "examples"]
 exclude = [
   "**/node_modules",
   "**/__pycache__",
@@ -64,7 +64,7 @@ version-file = "vit/_version.py"
 
 [tool.pytest.ini_options]
 markers = [
-  "ci_skip",
+  "compile",
   "cuda",
 ]
 filterwarnings = []
@@ -107,6 +107,15 @@ dev = [
     "pdbpp==0.12.1",
     {include-group = "benchmarking"},
     {include-group = "explainability"},
+]
+
+ci-security = [
+    "pip-audit==2.10.1",
+    "zizmor==1.28.0",
+]
+
+ci-dependency-report = [
+    "packaging==26.2",
 ]
 
 [tool.hatch.build.targets.wheel]
