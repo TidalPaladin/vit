@@ -7,8 +7,7 @@ The Python-first explainability toolbox lives in `vit/explain/`; its sparse auto
 Unit tests live in `tests/` and follow module-level coverage (`tests/test_vit.py`, `tests/test_attention.py`, etc.).  
 Benchmark tooling and CLI entrypoints live in `benchmark/`; generated benchmark outputs are typically written to
 `benchmark_results/`.  
-Build metadata and tooling configuration are in `pyproject.toml`, `Makefile`, and `.github/workflows/`. CircleCI
-remains enabled only while the GitHub Actions migration is validated.
+Build metadata and tooling configuration are in `pyproject.toml`, `Makefile`, and `.github/workflows/`.
 
 ## Architecture & Core Patterns
 Main flow is `Images -> PatchEmbed -> Transformer -> ViTFeatures -> Heads`.
@@ -49,9 +48,9 @@ Use `uv` and Make targets to keep local and CI behavior aligned.
 - `make test-<pattern>`: run targeted tests, e.g. `make test-attention`.
 
 GitHub Actions runs required Linux CPU checks on Python 3.11 and 3.14. The independent Monday dependency-health
-workflow writes security and deprecation reports, and the manual production workflow validates distributions and CPU
-compilation. CUDA CI is deferred until a suitable self-hosted runner is available; GitHub-hosted GPU larger runners
-are not part of the free public-repository runner allocation.
+workflow writes security and deprecation reports. The Sunday production workflow validates distributions and CPU
+compilation. Both weekly workflows can also be dispatched manually. CUDA CI is deferred until a suitable self-hosted
+runner is available; GitHub-hosted GPU larger runners are not part of the free public-repository runner allocation.
 
 ## Component Benchmark Tool
 Use the local skill `$vit-component-benchmark` for detailed guidance.

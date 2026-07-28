@@ -39,6 +39,5 @@ advisory does not apply, link to supporting evidence, and include a review date 
 | Project source | Not covered by `pip-audit`; formatting, linting, typing, and tests remain separate quality gates. |
 | Native libraries bundled inside wheels | Not covered unless the vulnerability is reported against the Python package. Review upstream package advisories during dependency updates. |
 | Non-Linux dependency variants | Not covered by the scheduled audit because the supported CI environment is Linux. Review platform-specific changes when adding another CI platform. |
-| CircleCI images and the Codecov orb | Retained only for the CI migration overlap and not covered by `pip-audit`. |
 | GitHub Actions | Every action is pinned to a full commit SHA. Locked `zizmor` checks workflow structure and permissions weekly. |
 | CUDA execution | Deferred. Required CI is Linux CPU-only until a suitable self-hosted CUDA runner is available. |
