@@ -96,6 +96,8 @@ class ViTConfig:
     drop_path_rate: float = 0.0
     num_register_tokens: int = 0
     num_cls_tokens: int = 0
+    specialize_global_token_norms: bool = False
+    specialize_global_token_qkv_blocks: int = 0
     pos_enc: PositionEncoder = "rope"
     layer_scale: float | None = None
     glu_limit: float | None = None
@@ -140,6 +142,15 @@ class ViTConfig:
             raise ValueError(f"hidden_size ({self.hidden_size}) must be even when using Fourier positional encoding")
         if self.conditioning_size is not None and self.conditioning_size <= 0:
             raise ValueError(f"conditioning_size must be positive when provided, got {self.conditioning_size}")
+        if self.specialize_global_token_qkv_blocks < 0:
+            raise ValueError("specialize_global_token_qkv_blocks must be non-negative")
+        if self.specialize_global_token_qkv_blocks > self.depth:
+            raise ValueError("specialize_global_token_qkv_blocks cannot exceed depth")
+        specialization_enabled = self.specialize_global_token_norms or self.specialize_global_token_qkv_blocks > 0
+        if specialization_enabled and self.num_cls_tokens + self.num_register_tokens == 0:
+            raise ValueError("global-token specialization requires at least one CLS or register token")
+        if self.specialize_global_token_norms and self.conditioning_size is not None:
+            raise ValueError("global-token normalization specialization is incompatible with conditioned MLPs")
         if self.glu_max_autotune_gemm and not self.activation.endswith("glu"):
             raise ValueError("glu_max_autotune_gemm requires a GLU activation")
         validate_adaln_gate_init(self.adaln_gate_init)
@@ -328,9 +339,13 @@ class ViT(nn.Module):
         self.blocks = nn.ModuleList(
             [
                 self.create_encoder_layer(
-                    mlp_quantization_config, qkv_quantization_config, attn_quantization_config, device
+                    mlp_quantization_config,
+                    qkv_quantization_config,
+                    attn_quantization_config,
+                    device,
+                    block_index=block_index,
                 )
-                for _ in range(config.depth)
+                for block_index in range(config.depth)
             ]
         )
         self.output_norm = make_norm(config.hidden_size, config.norm_type, device=device, dtype=config.dtype)
@@ -366,6 +381,7 @@ class ViT(nn.Module):
         attn_quantization_config: Any | None = None,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
+        block_index: int = 0,
     ) -> TransformerEncoderLayer:
         resolved_dtype = self._resolve_factory_dtype(dtype)
         return TransformerEncoderLayer(
@@ -391,6 +407,9 @@ class ViT(nn.Module):
             conditioning_size=self.config.conditioning_size,
             adaln_gate_init=self.config.adaln_gate_init,
             glu_max_autotune_gemm=self.config.glu_max_autotune_gemm,
+            num_global_tokens=self.config.num_cls_tokens + self.config.num_register_tokens,
+            specialize_global_token_norms=self.config.specialize_global_token_norms,
+            specialize_global_token_qkv=block_index < self.config.specialize_global_token_qkv_blocks,
         )
 
     def create_decoder_layer(

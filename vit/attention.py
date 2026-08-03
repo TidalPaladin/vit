@@ -1,3 +1,4 @@
+from copy import deepcopy
 from typing import TYPE_CHECKING, Any
 
 import torch
@@ -91,6 +92,69 @@ def project_qkv_packed(
 ) -> tuple[Tensor, Tensor, Tensor]:
     x = apply_norm(x, w_norm, b_norm, eps, use_layer_norm=use_layer_norm)
     q, k, v = F.linear(x, w_in, b_in).chunk(3, dim=-1)
+    q = _unfold_head_and_permute(q, head_dim)
+    k = _unfold_head_and_permute(k, head_dim)
+    q, k = _apply_qk_norm(
+        q,
+        k,
+        q_norm_weight,
+        q_norm_bias,
+        k_norm_weight,
+        k_norm_bias,
+        qk_use_layer_norm,
+        qk_eps,
+        qk_normalization,
+    )
+    if rope is not None:
+        q = apply_rope(q, rope)
+        k = apply_rope(k, rope)
+    v = _unfold_head_and_permute(v, head_dim)
+    return q, k, v
+
+
+@torch.compile(fullgraph=True)
+def project_token_specialized_qkv_packed(
+    # fmt: off
+    x: Tensor,
+    num_global_tokens: int,
+    global_qkv_weight: Tensor,
+    global_qkv_bias: Tensor | None,
+    visual_qkv_weight: Tensor,
+    visual_qkv_bias: Tensor | None,
+    global_norm_weight: Tensor,
+    global_norm_bias: Tensor | None,
+    visual_norm_weight: Tensor,
+    visual_norm_bias: Tensor | None,
+    use_layer_norm: bool,
+    head_dim: int,
+    eps: float,
+    q_norm_weight: Tensor | None,
+    q_norm_bias: Tensor | None,
+    k_norm_weight: Tensor | None,
+    k_norm_bias: Tensor | None,
+    qk_use_layer_norm: bool,
+    qk_eps: float,
+    qk_normalization: bool,
+    rope: Tensor | None = None,
+    # fmt: on
+) -> tuple[Tensor, Tensor, Tensor]:
+    global_features = apply_norm(
+        x[:, :num_global_tokens],
+        global_norm_weight,
+        global_norm_bias,
+        eps,
+        use_layer_norm=use_layer_norm,
+    )
+    visual_features = apply_norm(
+        x[:, num_global_tokens:],
+        visual_norm_weight,
+        visual_norm_bias,
+        eps,
+        use_layer_norm=use_layer_norm,
+    )
+    global_qkv = F.linear(global_features, global_qkv_weight, global_qkv_bias)
+    visual_qkv = F.linear(visual_features, visual_qkv_weight, visual_qkv_bias)
+    q, k, v = torch.cat((global_qkv, visual_qkv), dim=1).chunk(3, dim=-1)
     q = _unfold_head_and_permute(q, head_dim)
     k = _unfold_head_and_permute(k, head_dim)
     q, k = _apply_qk_norm(
@@ -216,6 +280,76 @@ def attention_qkv_packed(
 
 
 @torch.compile(fullgraph=True)
+def attention_token_specialized_qkv_packed(
+    # fmt: off
+    x: Tensor,
+    num_global_tokens: int,
+    global_qkv_weight: Tensor,
+    global_qkv_bias: Tensor | None,
+    visual_qkv_weight: Tensor,
+    visual_qkv_bias: Tensor | None,
+    global_norm_weight: Tensor,
+    global_norm_bias: Tensor | None,
+    visual_norm_weight: Tensor,
+    visual_norm_bias: Tensor | None,
+    use_layer_norm: bool,
+    head_dim: int,
+    w_out: Tensor,
+    b_out: Tensor | None,
+    attn_mask: Tensor | None,
+    eps: float,
+    q_norm_weight: Tensor | None,
+    q_norm_bias: Tensor | None,
+    k_norm_weight: Tensor | None,
+    k_norm_bias: Tensor | None,
+    qk_use_layer_norm: bool,
+    qk_eps: float,
+    qk_normalization: bool,
+    attention_dropout: float,
+    dropout: float,
+    training: bool,
+    rope: Tensor | None = None,
+    # fmt: on
+) -> Tensor:
+    q, k, v = project_token_specialized_qkv_packed(
+        x,
+        num_global_tokens,
+        global_qkv_weight,
+        global_qkv_bias,
+        visual_qkv_weight,
+        visual_qkv_bias,
+        global_norm_weight,
+        global_norm_bias,
+        visual_norm_weight,
+        visual_norm_bias,
+        use_layer_norm,
+        head_dim,
+        eps,
+        q_norm_weight,
+        q_norm_bias,
+        k_norm_weight,
+        k_norm_bias,
+        qk_use_layer_norm,
+        qk_eps,
+        qk_normalization,
+        rope,
+    )
+    attention_dropout = 0.0 if not training else attention_dropout
+    output = F.scaled_dot_product_attention(
+        q,
+        k,
+        v,
+        attn_mask=attn_mask,
+        dropout_p=attention_dropout,
+        is_causal=False,
+        enable_gqa=True,
+    )
+    output = _permute_and_fold_head(output)
+    output = F.linear(output, w_out, b_out)
+    return F.dropout(output, p=dropout, training=training, inplace=True)
+
+
+@torch.compile(fullgraph=True)
 def attention_q_kv_packed(
     # fmt: off
     q: Tensor,
@@ -323,6 +457,59 @@ def attention_weights_qkv_packed(
 
 @torch.no_grad()
 @torch.compile(fullgraph=True)
+def attention_weights_token_specialized_qkv_packed(
+    # fmt: off
+    x: Tensor,
+    num_global_tokens: int,
+    global_qkv_weight: Tensor,
+    global_qkv_bias: Tensor | None,
+    visual_qkv_weight: Tensor,
+    visual_qkv_bias: Tensor | None,
+    global_norm_weight: Tensor,
+    global_norm_bias: Tensor | None,
+    visual_norm_weight: Tensor,
+    visual_norm_bias: Tensor | None,
+    use_layer_norm: bool,
+    head_dim: int,
+    eps: float,
+    q_norm_weight: Tensor | None,
+    q_norm_bias: Tensor | None,
+    k_norm_weight: Tensor | None,
+    k_norm_bias: Tensor | None,
+    qk_use_layer_norm: bool,
+    qk_eps: float,
+    qk_normalization: bool,
+    rope: Tensor | None = None,
+    # fmt: on
+) -> Tensor:
+    q, k, _ = project_token_specialized_qkv_packed(
+        x,
+        num_global_tokens,
+        global_qkv_weight,
+        global_qkv_bias,
+        visual_qkv_weight,
+        visual_qkv_bias,
+        global_norm_weight,
+        global_norm_bias,
+        visual_norm_weight,
+        visual_norm_bias,
+        use_layer_norm,
+        head_dim,
+        eps,
+        q_norm_weight,
+        q_norm_bias,
+        k_norm_weight,
+        k_norm_bias,
+        qk_use_layer_norm,
+        qk_eps,
+        qk_normalization,
+        rope,
+    )
+    return (q @ k.mT * (head_dim**-0.5)).softmax(dim=-1)
+
+
+@torch.no_grad()
+@torch.compile(fullgraph=True)
 def attention_weights_q_kv_packed(
     # fmt: off
     q: Tensor,
@@ -389,12 +576,22 @@ class SelfAttention(nn.Module):
         dtype: torch.dtype | None = None,
         norm_type: NormType = "rmsnorm",
         qk_normalization: bool = False,
+        num_global_tokens: int = 0,
+        specialize_norms: bool = False,
+        specialize_qkv: bool = False,
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
+        if num_global_tokens < 0:
+            raise ValueError(f"num_global_tokens must be non-negative, got {num_global_tokens}")
+        if (specialize_norms or specialize_qkv) and num_global_tokens == 0:
+            raise ValueError("token specialization requires at least one global token")
+        self.num_global_tokens = num_global_tokens
         self.norm = make_norm(hidden_size, norm_type, eps=eps, **factory_kwargs)
+        self.visual_norm = deepcopy(self.norm) if specialize_norms else None
         self._use_layer_norm = is_layer_norm(norm_type)
         self.qkv_proj = nn.Linear(hidden_size, 3 * hidden_size, bias=bias, **factory_kwargs)
+        self.visual_qkv_proj = deepcopy(self.qkv_proj) if specialize_qkv else None
         self.out_proj = nn.Linear(hidden_size, hidden_size, bias=bias, **factory_kwargs)
         self.dropout = nn.Dropout(hidden_dropout)
         self.attention_dropout = nn.Dropout(attention_dropout)
@@ -408,6 +605,10 @@ class SelfAttention(nn.Module):
     def reset_parameters(self) -> None:
         init_linear(self.qkv_proj)
         init_linear(self.out_proj)
+        if self.visual_norm is not None:
+            self.visual_norm.load_state_dict(self.norm.state_dict())
+        if self.visual_qkv_proj is not None:
+            self.visual_qkv_proj.load_state_dict(self.qkv_proj.state_dict())
         self.apply_quantization(self.qkv_quantization_config, self.out_quantization_config)
 
     def apply_quantization(
@@ -416,11 +617,47 @@ class SelfAttention(nn.Module):
         """Apply quantization to the linear layers using torchao."""
         if qkv_quantization_config is not None:
             quantize_(self.qkv_proj, qkv_quantization_config)
+            if self.visual_qkv_proj is not None:
+                quantize_(self.visual_qkv_proj, qkv_quantization_config)
         if out_quantization_config is not None:
             quantize_(self.out_proj, out_quantization_config)
 
     def forward(self, x: Tensor, attn_mask: Tensor | None = None, rope: Tensor | None = None) -> Tensor:
         q_norm_weight, q_norm_bias, k_norm_weight, k_norm_bias, qk_eps = _get_qk_norm_inputs(self.q_norm, self.k_norm)
+        if self.visual_norm is not None or self.visual_qkv_proj is not None:
+            visual_norm = self.norm if self.visual_norm is None else self.visual_norm
+            visual_qkv_proj = self.qkv_proj if self.visual_qkv_proj is None else self.visual_qkv_proj
+            return attention_token_specialized_qkv_packed(
+                # fmt: off
+                x,
+                self.num_global_tokens,
+                self.qkv_proj.weight,
+                self.qkv_proj.bias,
+                visual_qkv_proj.weight,
+                visual_qkv_proj.bias,
+                self.norm.weight,
+                get_norm_bias(self.norm),
+                visual_norm.weight,
+                get_norm_bias(visual_norm),
+                self._use_layer_norm,
+                self._head_dim,
+                self.out_proj.weight,
+                self.out_proj.bias,
+                attn_mask,
+                self.norm.eps or 1e-5,
+                q_norm_weight,
+                q_norm_bias,
+                k_norm_weight,
+                k_norm_bias,
+                self._use_layer_norm,
+                qk_eps,
+                self._qk_normalization,
+                self.attention_dropout.p,
+                self.dropout.p,
+                self.training,
+                rope,
+                # fmt: on
+            )
         return attention_qkv_packed(
             # fmt: off
             x,
@@ -455,6 +692,34 @@ class SelfAttention(nn.Module):
 
     def forward_weights(self, x: Tensor, rope: Tensor | None = None) -> Tensor:
         q_norm_weight, q_norm_bias, k_norm_weight, k_norm_bias, qk_eps = _get_qk_norm_inputs(self.q_norm, self.k_norm)
+        if self.visual_norm is not None or self.visual_qkv_proj is not None:
+            visual_norm = self.norm if self.visual_norm is None else self.visual_norm
+            visual_qkv_proj = self.qkv_proj if self.visual_qkv_proj is None else self.visual_qkv_proj
+            return attention_weights_token_specialized_qkv_packed(
+                # fmt: off
+                x,
+                self.num_global_tokens,
+                self.qkv_proj.weight,
+                self.qkv_proj.bias,
+                visual_qkv_proj.weight,
+                visual_qkv_proj.bias,
+                self.norm.weight,
+                get_norm_bias(self.norm),
+                visual_norm.weight,
+                get_norm_bias(visual_norm),
+                self._use_layer_norm,
+                self._head_dim,
+                self.norm.eps or 1e-5,
+                q_norm_weight,
+                q_norm_bias,
+                k_norm_weight,
+                k_norm_bias,
+                self._use_layer_norm,
+                qk_eps,
+                self._qk_normalization,
+                rope,
+                # fmt: on
+            )
         return attention_weights_qkv_packed(
             # fmt: off
             x,
