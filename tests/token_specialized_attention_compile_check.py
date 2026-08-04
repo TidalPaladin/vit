@@ -16,6 +16,7 @@ NUM_GLOBAL_TOKENS = NUM_CLS_TOKENS + NUM_REGISTER_TOKENS
 NUM_VISUAL_TOKENS = (IMAGE_SIZE // PATCH_SIZE) ** 2
 NUM_MASKED_VISUAL_TOKENS = NUM_VISUAL_TOKENS // 2
 BATCH_SIZE = 2
+TRAINING_BATCH_SIZE = 512
 ATTENTION_DROPOUT = 0.1
 PROJECTION_DROPOUT = 0.1
 
@@ -25,13 +26,19 @@ def _assert_finite_gradient(tensor: torch.Tensor) -> None:
     assert torch.isfinite(tensor.grad).all()
 
 
-def _run_case(*, separate_norms: bool, separate_qkv: bool) -> None:
-    sequence_length = NUM_GLOBAL_TOKENS + NUM_MASKED_VISUAL_TOKENS
-    features = torch.randn(BATCH_SIZE, sequence_length, HIDDEN_SIZE, device="cuda", requires_grad=True)
+def _run_case(
+    *,
+    separate_norms: bool,
+    separate_qkv: bool,
+    batch_size: int = BATCH_SIZE,
+    num_global_tokens: int = NUM_GLOBAL_TOKENS,
+) -> None:
+    sequence_length = num_global_tokens + NUM_MASKED_VISUAL_TOKENS
+    features = torch.randn(batch_size, sequence_length, HIDDEN_SIZE, device="cuda", requires_grad=True)
     with torch.inference_mode():
         full_features = torch.randn(
-            BATCH_SIZE,
-            NUM_GLOBAL_TOKENS + NUM_VISUAL_TOKENS,
+            batch_size,
+            num_global_tokens + NUM_VISUAL_TOKENS,
             HIDDEN_SIZE,
             device="cuda",
         )
@@ -50,7 +57,7 @@ def _run_case(*, separate_norms: bool, separate_qkv: bool) -> None:
         full_rope = torch.randn(2, NUM_VISUAL_TOKENS, head_size, device="cuda")
     masked_rope = torch.randn(
         2,
-        BATCH_SIZE,
+        batch_size,
         1,
         NUM_MASKED_VISUAL_TOKENS,
         head_size,
@@ -60,7 +67,7 @@ def _run_case(*, separate_norms: bool, separate_qkv: bool) -> None:
     def run_attention(input_features: torch.Tensor, rope: torch.Tensor, *, training: bool) -> torch.Tensor:
         return attention_token_specialized_qkv_packed(
             input_features,
-            NUM_GLOBAL_TOKENS,
+            num_global_tokens,
             global_qkv_weight,
             None,
             visual_qkv_weight,
@@ -116,8 +123,19 @@ def main() -> None:
     assert torch._dynamo.config.disable is False
     assert hasattr(attention_token_specialized_qkv_packed, "_torchdynamo_orig_callable")
     _run_case(separate_norms=True, separate_qkv=False)
+    torch._dynamo.reset()
     _run_case(separate_norms=False, separate_qkv=True)
+    torch._dynamo.reset()
     _run_case(separate_norms=True, separate_qkv=True)
+    torch._dynamo.reset()
+    _run_case(separate_norms=True, separate_qkv=True, batch_size=TRAINING_BATCH_SIZE)
+    torch._dynamo.reset()
+    _run_case(
+        separate_norms=True,
+        separate_qkv=True,
+        batch_size=TRAINING_BATCH_SIZE,
+        num_global_tokens=NUM_CLS_TOKENS,
+    )
 
 
 if __name__ == "__main__":

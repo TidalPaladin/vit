@@ -301,7 +301,7 @@ def attention_qkv_packed(
     return o
 
 
-@torch.compile(fullgraph=True)
+@torch.compile(fullgraph=True, dynamic=False)
 def attention_token_specialized_qkv_packed(
     # fmt: off
     x: Tensor,
