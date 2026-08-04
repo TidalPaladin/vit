@@ -1,4 +1,8 @@
+import os
+import subprocess
+import sys
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 import torch
@@ -17,6 +21,7 @@ NUM_GLOBAL_TOKENS = NUM_CLS_TOKENS + NUM_REGISTER_TOKENS
 DEPTH = 3
 QKV_SPECIALIZATION_BLOCKS = 1
 TEST_PROJECTION_STD = 0.02
+COMPILE_TEST_TIMEOUT_SECONDS = 120
 
 
 def _config(**overrides: object) -> ViTConfig:
@@ -130,3 +135,18 @@ def test_attention_weight_tracing_supports_specialized_paths() -> None:
 
     assert tuple(weights) == tuple(f"layer_{index}" for index in range(DEPTH))
     assert weights["layer_0"].shape[:3] == (2, NUM_HEADS, NUM_GLOBAL_TOKENS + 4)
+
+
+@pytest.mark.compile
+@pytest.mark.cuda
+def test_specialized_attention_backward_compiles_for_masked_sequence() -> None:
+    environment = os.environ.copy()
+    environment.pop("TORCHDYNAMO_DISABLE", None)
+    check_script = Path(__file__).with_name("token_specialized_attention_compile_check.py")
+
+    subprocess.run(
+        [sys.executable, str(check_script)],
+        check=True,
+        env=environment,
+        timeout=COMPILE_TEST_TIMEOUT_SECONDS,
+    )
