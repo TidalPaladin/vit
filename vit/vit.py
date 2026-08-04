@@ -76,6 +76,12 @@ class ViTConfig:
     for the default AdaLN-Zero initialization. Set `adaln_gate_init=1.0` when
     converting a pretrained unconditioned MLP stack into a conditioned one so the
     loaded MLP path is preserved at initialization.
+
+    Set `specialize_global_token_norms=True` to give the CLS/register prefix and
+    visual tokens independent pre-attention and pre-MLP norms. Configured LayerScale
+    parameters are separated with them. Set `specialize_global_token_qkv_blocks` to
+    the number of leading blocks that also receive independent QKV projections. Both
+    options are disabled by default, preserving the shared-token-path architecture.
     """
 
     # Inputs
@@ -96,8 +102,6 @@ class ViTConfig:
     drop_path_rate: float = 0.0
     num_register_tokens: int = 0
     num_cls_tokens: int = 0
-    specialize_global_token_norms: bool = False
-    specialize_global_token_qkv_blocks: int = 0
     pos_enc: PositionEncoder = "rope"
     layer_scale: float | None = None
     glu_limit: float | None = None
@@ -129,6 +133,10 @@ class ViTConfig:
     # Heads
     heads: dict[str, HeadConfigType] = field(default_factory=dict)
 
+    # Global and visual token pathways
+    specialize_global_token_norms: bool = False
+    specialize_global_token_qkv_blocks: int = 0
+
     def __post_init__(self) -> None:
         """Validate configuration parameters."""
         if self.hidden_size % self.num_attention_heads != 0:
@@ -146,14 +154,23 @@ class ViTConfig:
             raise ValueError("specialize_global_token_qkv_blocks must be non-negative")
         if self.specialize_global_token_qkv_blocks > self.depth:
             raise ValueError("specialize_global_token_qkv_blocks cannot exceed depth")
-        specialization_enabled = self.specialize_global_token_norms or self.specialize_global_token_qkv_blocks > 0
-        if specialization_enabled and self.num_cls_tokens + self.num_register_tokens == 0:
+        if self.token_specialization_enabled and self.num_global_tokens == 0:
             raise ValueError("global-token specialization requires at least one CLS or register token")
         if self.specialize_global_token_norms and self.conditioning_size is not None:
             raise ValueError("global-token normalization specialization is incompatible with conditioned MLPs")
         if self.glu_max_autotune_gemm and not self.activation.endswith("glu"):
             raise ValueError("glu_max_autotune_gemm requires a GLU activation")
         validate_adaln_gate_init(self.adaln_gate_init)
+
+    @property
+    def num_global_tokens(self) -> int:
+        """Return the CLS/register prefix length used by token specialization."""
+        return self.num_cls_tokens + self.num_register_tokens
+
+    @property
+    def token_specialization_enabled(self) -> bool:
+        """Return whether any global/visual token pathway is separated."""
+        return self.specialize_global_token_norms or self.specialize_global_token_qkv_blocks > 0
 
     def instantiate(self, device: torch.device | None = None) -> "ViT":
         return ViT(self, device=device)
@@ -338,12 +355,12 @@ class ViT(nn.Module):
 
         self.blocks = nn.ModuleList(
             [
-                self.create_encoder_layer(
+                self._create_encoder_block(
+                    block_index,
                     mlp_quantization_config,
                     qkv_quantization_config,
                     attn_quantization_config,
                     device,
-                    block_index=block_index,
                 )
                 for block_index in range(config.depth)
             ]
@@ -373,6 +390,30 @@ class ViT(nn.Module):
 
     def _resolve_factory_dtype(self, dtype: torch.dtype | None) -> torch.dtype:
         return self.config.dtype if dtype is None else dtype
+
+    def _create_encoder_block(
+        self,
+        block_index: int,
+        mlp_quantization_config: Any | None,
+        qkv_quantization_config: Any | None,
+        attn_quantization_config: Any | None,
+        device: torch.device | None,
+    ) -> TransformerEncoderLayer:
+        if self.config.token_specialization_enabled:
+            return self.create_encoder_layer(
+                mlp_quantization_config,
+                qkv_quantization_config,
+                attn_quantization_config,
+                device,
+                block_index=block_index,
+            )
+        # Keep the historical factory call unchanged for subclasses when the new feature is disabled.
+        return self.create_encoder_layer(
+            mlp_quantization_config,
+            qkv_quantization_config,
+            attn_quantization_config,
+            device,
+        )
 
     def create_encoder_layer(
         self,
@@ -407,7 +448,7 @@ class ViT(nn.Module):
             conditioning_size=self.config.conditioning_size,
             adaln_gate_init=self.config.adaln_gate_init,
             glu_max_autotune_gemm=self.config.glu_max_autotune_gemm,
-            num_global_tokens=self.config.num_cls_tokens + self.config.num_register_tokens,
+            num_global_tokens=self.config.num_global_tokens,
             specialize_global_token_norms=self.config.specialize_global_token_norms,
             specialize_global_token_qkv=block_index < self.config.specialize_global_token_qkv_blocks,
         )

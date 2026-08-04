@@ -19,9 +19,9 @@ class LayerScale(nn.Module):
         dim: int,
         init_value: float = 1e-5,
         inplace: bool = False,
-        num_global_tokens: int = 0,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
+        num_global_tokens: int = 0,
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
