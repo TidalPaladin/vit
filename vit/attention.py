@@ -301,6 +301,7 @@ def attention_qkv_packed(
     return o
 
 
+# Inductor's dynamic backward scheduler cannot reliably split a fixed global-token prefix at large batch sizes.
 @torch.compile(fullgraph=True, dynamic=False)
 def attention_token_specialized_qkv_packed(
     # fmt: off

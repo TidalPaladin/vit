@@ -15,10 +15,11 @@ NUM_REGISTER_TOKENS = 7
 NUM_GLOBAL_TOKENS = NUM_CLS_TOKENS + NUM_REGISTER_TOKENS
 NUM_VISUAL_TOKENS = (IMAGE_SIZE // PATCH_SIZE) ** 2
 NUM_MASKED_VISUAL_TOKENS = NUM_VISUAL_TOKENS // 2
-BATCH_SIZE = 2
+SMALL_BATCH_SIZE = 2
 TRAINING_BATCH_SIZE = 512
 ATTENTION_DROPOUT = 0.1
 PROJECTION_DROPOUT = 0.1
+RANDOM_SEED = 0
 
 
 def _assert_finite_gradient(tensor: torch.Tensor) -> None:
@@ -30,7 +31,7 @@ def _run_case(
     *,
     separate_norms: bool,
     separate_qkv: bool,
-    batch_size: int = BATCH_SIZE,
+    batch_size: int = SMALL_BATCH_SIZE,
     num_global_tokens: int = NUM_GLOBAL_TOKENS,
 ) -> None:
     sequence_length = num_global_tokens + NUM_MASKED_VISUAL_TOKENS
@@ -96,9 +97,14 @@ def _run_case(
         )
 
     with torch.inference_mode(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-        run_attention(full_features, full_rope, training=False)
+        full_output = run_attention(full_features, full_rope, training=False)
+    assert full_output.shape == full_features.shape
+    assert torch.isfinite(full_output).all()
+
     with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
         output = run_attention(features, masked_rope, training=True)
+    assert output.shape == features.shape
+    assert torch.isfinite(output).all()
     output.square().mean().backward()
 
     parameters = [
@@ -120,6 +126,7 @@ def _run_case(
 
 
 def main() -> None:
+    torch.manual_seed(RANDOM_SEED)
     assert torch._dynamo.config.disable is False
     assert hasattr(attention_token_specialized_qkv_packed, "_torchdynamo_orig_callable")
     _run_case(separate_norms=True, separate_qkv=False)

@@ -1,4 +1,4 @@
-.PHONY: audit-dependencies audit-workflows check check-distribution clean clean-env deploy init quality report-deprecations style test test-ci test-compile-cpu test-deprecations types
+.PHONY: audit-dependencies audit-workflows check check-distribution clean clean-env deploy init quality report-deprecations style test test-ci test-compile-cpu test-compile-cuda test-deprecations types
 
 PROJECT=vit
 QUALITY_DIRS=$(PROJECT) tests benchmark tools examples
@@ -121,6 +121,13 @@ test-compile-cpu: ## run CPU-only torch.compile tests with Dynamo enabled
 	$(PYTHON) -m pytest \
 		-rs \
 		-m "compile and not cuda" \
+		./tests/
+
+test-compile-cuda: ## run CUDA-only torch.compile tests with Dynamo enabled
+	export TORCHDYNAMO_DISABLE="0" && \
+	$(PYTHON) -m pytest \
+		-rs \
+		-m "compile and cuda" \
 		./tests/
 
 report-deprecations: ## report direct dependency yanks, inactivity, and Python conflicts

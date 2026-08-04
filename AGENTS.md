@@ -47,6 +47,7 @@ Use `uv` and Make targets to keep local and CI behavior aligned.
 - `make test`: run pytest with coverage on `vit/`.
 - `make test-ci`: run CI-equivalent tests (`not cuda and not compile`).
 - `make test-compile-cpu`: run CPU `torch.compile` tests with Dynamo enabled and CUDA hidden.
+- `make test-compile-cuda`: run CUDA `torch.compile` tests with Dynamo enabled.
 - `make test-deprecations`: run CPU tests with default deprecation warnings.
 - `make audit-workflows`: audit GitHub Actions with the locked strict `zizmor` configuration.
 - `make report-deprecations REPORT_DIR=<path>`: report yanked, inactive, and Python-incompatible direct pins.
@@ -79,7 +80,8 @@ Use `pytest` with `pytest-cov`, `pytest-mock`, and project fixtures in `tests/co
 - Prefer parametrized tests for shape/dtype/device combinations.
 - Use markers intentionally: `@pytest.mark.cuda` for GPU-required tests, `@pytest.mark.compile` for `torch.compile`.
 - Run `make quality`, `make types`, and `make test-ci` before opening a PR to match required CI.
-- Run `make test-compile-cpu` after changing compilation or activation-checkpointing behavior.
+- Run `make test-compile-cpu` after changing compilation or activation-checkpointing behavior. Also run
+  `make test-compile-cuda` when the changed path supports CUDA.
 
 ## Commit & Pull Request Guidelines
 Recent history follows imperative, sentence-style subjects (for example: `Add ...`, `Fix ...`, `Improve ...`), often
