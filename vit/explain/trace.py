@@ -9,7 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from vit.attention import _permute_and_fold_head, project_qkv_packed
+from vit.attention import _permute_and_fold_head, project_qkv_packed, project_token_specialized_qkv_packed
 from vit.norm import get_norm_bias
 from vit.patch_embed import PatchEmbed2d
 from vit.tokens import apply_mask
@@ -100,24 +100,49 @@ def eager_self_attention(attention, x: Tensor, rope: Tensor | None) -> tuple[Ten
     k_norm_weight = attention.k_norm.weight if attention.k_norm is not None else None
     k_norm_bias = get_norm_bias(attention.k_norm) if attention.k_norm is not None else None
     qk_eps = attention.q_norm.eps or 1e-5 if attention.q_norm is not None else 1e-5
-    q, k, value = project_qkv_packed(
-        x,
-        attention.qkv_proj.weight,
-        attention.qkv_proj.bias,
-        attention.norm.weight,
-        get_norm_bias(attention.norm),
-        attention._use_layer_norm,
-        attention._head_dim,
-        attention.norm.eps or 1e-5,
-        q_norm_weight,
-        q_norm_bias,
-        k_norm_weight,
-        k_norm_bias,
-        attention._use_layer_norm,
-        qk_eps,
-        attention._qk_normalization,
-        rope,
-    )
+    if attention.visual_norm is not None or attention.visual_qkv_proj is not None:
+        q, k, value = project_token_specialized_qkv_packed(
+            x,
+            attention.num_global_tokens,
+            attention.qkv_proj.weight,
+            attention.qkv_proj.bias,
+            attention.visual_qkv_proj.weight if attention.visual_qkv_proj is not None else None,
+            attention.visual_qkv_proj.bias if attention.visual_qkv_proj is not None else None,
+            attention.norm.weight,
+            get_norm_bias(attention.norm),
+            attention.visual_norm.weight if attention.visual_norm is not None else None,
+            get_norm_bias(attention.visual_norm) if attention.visual_norm is not None else None,
+            attention._use_layer_norm,
+            attention._head_dim,
+            attention.norm.eps or 1e-5,
+            q_norm_weight,
+            q_norm_bias,
+            k_norm_weight,
+            k_norm_bias,
+            attention._use_layer_norm,
+            qk_eps,
+            attention._qk_normalization,
+            rope,
+        )
+    else:
+        q, k, value = project_qkv_packed(
+            x,
+            attention.qkv_proj.weight,
+            attention.qkv_proj.bias,
+            attention.norm.weight,
+            get_norm_bias(attention.norm),
+            attention._use_layer_norm,
+            attention._head_dim,
+            attention.norm.eps or 1e-5,
+            q_norm_weight,
+            q_norm_bias,
+            k_norm_weight,
+            k_norm_bias,
+            attention._use_layer_norm,
+            qk_eps,
+            attention._qk_normalization,
+            rope,
+        )
     probabilities = (q @ k.mT * (attention._head_dim**-0.5)).softmax(dim=-1)
     if not probabilities.requires_grad:
         probabilities.requires_grad_()
