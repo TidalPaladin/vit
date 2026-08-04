@@ -16,6 +16,11 @@ Main flow is `Images -> PatchEmbed -> Transformer -> ViTFeatures -> Heads`.
 - CLS and register tokens are optional. Pooling and classification behavior remains explicit in heads.
 - Prefer config-driven construction via `ViTConfig.instantiate()` and `HeadConfig.instantiate()`.
 - Use `activation_checkpointing=True` in `ViTConfig` when trading latency for lower training memory.
+- Token specialization is disabled by default and does not change the `ViT.forward()` or `ViTFeatures` contracts.
+  When enabled, treat the leading CLS and register tokens as one global stream. Split the pre-attention and pre-MLP
+  norms, plus configured LayerScale parameters, in every encoder block. Split QKV only in the configured leading block
+  count. Clone each visual branch from its global branch so specialized and shared models are identical at
+  initialization. Keep attention, output projections, MLP projections, and the final output norm shared.
 
 ### Explainability architecture
 

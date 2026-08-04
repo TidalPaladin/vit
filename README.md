@@ -63,6 +63,29 @@ features = model(x)
 logits = model.heads["cls"](features.visual_tokens)  # B, 10
 ```
 
+### Global and visual token pathways
+
+By default, CLS, register, and visual tokens share every encoder parameter. Token specialization can give the
+CLS/register prefix and visual tokens separate normalization parameters, plus separate LayerScale parameters when
+LayerScale is configured. Attention still connects every token. A configurable number of leading blocks can also use
+separate QKV projections:
+
+```python
+config = ViTConfig(
+    # ... other parameters ...
+    depth=12,
+    num_cls_tokens=1,
+    num_register_tokens=7,
+    specialize_global_token_norms=True,
+    specialize_global_token_qkv_blocks=4,
+)
+model = config.instantiate()
+features = model(x)  # ViTFeatures, unchanged from the shared-path model
+```
+
+Both specialization options default to disabled. Specialized parameters are cloned from their shared counterparts at
+initialization, so enabling the feature does not change the initial function before the paths receive separate updates.
+
 ## CUDA GLU GEMM Autotuning
 
 Compiled GLU MLPs can opt into PyTorch Inductor GEMM autotuning when steady-state CUDA throughput is more important

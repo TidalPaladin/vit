@@ -94,6 +94,33 @@ def test_trace_matches_eval_forward_and_preserves_full_visual_layout() -> None:
     assert trace.layers[0].attention_probabilities.requires_grad
 
 
+def test_trace_matches_diverged_specialized_attention_and_retains_visual_gradients() -> None:
+    torch.manual_seed(37)
+    model = ViT(
+        make_tiny_config(
+            depth=1,
+            specialize_global_token_norms=True,
+            specialize_global_token_qkv_blocks=1,
+        )
+    ).eval()
+    attention = model.get_block(0).self_attention
+    assert attention.visual_norm is not None
+    assert attention.visual_qkv_proj is not None
+    with torch.no_grad():
+        attention.visual_norm.weight.mul_(2.0)
+        attention.visual_qkv_proj.weight.add_(0.5)
+        attention.out_proj.weight.normal_(std=0.1)
+    inputs = torch.randn(2, 3, 9, 10)
+
+    expected = model(inputs)
+    trace = ViTExplainer(model, output_fn).trace(inputs, config=TraceConfig(retain_gradients=True))
+
+    assert_close(trace.features.dense_features, expected.dense_features)
+    trace.features.dense_features.square().mean().backward()
+    assert attention.visual_norm.weight.grad is not None
+    assert attention.visual_qkv_proj.weight.grad is not None
+
+
 def test_trace_restores_model_and_existing_gradients() -> None:
     model = ViT(make_tiny_config()).train()
     inputs = torch.randn(1, 3, 9, 10, requires_grad=True)

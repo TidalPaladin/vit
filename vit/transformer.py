@@ -111,6 +111,7 @@ def _make_mlp(
     glu_max_autotune_gemm: bool,
     device: torch.device | None,
     dtype: torch.dtype | None,
+    num_global_tokens: int = 0,
 ) -> NormMLP:
     if conditioning_size is not None:
         return AdaNormMLP(
@@ -142,6 +143,7 @@ def _make_mlp(
         extra_bias=extra_bias,
         quantization_config=quantization_config,
         glu_max_autotune_gemm=glu_max_autotune_gemm,
+        num_global_tokens=num_global_tokens,
         device=device,
         dtype=dtype,
     )
@@ -192,9 +194,14 @@ class TransformerEncoderLayer(nn.Module):
         conditioning_size: int | None = None,
         adaln_gate_init: float = 0.0,
         glu_max_autotune_gemm: bool = False,
+        num_global_tokens: int = 0,
+        specialize_global_token_norms: bool = False,
+        specialize_global_token_qkv: bool = False,
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
+        if specialize_global_token_norms and conditioning_size is not None:
+            raise ValueError("global-token normalization specialization is incompatible with conditioned MLPs")
         self.drop_path_rate = drop_path_rate
         self.self_attention = SelfAttention(
             hidden_size=hidden_size,
@@ -207,6 +214,9 @@ class TransformerEncoderLayer(nn.Module):
             qkv_quantization_config=None,
             out_quantization_config=None,
             qk_normalization=qk_normalization,
+            num_global_tokens=num_global_tokens,
+            specialize_norms=specialize_global_token_norms,
+            specialize_qkv=specialize_global_token_qkv,
             **factory_kwargs,
         )
         self.mlp = _make_mlp(
@@ -223,16 +233,29 @@ class TransformerEncoderLayer(nn.Module):
             conditioning_size=conditioning_size,
             adaln_gate_init=adaln_gate_init,
             glu_max_autotune_gemm=glu_max_autotune_gemm,
+            num_global_tokens=num_global_tokens if specialize_global_token_norms else 0,
             device=device,
             dtype=dtype,
         )
         self.layer_scale_attn = (
-            LayerScale(hidden_size, layer_scale, inplace=True, **factory_kwargs)
+            LayerScale(
+                hidden_size,
+                layer_scale,
+                inplace=True,
+                num_global_tokens=num_global_tokens if specialize_global_token_norms else 0,
+                **factory_kwargs,
+            )
             if layer_scale is not None
             else nn.Identity()
         )
         self.layer_scale_mlp = (
-            LayerScale(hidden_size, layer_scale, inplace=True, **factory_kwargs)
+            LayerScale(
+                hidden_size,
+                layer_scale,
+                inplace=True,
+                num_global_tokens=num_global_tokens if specialize_global_token_norms else 0,
+                **factory_kwargs,
+            )
             if layer_scale is not None
             else nn.Identity()
         )

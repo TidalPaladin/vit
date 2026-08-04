@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -291,10 +292,15 @@ class NormMLP(nn.Module):
         dtype: torch.dtype | None = None,
         norm_type: NormType = "rmsnorm",
         glu_max_autotune_gemm: bool = False,
+        num_global_tokens: int = 0,
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
+        if num_global_tokens < 0:
+            raise ValueError(f"num_global_tokens must be non-negative, got {num_global_tokens}")
+        self.num_global_tokens = num_global_tokens
         self.norm = make_norm(hidden_size, norm_type, eps=eps, **factory_kwargs)
+        self.visual_norm = deepcopy(self.norm) if num_global_tokens > 0 else None
         self._use_layer_norm = is_layer_norm(norm_type)
         if activation.endswith("glu"):
             self._is_glu = True
@@ -329,6 +335,40 @@ class NormMLP(nn.Module):
         quantize_(self.fc1, quantization_config)
         quantize_(self.fc2, quantization_config)
 
+    def _normalize_input(
+        self,
+        x: Tensor,
+        norm_scale_delta: Tensor | None,
+        norm_shift: Tensor | None,
+    ) -> Tensor:
+        if self.visual_norm is None:
+            return apply_norm(
+                x,
+                self.norm.weight,
+                get_norm_bias(self.norm),
+                self.norm.eps or 1e-5,
+                use_layer_norm=self._use_layer_norm,
+                scale_delta=norm_scale_delta,
+                shift=norm_shift,
+            )
+        if norm_scale_delta is not None or norm_shift is not None:
+            raise ValueError("token-specialized normalization does not support adaptive norm modulation")
+        global_features = apply_norm(
+            x[:, : self.num_global_tokens],
+            self.norm.weight,
+            get_norm_bias(self.norm),
+            self.norm.eps or 1e-5,
+            use_layer_norm=self._use_layer_norm,
+        )
+        visual_features = apply_norm(
+            x[:, self.num_global_tokens :],
+            self.visual_norm.weight,
+            get_norm_bias(self.visual_norm),
+            self.visual_norm.eps or 1e-5,
+            use_layer_norm=self._use_layer_norm,
+        )
+        return torch.cat((global_features, visual_features), dim=1)
+
     def _forward_with_intermediates(
         self,
         x: Tensor,
@@ -338,15 +378,7 @@ class NormMLP(nn.Module):
         output_gate: Tensor | None = None,
     ) -> _MLPIntermediates:
         """Run the eager MLP path and return graph-connected intermediates."""
-        normalized_input = apply_norm(
-            x,
-            self.norm.weight,
-            get_norm_bias(self.norm),
-            self.norm.eps or 1e-5,
-            use_layer_norm=self._use_layer_norm,
-            scale_delta=norm_scale_delta,
-            shift=norm_shift,
-        )
+        normalized_input = self._normalize_input(x, norm_scale_delta, norm_shift)
         fc1_output = F.linear(normalized_input, self.fc1.weight, self.fc1.bias)
         linear_branch: Tensor | None = None
         gate_branch: Tensor | None = None
@@ -385,6 +417,14 @@ class NormMLP(nn.Module):
         norm_shift: Tensor | None = None,
         output_gate: Tensor | None = None,
     ) -> Tensor:
+        norm_weight: Tensor | None = self.norm.weight
+        norm_bias: Tensor | None = get_norm_bias(self.norm)
+        if self.visual_norm is not None:
+            x = self._normalize_input(x, norm_scale_delta, norm_shift)
+            norm_weight = None
+            norm_bias = None
+            norm_scale_delta = None
+            norm_shift = None
         if self._is_glu:
             glu_forward = norm_mlp_glu
             if (
@@ -400,8 +440,8 @@ class NormMLP(nn.Module):
                 self.fc1.bias,
                 self.fc2.weight,
                 self.fc2.bias,
-                self.norm.weight,
-                get_norm_bias(self.norm),
+                norm_weight,
+                norm_bias,
                 self._use_layer_norm,
                 self.activation,
                 self.norm.eps or 1e-5,
@@ -422,8 +462,8 @@ class NormMLP(nn.Module):
                 self.fc1.bias,
                 self.fc2.weight,
                 self.fc2.bias,
-                self.norm.weight,
-                get_norm_bias(self.norm),
+                norm_weight,
+                norm_bias,
                 self._use_layer_norm,
                 self.activation,
                 self.norm.eps or 1e-5,
