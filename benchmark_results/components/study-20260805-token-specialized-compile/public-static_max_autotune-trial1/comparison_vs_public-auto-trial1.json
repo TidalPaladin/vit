@@ -1,0 +1,26 @@
+{
+  "baseline": "public-auto-trial1",
+  "candidate": "public-static_max_autotune-trial1",
+  "comparisons": [
+    {
+      "baseline_value": 3.988375376458421,
+      "candidate_value": 3.891360040547119,
+      "case_id": "token_specialized_attention|default|forward_backward|b512s40d384h12ffn1536g8",
+      "delta_abs": -0.09701533591130174,
+      "delta_pct": -2.4324524838845276,
+      "is_regression": false,
+      "metric": "mean_ms"
+    }
+  ],
+  "summary": {
+    "baseline_cases": 1,
+    "candidate_cases": 1,
+    "compared_cases": 1,
+    "metric": "mean_ms",
+    "missing_in_baseline": 0,
+    "missing_in_candidate": 0,
+    "noise_floor_pct": 1.0,
+    "regression_threshold_pct": 5.0,
+    "regressions": 0
+  }
+}

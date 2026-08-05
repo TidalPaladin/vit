@@ -14,20 +14,27 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from itertools import product
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast, get_args
 
 import torch
 from torch import Tensor
 
-from vit.attention import SelfAttention
+from vit.attention import (
+    SelfAttention,
+    TokenSpecializedAttentionCompileMode,
+    _attention_token_specialized_qkv_packed_impl,
+)
 from vit.drop_path import drop_path
 from vit.fused import NormMLP
 from vit.layer_scale import LayerScale
-from vit.norm import NORM_TYPE_CHOICES, NormType
+from vit.norm import NORM_TYPE_CHOICES, NormType, get_norm_bias
 
 
-ComponentKind = Literal["mlp", "self_attention", "layer_scale_residual", "drop_path_residual"]
+ComponentKind = Literal[
+    "mlp", "self_attention", "token_specialized_attention", "layer_scale_residual", "drop_path_residual"
+]
 PassMode = Literal["forward", "backward", "forward_backward"]
+AttentionCompileMode = Literal["auto", "dynamic", "static", "static_max_autotune", "eager"]
 ComparisonMetric = Literal["mean_ms", "median_ms", "p95_ms", "std_ms", "memory_mb"]
 
 
@@ -35,6 +42,8 @@ DEFAULT_COMPONENTS: tuple[ComponentKind, ...] = ("mlp", "self_attention")
 DEFAULT_PASS_MODES: tuple[PassMode, ...] = ("forward",)
 DEFAULT_FFN_MULTS: tuple[int, ...] = (4,)
 DEFAULT_PRESETS: tuple[str, ...] = ("default",)
+DEFAULT_NUM_GLOBAL_TOKENS = 8
+DEFAULT_ATTENTION_COMPILE_MODE: AttentionCompileMode = "auto"
 DEFAULT_SHAPE_TIERS: tuple[tuple[int, int, int, int], ...] = (
     (8, 64, 256, 4),
     (4, 256, 512, 8),
@@ -98,14 +107,19 @@ class ComponentBenchmarkCase:
     bias: bool
     eps: float
     norm_type: NormType
+    num_global_tokens: int
+    attention_compile_mode: AttentionCompileMode
 
     @property
     def case_id(self) -> str:
-        return (
+        case_id = (
             f"{self.component}|{self.preset}|{self.pass_mode}|"
             f"b{self.batch_size}s{self.seq_len}d{self.hidden_size}"
             f"h{self.num_heads}ffn{self.ffn_hidden_size}"
         )
+        if self.component == "token_specialized_attention":
+            return f"{case_id}g{self.num_global_tokens}"
+        return case_id
 
 
 @dataclass(frozen=True)
@@ -271,11 +285,17 @@ def build_component_benchmark_cases(
     bias: bool | None = None,
     eps: float | None = None,
     norm_type: NormType = "rmsnorm",
+    num_global_tokens: int = DEFAULT_NUM_GLOBAL_TOKENS,
+    attention_compile_mode: AttentionCompileMode = DEFAULT_ATTENTION_COMPILE_MODE,
 ) -> list[ComponentBenchmarkCase]:
     """Generate benchmark cases from sweep configuration and presets."""
     _validate_sweeps(batch_sizes, seq_lens, hidden_sizes, num_heads, ffn_mults)
     if norm_type not in NORM_TYPE_CHOICES:
         raise ValueError(f"Unknown norm_type '{norm_type}'. Available norm types: {', '.join(NORM_TYPE_CHOICES)}")
+    if num_global_tokens <= 0:
+        raise ValueError(f"num_global_tokens must be positive, got {num_global_tokens}")
+    if attention_compile_mode not in {*get_args(TokenSpecializedAttentionCompileMode), "eager"}:
+        raise ValueError(f"Unsupported attention_compile_mode: {attention_compile_mode}")
 
     for preset in presets:
         if preset not in PRESET_CONFIGS:
@@ -318,9 +338,16 @@ def build_component_benchmark_cases(
                 "bias": resolved_bias,
                 "eps": resolved_eps,
                 "norm_type": norm_type,
+                "num_global_tokens": num_global_tokens,
+                "attention_compile_mode": attention_compile_mode,
             }
 
-            if component == "self_attention":
+            if component in {"self_attention", "token_specialized_attention"}:
+                if component == "token_specialized_attention" and seq_len <= num_global_tokens:
+                    raise ValueError(
+                        "token-specialized attention seq_len must exceed num_global_tokens, "
+                        f"got {seq_len} and {num_global_tokens}"
+                    )
                 candidate_heads = _resolve_head_candidates(hidden_size, num_heads)
                 for head_count in candidate_heads:
                     if hidden_size % head_count != 0:
@@ -387,6 +414,8 @@ def run_component_benchmark_suite(
     layer_scale_init: float | None = None,
     bias: bool | None = None,
     eps: float | None = None,
+    num_global_tokens: int = DEFAULT_NUM_GLOBAL_TOKENS,
+    attention_compile_mode: AttentionCompileMode = DEFAULT_ATTENTION_COMPILE_MODE,
     num_warmup_iters: int = 10,
     min_samples: int = 30,
     min_measurement_seconds: float = 1.0,
@@ -416,6 +445,8 @@ def run_component_benchmark_suite(
         bias=bias,
         eps=eps,
         norm_type=norm_type,
+        num_global_tokens=num_global_tokens,
+        attention_compile_mode=attention_compile_mode,
     )
 
     return [
@@ -716,6 +747,8 @@ def _build_target(
         return _build_mlp_target(case, device, param_dtype, input_dtype, autocast_dtype)
     if case.component == "self_attention":
         return _build_self_attention_target(case, device, param_dtype, input_dtype, autocast_dtype)
+    if case.component == "token_specialized_attention":
+        return _build_token_specialized_attention_target(case, device, param_dtype, input_dtype, autocast_dtype)
     if case.component == "layer_scale_residual":
         return _build_layer_scale_target(case, device, param_dtype, input_dtype)
     if case.component == "drop_path_residual":
@@ -788,6 +821,101 @@ def _build_self_attention_target(
 
     def forward() -> Tensor:
         return _call_with_autocast(lambda: module(x, rope=rope), device=device, autocast_dtype=autocast_dtype)
+
+    def zero_grad() -> None:
+        module.zero_grad(set_to_none=True)
+
+    return _BenchmarkTarget(forward=forward, zero_grad=zero_grad)
+
+
+def _build_token_specialized_attention_target(
+    case: ComponentBenchmarkCase,
+    device: torch.device,
+    param_dtype: torch.dtype,
+    input_dtype: torch.dtype,
+    autocast_dtype: torch.dtype | None,
+) -> _BenchmarkTarget:
+    if case.hidden_size % case.num_heads != 0:
+        raise ValueError(
+            f"Invalid attention case: hidden_size={case.hidden_size} must be divisible by num_heads={case.num_heads}"
+        )
+
+    production_compile_mode = cast(
+        TokenSpecializedAttentionCompileMode,
+        "auto" if case.attention_compile_mode == "eager" else case.attention_compile_mode,
+    )
+    module = SelfAttention(
+        hidden_size=case.hidden_size,
+        num_attention_heads=case.num_heads,
+        hidden_dropout=case.hidden_dropout,
+        attention_dropout=case.attention_dropout,
+        bias=case.bias,
+        norm_type=case.norm_type,
+        eps=case.eps,
+        num_global_tokens=case.num_global_tokens,
+        specialize_norms=True,
+        specialize_qkv=True,
+        token_specialized_attention_compile_mode=production_compile_mode,
+        device=device,
+        dtype=param_dtype,
+    )
+    module.train(case.train_mode or case.pass_mode != "forward")
+    assert module.visual_norm is not None
+    assert module.visual_qkv_proj is not None
+
+    x = torch.randn(case.batch_size, case.seq_len, case.hidden_size, device=device, dtype=input_dtype)
+    rope = None
+    if case.use_rope:
+        rope = _create_rope(case.seq_len, module._head_dim, device, input_dtype)
+
+    attention = _attention_token_specialized_qkv_packed_impl if case.attention_compile_mode == "eager" else None
+    attention_args = (
+        x,
+        case.num_global_tokens,
+        module.qkv_proj.weight,
+        module.qkv_proj.bias,
+        module.visual_qkv_proj.weight,
+        module.visual_qkv_proj.bias,
+        module.norm.weight,
+        get_norm_bias(module.norm),
+        module.visual_norm.weight,
+        get_norm_bias(module.visual_norm),
+        module._use_layer_norm,
+        module._head_dim,
+        module.out_proj.weight,
+        module.out_proj.bias,
+        None,
+        module.norm.eps or 1e-5,
+        None,
+        None,
+        None,
+        None,
+        module._use_layer_norm,
+        1e-5,
+        False,
+        module.attention_dropout.p,
+        module.dropout.p,
+        module.training,
+        rope,
+    )
+
+    if attention is None:
+
+        def forward() -> Tensor:
+            return _call_with_autocast(
+                lambda: module(x, rope=rope),
+                device=device,
+                autocast_dtype=autocast_dtype,
+            )
+
+    else:
+
+        def forward() -> Tensor:
+            return _call_with_autocast(
+                lambda: attention(*attention_args),
+                device=device,
+                autocast_dtype=autocast_dtype,
+            )
 
     def zero_grad() -> None:
         module.zero_grad(set_to_none=True)

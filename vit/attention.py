@@ -1,5 +1,6 @@
+from collections.abc import Callable, Sequence
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, get_args
 
 import torch
 import torch.nn as nn
@@ -10,6 +11,42 @@ from torchao.quantization import quantize_
 from .initialization import init_linear, trunc_normal_
 from .norm import NormModule, NormType, apply_norm, get_norm_bias, is_layer_norm, make_norm
 from .rope import apply_rope
+
+
+_STATIC_TOKEN_SPECIALIZED_ATTENTION_MIN_BATCH_SIZE = 512
+TokenSpecializedAttentionCompileMode = Literal["auto", "dynamic", "static", "static_max_autotune"]
+
+
+def _validate_token_specialized_attention_compile_policy(
+    compile_mode: TokenSpecializedAttentionCompileMode,
+    static_batch_sizes: Sequence[int] | None,
+    *,
+    specialization_enabled: bool,
+) -> tuple[int, ...] | None:
+    supported_modes = get_args(TokenSpecializedAttentionCompileMode)
+    if compile_mode not in supported_modes:
+        available_modes = ", ".join(supported_modes)
+        raise ValueError(
+            f"Unsupported token-specialized attention compile mode {compile_mode!r}. Expected one of: {available_modes}"
+        )
+
+    normalized_batch_sizes = tuple(static_batch_sizes) if static_batch_sizes is not None else None
+    if normalized_batch_sizes is not None:
+        if not normalized_batch_sizes:
+            raise ValueError("token-specialized attention static batch sizes cannot be empty")
+        if any(
+            not isinstance(batch_size, int) or isinstance(batch_size, bool) or batch_size <= 0
+            for batch_size in normalized_batch_sizes
+        ):
+            raise ValueError("token-specialized attention static batch sizes must contain positive integers")
+        if len(set(normalized_batch_sizes)) != len(normalized_batch_sizes):
+            raise ValueError("token-specialized attention static batch sizes must be unique")
+        if compile_mode == "dynamic":
+            raise ValueError("token-specialized attention static batch sizes cannot be used with dynamic mode")
+
+    if not specialization_enabled and (compile_mode != "auto" or normalized_batch_sizes is not None):
+        raise ValueError("token-specialized attention compile customization requires token specialization")
+    return normalized_batch_sizes
 
 
 # torch.compile has difficulty with einops.rearrange, so we use our own implementation
@@ -301,9 +338,7 @@ def attention_qkv_packed(
     return o
 
 
-# Inductor's dynamic backward scheduler cannot reliably split a fixed global-token prefix at large batch sizes.
-@torch.compile(fullgraph=True, dynamic=False)
-def attention_token_specialized_qkv_packed(
+def _attention_token_specialized_qkv_packed_impl(
     # fmt: off
     x: Tensor,
     num_global_tokens: int,
@@ -370,6 +405,59 @@ def attention_token_specialized_qkv_packed(
     output = _permute_and_fold_head(output)
     output = F.linear(output, w_out, b_out)
     return F.dropout(output, p=dropout, training=training, inplace=True)
+
+
+# Keep ordinary calls dynamic so valid shape changes do not exhaust the full-graph cache.
+attention_token_specialized_qkv_packed = torch.compile(fullgraph=True)(_attention_token_specialized_qkv_packed_impl)
+
+
+@torch.compile(fullgraph=True, dynamic=True)
+def _dynamic_token_specialized_attention(*args: Any) -> Tensor:
+    return _attention_token_specialized_qkv_packed_impl(*args)
+
+
+# Isolate the concrete-shape fallback needed by Inductor's large-batch backward scheduler.
+@torch.compile(fullgraph=True, dynamic=False)
+def _static_token_specialized_attention(*args: Any) -> Tensor:
+    return _attention_token_specialized_qkv_packed_impl(*args)
+
+
+@torch.compile(fullgraph=True, dynamic=False, mode="max-autotune-no-cudagraphs")
+def _static_max_autotune_token_specialized_attention(*args: Any) -> Tensor:
+    return _attention_token_specialized_qkv_packed_impl(*args)
+
+
+def _select_token_specialized_attention(
+    x: Tensor,
+    training: bool,
+    compile_mode: TokenSpecializedAttentionCompileMode = "auto",
+    static_batch_sizes: tuple[int, ...] | None = None,
+) -> Callable[..., Tensor]:
+    if torch.compiler.is_exporting():
+        return _attention_token_specialized_qkv_packed_impl
+    if compile_mode == "dynamic":
+        return _dynamic_token_specialized_attention
+    if compile_mode in {"static", "static_max_autotune"}:
+        if static_batch_sizes is not None and x.shape[0] not in static_batch_sizes:
+            allowed_batch_sizes = ", ".join(str(batch_size) for batch_size in static_batch_sizes)
+            raise ValueError(
+                f"Token-specialized attention batch size {x.shape[0]} is not in the allowed static batch sizes: "
+                f"{allowed_batch_sizes}"
+            )
+        if compile_mode == "static_max_autotune" and x.device.type == "cuda":
+            return _static_max_autotune_token_specialized_attention
+        return _static_token_specialized_attention
+    if compile_mode != "auto":
+        raise ValueError(f"Unsupported token-specialized attention compile mode: {compile_mode}")
+
+    use_static = training and torch.is_grad_enabled()
+    if static_batch_sizes is None:
+        use_static = use_static and x.shape[0] >= _STATIC_TOKEN_SPECIALIZED_ATTENTION_MIN_BATCH_SIZE
+    else:
+        use_static = use_static and x.shape[0] in static_batch_sizes
+    if use_static:
+        return _static_token_specialized_attention
+    return attention_token_specialized_qkv_packed
 
 
 @torch.compile(fullgraph=True)
@@ -602,6 +690,8 @@ class SelfAttention(nn.Module):
         num_global_tokens: int = 0,
         specialize_norms: bool = False,
         specialize_qkv: bool = False,
+        token_specialized_attention_compile_mode: TokenSpecializedAttentionCompileMode = "auto",
+        token_specialized_attention_static_batch_sizes: tuple[int, ...] | None = None,
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -609,7 +699,16 @@ class SelfAttention(nn.Module):
             raise ValueError(f"num_global_tokens must be non-negative, got {num_global_tokens}")
         if (specialize_norms or specialize_qkv) and num_global_tokens == 0:
             raise ValueError("token specialization requires at least one global token")
+        normalized_static_batch_sizes = _validate_token_specialized_attention_compile_policy(
+            token_specialized_attention_compile_mode,
+            token_specialized_attention_static_batch_sizes,
+            specialization_enabled=specialize_norms or specialize_qkv,
+        )
         self.num_global_tokens = num_global_tokens
+        self.token_specialized_attention_compile_mode: TokenSpecializedAttentionCompileMode = (
+            token_specialized_attention_compile_mode
+        )
+        self.token_specialized_attention_static_batch_sizes = normalized_static_batch_sizes
         self.norm = make_norm(hidden_size, norm_type, eps=eps, **factory_kwargs)
         self.visual_norm = deepcopy(self.norm) if specialize_norms else None
         self._use_layer_norm = is_layer_norm(norm_type)
@@ -648,7 +747,13 @@ class SelfAttention(nn.Module):
     def forward(self, x: Tensor, attn_mask: Tensor | None = None, rope: Tensor | None = None) -> Tensor:
         q_norm_weight, q_norm_bias, k_norm_weight, k_norm_bias, qk_eps = _get_qk_norm_inputs(self.q_norm, self.k_norm)
         if self.visual_norm is not None or self.visual_qkv_proj is not None:
-            return attention_token_specialized_qkv_packed(
+            attention = _select_token_specialized_attention(
+                x,
+                self.training,
+                self.token_specialized_attention_compile_mode,
+                self.token_specialized_attention_static_batch_sizes,
+            )
+            return attention(
                 # fmt: off
                 x,
                 self.num_global_tokens,

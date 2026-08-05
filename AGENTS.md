@@ -12,7 +12,7 @@ Build metadata and tooling configuration are in `pyproject.toml`, `Makefile`, an
 ## Architecture & Core Patterns
 Main flow is `Images -> PatchEmbed -> Transformer -> ViTFeatures -> Heads`.
 
-- `ViT.forward()` returns a `ViTFeatures` dataclass (not a raw tensor).
+- `ViT.forward()` returns a `ViTFeatures` container (not a raw tensor).
 - CLS and register tokens are optional. Pooling and classification behavior remains explicit in heads.
 - Prefer config-driven construction via `ViTConfig.instantiate()` and `HeadConfig.instantiate()`.
 - Use `activation_checkpointing=True` in `ViTConfig` when trading latency for lower training memory.
@@ -21,6 +21,10 @@ Main flow is `Images -> PatchEmbed -> Transformer -> ViTFeatures -> Heads`.
   norms, plus configured LayerScale parameters, in every encoder block. Split QKV only in the configured leading block
   count. Clone each visual branch from its global branch so specialized and shared models are identical at
   initialization. Keep attention, output projections, MLP projections, and the final output norm shared.
+  Keep `auto` on the adapting compiled path except for its isolated large-batch or configured-batch training fallback.
+  Keep forced dynamic, static, and static-max-autotune wrappers on distinct code objects so their compiler caches do
+  not overlap. During `torch.export`, inline the functional attention graph and preserve `ViTFeatures` as a pytree;
+  runtime compile modes and static batch allowlists do not become exported-program constraints.
 
 ### Explainability architecture
 

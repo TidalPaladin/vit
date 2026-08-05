@@ -3,7 +3,7 @@
 import importlib
 from importlib.metadata import PackageNotFoundError, version
 
-from .attention import AttentivePool
+from .attention import AttentivePool, TokenSpecializedAttentionCompileMode
 from .head import (
     AttentivePoolHead,
     AttentivePoolHeadConfig,
@@ -42,6 +42,7 @@ __all__ = [
     "ViT",
     "ViTConfig",
     "ViTFeatures",
+    "TokenSpecializedAttentionCompileMode",
     "AttentivePool",
     "AttentivePoolHead",
     "AttentivePoolHeadConfig",

@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from .attention import CrossAttention, SelfAttention
+from .attention import CrossAttention, SelfAttention, TokenSpecializedAttentionCompileMode
 from .fused import AdaNormMLP, NormMLP, _MLPIntermediates
 from .initialization import zero_bias_if_present
 from .layer_scale import LayerScale
@@ -197,6 +197,8 @@ class TransformerEncoderLayer(nn.Module):
         num_global_tokens: int = 0,
         specialize_global_token_norms: bool = False,
         specialize_global_token_qkv: bool = False,
+        token_specialized_attention_compile_mode: TokenSpecializedAttentionCompileMode = "auto",
+        token_specialized_attention_static_batch_sizes: tuple[int, ...] | None = None,
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -217,6 +219,8 @@ class TransformerEncoderLayer(nn.Module):
             num_global_tokens=num_global_tokens,
             specialize_norms=specialize_global_token_norms,
             specialize_qkv=specialize_global_token_qkv,
+            token_specialized_attention_compile_mode=token_specialized_attention_compile_mode,
+            token_specialized_attention_static_batch_sizes=token_specialized_attention_static_batch_sizes,
             **factory_kwargs,
         )
         self.mlp = _make_mlp(

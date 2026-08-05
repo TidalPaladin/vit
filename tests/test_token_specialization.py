@@ -3,14 +3,23 @@ import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 import pytest
 import torch
 from torch.testing import assert_close
 from torchao.quantization import Int8Tensor, Int8WeightOnlyConfig
 
-from vit import ViT, ViTConfig, ViTFeatures
+from vit import TokenSpecializedAttentionCompileMode, ViT, ViTConfig, ViTFeatures
+from vit.attention import (
+    _STATIC_TOKEN_SPECIALIZED_ATTENTION_MIN_BATCH_SIZE,
+    _attention_token_specialized_qkv_packed_impl,
+    _dynamic_token_specialized_attention,
+    _select_token_specialized_attention,
+    _static_max_autotune_token_specialized_attention,
+    _static_token_specialized_attention,
+    attention_token_specialized_qkv_packed,
+)
 from vit.layer_scale import LayerScale
 from vit.transformer import TransformerEncoderLayer
 
@@ -23,13 +32,15 @@ NUM_GLOBAL_TOKENS = NUM_CLS_TOKENS + NUM_REGISTER_TOKENS
 DEPTH = 3
 QKV_SPECIALIZATION_BLOCKS = 1
 TEST_PROJECTION_STD = 0.02
-COMPILE_TEST_TIMEOUT_SECONDS = 240
+COMPILE_TEST_TIMEOUT_SECONDS = 600
 TORCHAO_QUANTIZATION_CONFIG_VERSION = 2
 LEGACY_DROPOUT = 0.1
 LAYER_SCALE_INIT = 1e-5
 LEGACY_POSITION_ENCODING = "fourier"
 MODEL_INITIALIZATION_SEED = 7
 RESIDUAL_INITIALIZATION_SEED = 11
+CUSTOM_STATIC_BATCH_SIZES = (2, 4)
+COMPILE_MODES = ("auto", "dynamic", "static", "static_max_autotune")
 
 
 def _config(**overrides: object) -> ViTConfig:
@@ -77,8 +88,64 @@ def test_specialization_is_disabled_by_default() -> None:
     assert config.specialize_global_token_norms is False
     assert config.specialize_global_token_qkv_blocks == 0
     assert config.token_specialization_enabled is False
+    assert config.token_specialized_attention_compile_mode == "auto"
+    assert config.token_specialized_attention_static_batch_sizes is None
     assert config.num_global_tokens == NUM_GLOBAL_TOKENS
     assert all("visual_" not in name for name in model.state_dict())
+
+
+def test_compile_mode_type_is_exported_from_public_api() -> None:
+    assert get_args(TokenSpecializedAttentionCompileMode) == COMPILE_MODES
+
+
+@pytest.mark.parametrize(
+    ("compile_mode", "static_batch_sizes"),
+    [
+        ("dynamic", None),
+        ("static", None),
+        ("static_max_autotune", None),
+        ("auto", CUSTOM_STATIC_BATCH_SIZES),
+    ],
+)
+def test_compile_customization_requires_token_specialization(
+    compile_mode: str,
+    static_batch_sizes: tuple[int, ...] | None,
+) -> None:
+    with pytest.raises(ValueError, match="requires token specialization"):
+        _config(
+            token_specialized_attention_compile_mode=compile_mode,
+            token_specialized_attention_static_batch_sizes=static_batch_sizes,
+        )
+
+
+def test_compile_mode_must_be_supported() -> None:
+    with pytest.raises(ValueError, match="Unsupported token-specialized attention compile mode"):
+        _config(
+            specialize_global_token_norms=True,
+            token_specialized_attention_compile_mode="unsupported",
+        )
+
+
+@pytest.mark.parametrize(
+    "static_batch_sizes",
+    [(), (0,), (-1,), (2, 2)],
+    ids=["empty", "zero", "negative", "duplicate"],
+)
+def test_static_batch_sizes_must_be_nonempty_positive_and_unique(static_batch_sizes: tuple[int, ...]) -> None:
+    with pytest.raises(ValueError, match="static batch sizes"):
+        _config(
+            specialize_global_token_norms=True,
+            token_specialized_attention_static_batch_sizes=static_batch_sizes,
+        )
+
+
+def test_dynamic_mode_rejects_static_batch_sizes() -> None:
+    with pytest.raises(ValueError, match="cannot be used with dynamic"):
+        _config(
+            specialize_global_token_norms=True,
+            token_specialized_attention_compile_mode="dynamic",
+            token_specialized_attention_static_batch_sizes=CUSTOM_STATIC_BATCH_SIZES,
+        )
 
 
 def test_default_config_preserves_encoder_factory_call_contract(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -173,11 +240,19 @@ def test_qkv_specialization_depth_must_fit_backbone(qkv_blocks: int) -> None:
 
 
 def test_specialization_config_round_trips_through_yaml() -> None:
-    restored = ViTConfig.from_yaml(_specialized_config().to_yaml())
+    configured = replace(
+        _specialized_config(),
+        token_specialized_attention_compile_mode="static",
+        token_specialized_attention_static_batch_sizes=list(CUSTOM_STATIC_BATCH_SIZES),  # type: ignore[arg-type]
+    )
+
+    restored = ViTConfig.from_yaml(configured.to_yaml())
 
     assert restored.specialize_global_token_norms is True
     assert restored.specialize_global_token_qkv_blocks == QKV_SPECIALIZATION_BLOCKS
     assert restored.token_specialization_enabled is True
+    assert restored.token_specialized_attention_compile_mode == "static"
+    assert restored.token_specialized_attention_static_batch_sizes == CUSTOM_STATIC_BATCH_SIZES
 
 
 def test_norm_and_qkv_specialization_can_be_configured_independently() -> None:
@@ -194,6 +269,40 @@ def test_norm_and_qkv_specialization_can_be_configured_independently() -> None:
         assert block.self_attention.visual_norm is None
         assert (block.self_attention.visual_qkv_proj is not None) is (block_index < QKV_SPECIALIZATION_BLOCKS)
         assert block.mlp.visual_norm is None
+
+
+def test_compile_policy_is_forwarded_to_specialized_encoder_attention() -> None:
+    config = replace(
+        _specialized_config(),
+        token_specialized_attention_compile_mode="static",
+        token_specialized_attention_static_batch_sizes=CUSTOM_STATIC_BATCH_SIZES,
+    )
+
+    model = ViT(config)
+    factory_layer = model.create_encoder_layer()
+
+    for block in [*model.blocks, factory_layer]:
+        assert isinstance(block, TransformerEncoderLayer)
+        assert block.self_attention.token_specialized_attention_compile_mode == "static"
+        assert block.self_attention.token_specialized_attention_static_batch_sizes == CUSTOM_STATIC_BATCH_SIZES
+
+
+def test_compile_policy_only_applies_to_blocks_with_specialized_attention() -> None:
+    config = _config(
+        specialize_global_token_qkv_blocks=QKV_SPECIALIZATION_BLOCKS,
+        token_specialized_attention_compile_mode="static",
+        token_specialized_attention_static_batch_sizes=CUSTOM_STATIC_BATCH_SIZES,
+    )
+
+    model = ViT(config)
+
+    first_attention = model.get_block(0).self_attention
+    assert first_attention.token_specialized_attention_compile_mode == "static"
+    assert first_attention.token_specialized_attention_static_batch_sizes == CUSTOM_STATIC_BATCH_SIZES
+    for block_index in range(QKV_SPECIALIZATION_BLOCKS, DEPTH):
+        shared_attention = model.get_block(block_index).self_attention
+        assert shared_attention.token_specialized_attention_compile_mode == "auto"
+        assert shared_attention.token_specialized_attention_static_batch_sizes is None
 
 
 def test_norm_specialization_rejects_conditioned_mlp() -> None:
@@ -335,12 +444,169 @@ def test_attention_weight_tracing_supports_specialized_paths() -> None:
     assert weights["layer_0"].shape[:3] == (2, NUM_HEADS, NUM_GLOBAL_TOKENS + 4)
 
 
+def test_auto_mode_uses_isolated_static_attention_for_large_training_batches() -> None:
+    features = torch.empty(_STATIC_TOKEN_SPECIALIZED_ATTENTION_MIN_BATCH_SIZE, 1, HIDDEN_SIZE)
+
+    static_attention = _select_token_specialized_attention(features, training=True)
+
+    assert static_attention is not attention_token_specialized_qkv_packed
+    assert _select_token_specialized_attention(features[:-1], training=True) is attention_token_specialized_qkv_packed
+    assert _select_token_specialized_attention(features, training=False) is attention_token_specialized_qkv_packed
+    with torch.no_grad():
+        assert _select_token_specialized_attention(features, training=True) is attention_token_specialized_qkv_packed
+
+
+def test_auto_mode_static_batch_allowlist_replaces_default_threshold() -> None:
+    features = torch.empty(CUSTOM_STATIC_BATCH_SIZES[0], 1, HIDDEN_SIZE)
+
+    assert (
+        _select_token_specialized_attention(
+            features,
+            training=True,
+            compile_mode="auto",
+            static_batch_sizes=CUSTOM_STATIC_BATCH_SIZES,
+        )
+        is _static_token_specialized_attention
+    )
+    assert (
+        _select_token_specialized_attention(
+            features[:1],
+            training=True,
+            compile_mode="auto",
+            static_batch_sizes=CUSTOM_STATIC_BATCH_SIZES,
+        )
+        is attention_token_specialized_qkv_packed
+    )
+    with torch.no_grad():
+        assert (
+            _select_token_specialized_attention(
+                features,
+                training=True,
+                compile_mode="auto",
+                static_batch_sizes=CUSTOM_STATIC_BATCH_SIZES,
+            )
+            is attention_token_specialized_qkv_packed
+        )
+
+
+def test_forced_compile_modes_select_isolated_helpers_on_cpu() -> None:
+    features = torch.empty(CUSTOM_STATIC_BATCH_SIZES[0], 1, HIDDEN_SIZE)
+
+    assert (
+        _select_token_specialized_attention(features, training=False, compile_mode="dynamic")
+        is _dynamic_token_specialized_attention
+    )
+    assert (
+        _select_token_specialized_attention(features, training=False, compile_mode="static")
+        is _static_token_specialized_attention
+    )
+    assert (
+        _select_token_specialized_attention(features, training=False, compile_mode="static_max_autotune")
+        is _static_token_specialized_attention
+    )
+    assert len(
+        {
+            id(attention_token_specialized_qkv_packed),
+            id(_dynamic_token_specialized_attention),
+            id(_static_token_specialized_attention),
+            id(_static_max_autotune_token_specialized_attention),
+        }
+    ) == len(COMPILE_MODES)
+
+
+def test_forced_static_mode_rejects_unlisted_batch() -> None:
+    features = torch.empty(3, 1, HIDDEN_SIZE)
+
+    with pytest.raises(ValueError, match="batch size 3.*allowed static batch sizes.*2, 4"):
+        _select_token_specialized_attention(
+            features,
+            training=False,
+            compile_mode="static",
+            static_batch_sizes=CUSTOM_STATIC_BATCH_SIZES,
+        )
+
+
+def test_static_batch_allowlist_supports_stochastic_depth_subset_size() -> None:
+    input_batch_size = 8
+    drop_path_rate = 0.25
+    residual_batch_size = int(input_batch_size * (1.0 - drop_path_rate))
+    layer = TransformerEncoderLayer(
+        hidden_size=HIDDEN_SIZE,
+        ffn_hidden_size=HIDDEN_SIZE * 2,
+        num_attention_heads=NUM_HEADS,
+        hidden_dropout=0.0,
+        attention_dropout=0.0,
+        drop_path_rate=drop_path_rate,
+        num_global_tokens=NUM_GLOBAL_TOKENS,
+        specialize_global_token_norms=True,
+        token_specialized_attention_compile_mode="static",
+        token_specialized_attention_static_batch_sizes=(residual_batch_size,),
+    ).train()
+    features = torch.randn(input_batch_size, NUM_GLOBAL_TOKENS + 4, HIDDEN_SIZE)
+
+    output = layer(features)
+
+    assert output.shape == features.shape
+
+
+def test_export_bypasses_runtime_compile_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(torch.compiler, "is_exporting", lambda: True)
+    features = torch.empty(3, 1, HIDDEN_SIZE)
+
+    attention = _select_token_specialized_attention(
+        features,
+        training=False,
+        compile_mode="static",
+        static_batch_sizes=CUSTOM_STATIC_BATCH_SIZES,
+    )
+
+    assert attention is _attention_token_specialized_qkv_packed_impl
+
+
+@pytest.mark.cuda
+def test_static_max_autotune_uses_cuda_helper() -> None:
+    features = torch.empty(CUSTOM_STATIC_BATCH_SIZES[0], 1, HIDDEN_SIZE, device="cuda")
+
+    assert (
+        _select_token_specialized_attention(features, training=False, compile_mode="static_max_autotune")
+        is _static_max_autotune_token_specialized_attention
+    )
+
+
 @pytest.mark.compile
 @pytest.mark.cuda
 def test_specialized_attention_backward_compiles_for_masked_sequence() -> None:
     environment = os.environ.copy()
     environment.pop("TORCHDYNAMO_DISABLE", None)
     check_script = Path(__file__).with_name("token_specialized_attention_compile_check.py")
+
+    subprocess.run(
+        [sys.executable, str(check_script)],
+        check=True,
+        env=environment,
+        timeout=COMPILE_TEST_TIMEOUT_SECONDS,
+    )
+
+
+@pytest.mark.compile
+def test_specialized_attention_compiles_across_dynamic_sequence_lengths() -> None:
+    environment = os.environ.copy()
+    environment.pop("TORCHDYNAMO_DISABLE", None)
+    check_script = Path(__file__).with_name("token_specialized_attention_dynamic_shapes_compile_check.py")
+
+    subprocess.run(
+        [sys.executable, str(check_script)],
+        check=True,
+        env=environment,
+        timeout=COMPILE_TEST_TIMEOUT_SECONDS,
+    )
+
+
+@pytest.mark.compile
+def test_specialized_attention_compile_modes_on_cpu() -> None:
+    environment = os.environ.copy()
+    environment.pop("TORCHDYNAMO_DISABLE", None)
+    check_script = Path(__file__).with_name("token_specialized_attention_modes_compile_check.py")
 
     subprocess.run(
         [sys.executable, str(check_script)],
