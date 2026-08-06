@@ -14,9 +14,12 @@ import torch
 from vit.norm import NORM_TYPE_CHOICES
 
 from .component_benchmark import (
+    DEFAULT_ATTENTION_COMPILE_MODE,
     DEFAULT_COMPONENTS,
+    DEFAULT_NUM_GLOBAL_TOKENS,
     DEFAULT_PASS_MODES,
     PRESET_CONFIGS,
+    AttentionCompileMode,
     ComparisonMetric,
     ComparisonResult,
     ComparisonSummary,
@@ -65,6 +68,12 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--hidden-sizes", nargs="+", type=int)
     run_parser.add_argument("--num-heads", nargs="+", type=int)
     run_parser.add_argument("--ffn-mults", nargs="+", type=int)
+    run_parser.add_argument("--num-global-tokens", type=int, default=DEFAULT_NUM_GLOBAL_TOKENS)
+    run_parser.add_argument(
+        "--attention-compile-mode",
+        choices=_attention_compile_mode_choices(),
+        default=DEFAULT_ATTENTION_COMPILE_MODE,
+    )
 
     run_parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     run_parser.add_argument("--param-dtype", choices=DTYPE_CHOICES, default="float32")
@@ -166,6 +175,8 @@ def _run_command(args: argparse.Namespace) -> int:
         "hidden_sizes": args.hidden_sizes,
         "num_heads": args.num_heads,
         "ffn_mults": args.ffn_mults,
+        "num_global_tokens": args.num_global_tokens,
+        "attention_compile_mode": args.attention_compile_mode,
         "activation": args.activation,
         "glu_max_autotune_gemm": args.glu_max_autotune_gemm,
         "norm_type": args.norm_type,
@@ -299,7 +310,11 @@ def _print_compare_table(comparisons: list[ComparisonResult]) -> None:
 
 
 def _component_choices() -> list[ComponentKind]:
-    return ["mlp", "self_attention", "layer_scale_residual", "drop_path_residual"]
+    return ["mlp", "self_attention", "token_specialized_attention", "layer_scale_residual", "drop_path_residual"]
+
+
+def _attention_compile_mode_choices() -> list[AttentionCompileMode]:
+    return ["auto", "dynamic", "static", "static_max_autotune", "eager"]
 
 
 def _pass_mode_choices() -> list[PassMode]:

@@ -1,6 +1,7 @@
 from copy import deepcopy
 from pathlib import Path
 
+import pytest
 import torch
 
 import benchmark.component_benchmark as component_benchmark
@@ -13,6 +14,9 @@ from benchmark.component_benchmark import (
     save_benchmark_run,
 )
 from benchmark.component_cli import main as component_benchmark_main
+
+
+TOKEN_SPECIALIZED_GLOBAL_TOKENS = 8
 
 
 def test_build_component_benchmark_cases_default_grid() -> None:
@@ -42,6 +46,40 @@ def test_glu_max_autotune_gemm_is_recorded_without_changing_case_id() -> None:
     assert candidate.case_id == baseline.case_id
 
 
+def test_attention_compile_mode_is_recorded_without_changing_case_id() -> None:
+    common_kwargs = {
+        "components": ["token_specialized_attention"],
+        "batch_sizes": [1],
+        "seq_lens": [16],
+        "hidden_sizes": [32],
+        "num_heads": [4],
+        "num_global_tokens": TOKEN_SPECIALIZED_GLOBAL_TOKENS,
+    }
+    auto = build_component_benchmark_cases(**common_kwargs, attention_compile_mode="auto")[0]
+    max_autotune = build_component_benchmark_cases(**common_kwargs, attention_compile_mode="static_max_autotune")[0]
+    eager = build_component_benchmark_cases(**common_kwargs, attention_compile_mode="eager")[0]
+
+    assert auto.attention_compile_mode == "auto"
+    assert max_autotune.attention_compile_mode == "static_max_autotune"
+    assert eager.attention_compile_mode == "eager"
+    assert auto.num_global_tokens == TOKEN_SPECIALIZED_GLOBAL_TOKENS
+    assert eager.case_id == auto.case_id
+    assert max_autotune.case_id == auto.case_id
+    assert f"g{TOKEN_SPECIALIZED_GLOBAL_TOKENS}" in auto.case_id
+
+
+def test_token_specialized_attention_requires_visual_tokens() -> None:
+    with pytest.raises(ValueError, match="seq_len must exceed num_global_tokens"):
+        build_component_benchmark_cases(
+            components=["token_specialized_attention"],
+            batch_sizes=[1],
+            seq_lens=[TOKEN_SPECIALIZED_GLOBAL_TOKENS],
+            hidden_sizes=[32],
+            num_heads=[4],
+            num_global_tokens=TOKEN_SPECIALIZED_GLOBAL_TOKENS,
+        )
+
+
 def test_run_component_benchmark_case_forward_mlp_cpu() -> None:
     case = build_component_benchmark_cases(
         components=["mlp"],
@@ -69,6 +107,35 @@ def test_run_component_benchmark_case_forward_mlp_cpu() -> None:
     assert result.stats.sample_count >= 1
     assert result.stats.mean_ms > 0
     assert result.stats.memory_mb is None
+
+
+def test_run_token_specialized_attention_eager_cpu() -> None:
+    case = build_component_benchmark_cases(
+        components=["token_specialized_attention"],
+        pass_modes=["forward_backward"],
+        batch_sizes=[1],
+        seq_lens=[16],
+        hidden_sizes=[32],
+        num_heads=[4],
+        num_global_tokens=TOKEN_SPECIALIZED_GLOBAL_TOKENS,
+        attention_compile_mode="eager",
+    )[0]
+
+    result = run_component_benchmark_case(
+        case,
+        device=torch.device("cpu"),
+        param_dtype=torch.float32,
+        input_dtype=torch.float32,
+        autocast_dtype=None,
+        num_warmup_iters=0,
+        min_samples=1,
+        min_measurement_seconds=0.0,
+        max_measurement_seconds=0.05,
+        include_memory=False,
+    )
+
+    assert result.stats.sample_count >= 1
+    assert result.stats.mean_ms > 0
 
 
 def test_run_component_benchmark_case_backward_drop_path_cpu() -> None:

@@ -70,6 +70,10 @@ CLS/register prefix and visual tokens separate normalization parameters, plus se
 LayerScale is configured. Attention still connects every token. A configurable number of leading blocks can also use
 separate QKV projections:
 
+This pathway adapts the [CLS]-patch specialization proposed by
+[Marouani et al. (2026)](https://arxiv.org/abs/2602.08626). This repository additionally treats register tokens as
+global tokens and makes QKV specialization configurable over a chosen number of leading blocks.
+
 ```python
 config = ViTConfig(
     # ... other parameters ...
@@ -85,6 +89,43 @@ features = model(x)  # ViTFeatures, unchanged from the shared-path model
 
 Both specialization options default to disabled. Specialized parameters are cloned from their shared counterparts at
 initialization, so enabling the feature does not change the initial function before the paths receive separate updates.
+
+Token-specialized attention exposes four compilation policies:
+
+| Mode | Runtime behavior |
+|------|------------------|
+| `auto` | Default. During gradient-enabled training, batches of at least 512 use an isolated static graph; other calls use the adapting compiled path. |
+| `dynamic` | Always use a separate `dynamic=True` compiled graph. |
+| `static` | Always compile concrete shapes. |
+| `static_max_autotune` | Use the static path with CUDA GEMM autotuning and no CUDA graphs. CPU inputs use `static`. |
+
+Use an allowlist when the training batches that should use static compilation are known:
+
+```python
+config = ViTConfig(
+    # ... token specialization and model parameters ...
+    token_specialized_attention_compile_mode="auto",
+    token_specialized_attention_static_batch_sizes=(128, 256, 512),
+)
+```
+
+In `auto`, the allowlist replaces the default batch-size threshold. Unlisted batches remain on the adapting path. In
+`static` and `static_max_autotune`, an allowlist bounds the accepted batches and unlisted batches raise `ValueError`.
+Omit the allowlist to permit any observed batch size, with one concrete graph per distinct full input shape. `dynamic`
+rejects a static allowlist. Allowlist values refer to the batch reaching specialized attention. Selective stochastic
+depth can reduce that batch below the model input batch, so include the resulting residual-subset sizes when it is
+enabled. Non-default compilation settings require token specialization to be enabled.
+
+The same settings can be stored in YAML:
+
+```yaml
+token_specialized_attention_compile_mode: static
+token_specialized_attention_static_batch_sizes: [128, 256, 512]
+```
+
+`static_max_autotune` has a substantial one-time CUDA compile cost. Prefer `auto` unless repeated measurements on the
+target workload justify another mode. See [`docs/aot-export.md`](docs/aot-export.md) for `torch.export` and
+AOTInductor support for every mode.
 
 ## CUDA GLU GEMM Autotuning
 
@@ -214,6 +255,8 @@ See [`benchmark/README.md`](benchmark/README.md) for detailed documentation.
 * [ReLU2 Wins: Discovering Efficient Activation Functions for Sparse LLMs](https://arxiv.org/abs/2402.03804)
 
 * [Vision Transformers Need Registers](https://arxiv.org/abs/2309.16588)
+
+* [Revisiting \[CLS\] and Patch Token Interaction in Vision Transformers](https://arxiv.org/abs/2602.08626)
 
 * [GLU Variants Improve Transformer](https://arxiv.org/abs/2002.05202)
 

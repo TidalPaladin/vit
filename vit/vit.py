@@ -1,5 +1,5 @@
 import math
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Self, cast
@@ -8,8 +8,13 @@ import torch
 import torch.nn as nn
 import yaml
 from torch import Tensor
+from torch.utils import _pytree
 from torch.utils.checkpoint import checkpoint
 
+from .attention import (
+    TokenSpecializedAttentionCompileMode,
+    _validate_token_specialized_attention_compile_policy,
+)
 from .fused import validate_adaln_gate_init
 from .head import (
     AttentivePoolHead,
@@ -82,6 +87,9 @@ class ViTConfig:
     parameters are separated with them. Set `specialize_global_token_qkv_blocks` to
     the number of leading blocks that also receive independent QKV projections. Both
     options are disabled by default, preserving the shared-token-path architecture.
+    `token_specialized_attention_compile_mode` selects the runtime compiler policy;
+    `token_specialized_attention_static_batch_sizes` optionally bounds the batches
+    routed to or accepted by concrete-shape modes.
     """
 
     # Inputs
@@ -136,6 +144,8 @@ class ViTConfig:
     # Global and visual token pathways
     specialize_global_token_norms: bool = False
     specialize_global_token_qkv_blocks: int = 0
+    token_specialized_attention_compile_mode: TokenSpecializedAttentionCompileMode = "auto"
+    token_specialized_attention_static_batch_sizes: tuple[int, ...] | None = None
 
     def __post_init__(self) -> None:
         """Validate configuration parameters."""
@@ -160,6 +170,16 @@ class ViTConfig:
             raise ValueError("global-token normalization specialization is incompatible with conditioned MLPs")
         if self.glu_max_autotune_gemm and not self.activation.endswith("glu"):
             raise ValueError("glu_max_autotune_gemm requires a GLU activation")
+        normalized_static_batch_sizes = _validate_token_specialized_attention_compile_policy(
+            self.token_specialized_attention_compile_mode,
+            self.token_specialized_attention_static_batch_sizes,
+            specialization_enabled=self.token_specialization_enabled,
+        )
+        object.__setattr__(
+            self,
+            "token_specialized_attention_static_batch_sizes",
+            normalized_static_batch_sizes,
+        )
         validate_adaln_gate_init(self.adaln_gate_init)
 
     @property
@@ -299,6 +319,36 @@ class ViTFeatures:
         )
 
 
+def _flatten_vit_features(features: ViTFeatures) -> tuple[list[Tensor], list[int | list[int] | None]]:
+    tokenized_size = list(features.tokenized_size) if features.tokenized_size is not None else None
+    context: list[int | list[int] | None] = [
+        features.num_register_tokens,
+        features.num_cls_tokens,
+        tokenized_size,
+    ]
+    return [features.dense_features], context
+
+
+def _unflatten_vit_features(
+    values: Iterable[Tensor],
+    context: list[int | list[int] | None],
+) -> ViTFeatures:
+    (dense_features,) = values
+    num_register_tokens, num_cls_tokens, tokenized_size = context
+    assert isinstance(num_register_tokens, int)
+    assert isinstance(num_cls_tokens, int)
+    assert tokenized_size is None or isinstance(tokenized_size, list)
+    return ViTFeatures(dense_features, num_register_tokens, num_cls_tokens, tokenized_size)
+
+
+_pytree.register_pytree_node(
+    ViTFeatures,
+    _flatten_vit_features,
+    _unflatten_vit_features,
+    serialized_type_name="vit.ViTFeatures",
+)
+
+
 class ViT(nn.Module):
     def __init__(
         self,
@@ -425,6 +475,14 @@ class ViT(nn.Module):
         block_index: int = 0,
     ) -> TransformerEncoderLayer:
         resolved_dtype = self._resolve_factory_dtype(dtype)
+        specialize_global_token_qkv = block_index < self.config.specialize_global_token_qkv_blocks
+        specialized_attention_enabled = self.config.specialize_global_token_norms or specialize_global_token_qkv
+        compile_mode: TokenSpecializedAttentionCompileMode = (
+            self.config.token_specialized_attention_compile_mode if specialized_attention_enabled else "auto"
+        )
+        static_batch_sizes = (
+            self.config.token_specialized_attention_static_batch_sizes if specialized_attention_enabled else None
+        )
         return TransformerEncoderLayer(
             hidden_size=self.config.hidden_size,
             ffn_hidden_size=self.config.ffn_hidden_size,
@@ -450,7 +508,9 @@ class ViT(nn.Module):
             glu_max_autotune_gemm=self.config.glu_max_autotune_gemm,
             num_global_tokens=self.config.num_global_tokens,
             specialize_global_token_norms=self.config.specialize_global_token_norms,
-            specialize_global_token_qkv=block_index < self.config.specialize_global_token_qkv_blocks,
+            specialize_global_token_qkv=specialize_global_token_qkv,
+            token_specialized_attention_compile_mode=compile_mode,
+            token_specialized_attention_static_batch_sizes=static_batch_sizes,
         )
 
     def create_decoder_layer(

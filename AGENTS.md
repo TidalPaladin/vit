@@ -12,7 +12,7 @@ Build metadata and tooling configuration are in `pyproject.toml`, `Makefile`, an
 ## Architecture & Core Patterns
 Main flow is `Images -> PatchEmbed -> Transformer -> ViTFeatures -> Heads`.
 
-- `ViT.forward()` returns a `ViTFeatures` dataclass (not a raw tensor).
+- `ViT.forward()` returns a `ViTFeatures` container (not a raw tensor).
 - CLS and register tokens are optional. Pooling and classification behavior remains explicit in heads.
 - Prefer config-driven construction via `ViTConfig.instantiate()` and `HeadConfig.instantiate()`.
 - Use `activation_checkpointing=True` in `ViTConfig` when trading latency for lower training memory.
@@ -21,6 +21,10 @@ Main flow is `Images -> PatchEmbed -> Transformer -> ViTFeatures -> Heads`.
   norms, plus configured LayerScale parameters, in every encoder block. Split QKV only in the configured leading block
   count. Clone each visual branch from its global branch so specialized and shared models are identical at
   initialization. Keep attention, output projections, MLP projections, and the final output norm shared.
+  Keep `auto` on the adapting compiled path except for its isolated large-batch or configured-batch training fallback.
+  Keep forced dynamic, static, and static-max-autotune wrappers on distinct code objects so their compiler caches do
+  not overlap. During `torch.export`, inline the functional attention graph and preserve `ViTFeatures` as a pytree;
+  runtime compile modes and static batch allowlists do not become exported-program constraints.
 
 ### Explainability architecture
 
@@ -47,6 +51,7 @@ Use `uv` and Make targets to keep local and CI behavior aligned.
 - `make test`: run pytest with coverage on `vit/`.
 - `make test-ci`: run CI-equivalent tests (`not cuda and not compile`).
 - `make test-compile-cpu`: run CPU `torch.compile` tests with Dynamo enabled and CUDA hidden.
+- `make test-compile-cuda`: run CUDA `torch.compile` tests with Dynamo enabled.
 - `make test-deprecations`: run CPU tests with default deprecation warnings.
 - `make audit-workflows`: audit GitHub Actions with the locked strict `zizmor` configuration.
 - `make report-deprecations REPORT_DIR=<path>`: report yanked, inactive, and Python-incompatible direct pins.
@@ -79,7 +84,8 @@ Use `pytest` with `pytest-cov`, `pytest-mock`, and project fixtures in `tests/co
 - Prefer parametrized tests for shape/dtype/device combinations.
 - Use markers intentionally: `@pytest.mark.cuda` for GPU-required tests, `@pytest.mark.compile` for `torch.compile`.
 - Run `make quality`, `make types`, and `make test-ci` before opening a PR to match required CI.
-- Run `make test-compile-cpu` after changing compilation or activation-checkpointing behavior.
+- Run `make test-compile-cpu` after changing compilation or activation-checkpointing behavior. Also run
+  `make test-compile-cuda` when the changed path supports CUDA.
 
 ## Commit & Pull Request Guidelines
 Recent history follows imperative, sentence-style subjects (for example: `Add ...`, `Fix ...`, `Improve ...`), often

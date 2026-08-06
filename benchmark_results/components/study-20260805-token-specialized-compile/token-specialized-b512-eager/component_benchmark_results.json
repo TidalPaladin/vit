@@ -1,0 +1,56 @@
+{
+  "results": [
+    {
+      "activation": "swiglu",
+      "attention_compile_mode": "eager",
+      "attention_dropout": 0.0,
+      "autocast_dtype": null,
+      "batch_size": 512,
+      "bias": true,
+      "case_id": "token_specialized_attention|default|forward_backward|b512s40d384h12ffn1536g8",
+      "component": "token_specialized_attention",
+      "device": "cuda",
+      "drop_path_prob": 0.1,
+      "eps": 1e-05,
+      "ffn_hidden_size": 1536,
+      "glu_max_autotune_gemm": false,
+      "hidden_dropout": 0.0,
+      "hidden_size": 384,
+      "input_dtype": "bfloat16",
+      "layer_scale_init": 1e-05,
+      "mean_ms": 3.9015489358765385,
+      "measurement_seconds": 2.00384997529909,
+      "median_ms": 3.825756022706628,
+      "memory_mb": 319.28125,
+      "norm_type": "rmsnorm",
+      "num_global_tokens": 8,
+      "num_heads": 12,
+      "p95_ms": 4.407053347676992,
+      "param_dtype": "bfloat16",
+      "pass_mode": "forward_backward",
+      "preset": "default",
+      "sample_count": 504,
+      "seq_len": 40,
+      "std_ms": 0.20019070014290974,
+      "train_mode": false,
+      "use_rope": true
+    }
+  ],
+  "run_metadata": {
+    "cuda_device_capability": [
+      8,
+      6
+    ],
+    "cuda_device_name": "NVIDIA GeForce RTX 3090",
+    "cuda_version": "13.0",
+    "deterministic": false,
+    "device": "cuda",
+    "git_sha": "3570b84",
+    "include_memory": true,
+    "num_threads": 24,
+    "seed": 1337,
+    "threads": null,
+    "timestamp_utc": "2026-08-05T17:25:39.608252+00:00",
+    "torch_version": "2.13.0+cu130"
+  }
+}

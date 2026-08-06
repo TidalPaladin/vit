@@ -50,6 +50,7 @@ vit-benchmark \
 Use `vit-component-benchmark` for low-level, regression-oriented benchmarking of:
 - `mlp`
 - `self_attention`
+- `token_specialized_attention`
 - `layer_scale_residual`
 - `drop_path_residual`
 
@@ -57,11 +58,14 @@ The component benchmark CLI supports:
 - `run`
 - `compare`
 - `list-baselines`
-- `--norm-type` to switch between `rmsnorm` and `layernorm` for `mlp` and `self_attention` runs
+- `--norm-type` to switch between `rmsnorm` and `layernorm` for MLP and attention runs
 - `--glu-max-autotune-gemm` to measure the opt-in CUDA Inductor GEMM autotuning path for GLU MLPs
+- `--attention-compile-mode` to compare production dispatch (`auto`) with forced `dynamic`, `static`,
+  `static_max_autotune`, or benchmark-only `eager` token-specialized attention
+- `--num-global-tokens` to set the leading specialized token count
 
-The autotuning setting is recorded in each result but omitted from `case_id`, so matching enabled and disabled cases
-compare directly. For example:
+The autotuning setting and attention compile mode are recorded in each result but omitted from `case_id`, so matching
+cases compare directly. For example:
 
 ```bash
 vit-component-benchmark run \
@@ -93,6 +97,47 @@ vit-component-benchmark compare \
 This option applies only to CUDA inputs with an MLP input width of at least 512. CPU inputs and smaller MLPs keep the
 default compiled path. Inductor evaluates more GEMM choices during the first compile, so use fresh cache directories
 when measuring compile latency and exclude compilation from steady-state measurements.
+
+Compare token-specialized attention policies with identical case IDs:
+
+```bash
+vit-component-benchmark run \
+    --save-as token-attention-auto \
+    --components token_specialized_attention \
+    --pass-modes forward_backward \
+    --device cuda \
+    --param-dtype bfloat16 \
+    --input-dtype bfloat16 \
+    --batch-sizes 512 \
+    --seq-lens 40 \
+    --hidden-sizes 384 \
+    --num-heads 12 \
+    --num-global-tokens 8 \
+    --attention-compile-mode auto
+
+vit-component-benchmark run \
+    --save-as token-attention-static-max \
+    --components token_specialized_attention \
+    --pass-modes forward_backward \
+    --device cuda \
+    --param-dtype bfloat16 \
+    --input-dtype bfloat16 \
+    --batch-sizes 512 \
+    --seq-lens 40 \
+    --hidden-sizes 384 \
+    --num-heads 12 \
+    --num-global-tokens 8 \
+    --attention-compile-mode static_max_autotune
+
+vit-component-benchmark compare \
+    --baseline token-attention-auto \
+    --candidate token-attention-static-max \
+    --regression-threshold-pct 5 \
+    --noise-floor-pct 1
+```
+
+`eager` means an eager outer attention/output path with the QKV projection helper still compiled. It is a diagnostic
+baseline, not a public `ViTConfig` mode. Use fresh processes and compiler caches when comparing cold compilation cost.
 
 Detailed workflows, recipes, and interpretation guidance are maintained in:
 - `.agents/skills/vit-component-benchmark/SKILL.md`
