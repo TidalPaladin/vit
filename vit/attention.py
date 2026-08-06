@@ -408,7 +408,7 @@ def _attention_token_specialized_qkv_packed_impl(
 
 
 # Keep ordinary calls dynamic so valid shape changes do not exhaust the full-graph cache.
-attention_token_specialized_qkv_packed = torch.compile(fullgraph=True)(_attention_token_specialized_qkv_packed_impl)
+_adapting_token_specialized_attention = torch.compile(fullgraph=True)(_attention_token_specialized_qkv_packed_impl)
 
 
 @torch.compile(fullgraph=True, dynamic=True)
@@ -457,7 +457,73 @@ def _select_token_specialized_attention(
         use_static = use_static and x.shape[0] in static_batch_sizes
     if use_static:
         return _static_token_specialized_attention
-    return attention_token_specialized_qkv_packed
+    return _adapting_token_specialized_attention
+
+
+def attention_token_specialized_qkv_packed(
+    # fmt: off
+    x: Tensor,
+    num_global_tokens: int,
+    global_qkv_weight: Tensor,
+    global_qkv_bias: Tensor | None,
+    visual_qkv_weight: Tensor | None,
+    visual_qkv_bias: Tensor | None,
+    global_norm_weight: Tensor,
+    global_norm_bias: Tensor | None,
+    visual_norm_weight: Tensor | None,
+    visual_norm_bias: Tensor | None,
+    use_layer_norm: bool,
+    head_dim: int,
+    w_out: Tensor,
+    b_out: Tensor | None,
+    attn_mask: Tensor | None,
+    eps: float,
+    q_norm_weight: Tensor | None,
+    q_norm_bias: Tensor | None,
+    k_norm_weight: Tensor | None,
+    k_norm_bias: Tensor | None,
+    qk_use_layer_norm: bool,
+    qk_eps: float,
+    qk_normalization: bool,
+    attention_dropout: float,
+    dropout: float,
+    training: bool,
+    rope: Tensor | None = None,
+    # fmt: on
+) -> Tensor:
+    """Run token-specialized attention with the default automatic compile policy."""
+    attention = _select_token_specialized_attention(x, training)
+    return attention(
+        # fmt: off
+        x,
+        num_global_tokens,
+        global_qkv_weight,
+        global_qkv_bias,
+        visual_qkv_weight,
+        visual_qkv_bias,
+        global_norm_weight,
+        global_norm_bias,
+        visual_norm_weight,
+        visual_norm_bias,
+        use_layer_norm,
+        head_dim,
+        w_out,
+        b_out,
+        attn_mask,
+        eps,
+        q_norm_weight,
+        q_norm_bias,
+        k_norm_weight,
+        k_norm_bias,
+        qk_use_layer_norm,
+        qk_eps,
+        qk_normalization,
+        attention_dropout,
+        dropout,
+        training,
+        rope,
+        # fmt: on
+    )
 
 
 @torch.compile(fullgraph=True)

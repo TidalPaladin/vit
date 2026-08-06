@@ -10,9 +10,11 @@ import torch
 from torch.testing import assert_close
 from torchao.quantization import Int8Tensor, Int8WeightOnlyConfig
 
+import vit.attention as attention_module
 from vit import TokenSpecializedAttentionCompileMode, ViT, ViTConfig, ViTFeatures
 from vit.attention import (
     _STATIC_TOKEN_SPECIALIZED_ATTENTION_MIN_BATCH_SIZE,
+    _adapting_token_specialized_attention,
     _attention_token_specialized_qkv_packed_impl,
     _dynamic_token_specialized_attention,
     _select_token_specialized_attention,
@@ -36,6 +38,7 @@ COMPILE_TEST_TIMEOUT_SECONDS = 600
 TORCHAO_QUANTIZATION_CONFIG_VERSION = 2
 LEGACY_DROPOUT = 0.1
 LAYER_SCALE_INIT = 1e-5
+NORM_EPS = 1e-5
 LEGACY_POSITION_ENCODING = "fourier"
 MODEL_INITIALIZATION_SEED = 7
 RESIDUAL_INITIALIZATION_SEED = 11
@@ -449,11 +452,56 @@ def test_auto_mode_uses_isolated_static_attention_for_large_training_batches() -
 
     static_attention = _select_token_specialized_attention(features, training=True)
 
-    assert static_attention is not attention_token_specialized_qkv_packed
-    assert _select_token_specialized_attention(features[:-1], training=True) is attention_token_specialized_qkv_packed
-    assert _select_token_specialized_attention(features, training=False) is attention_token_specialized_qkv_packed
+    assert static_attention is not _adapting_token_specialized_attention
+    assert _select_token_specialized_attention(features[:-1], training=True) is _adapting_token_specialized_attention
+    assert _select_token_specialized_attention(features, training=False) is _adapting_token_specialized_attention
     with torch.no_grad():
-        assert _select_token_specialized_attention(features, training=True) is attention_token_specialized_qkv_packed
+        assert _select_token_specialized_attention(features, training=True) is _adapting_token_specialized_attention
+
+
+def test_direct_attention_uses_static_fallback_for_large_training_batch(monkeypatch: pytest.MonkeyPatch) -> None:
+    features = torch.randn(
+        _STATIC_TOKEN_SPECIALIZED_ATTENTION_MIN_BATCH_SIZE,
+        NUM_GLOBAL_TOKENS + 1,
+        HIDDEN_SIZE,
+    )
+    expected_output = torch.empty_like(features)
+
+    def static_attention(*args: Any, **kwargs: Any) -> torch.Tensor:
+        return expected_output
+
+    monkeypatch.setattr(attention_module, "_static_token_specialized_attention", static_attention)
+
+    output = attention_token_specialized_qkv_packed(
+        x=features,
+        num_global_tokens=NUM_GLOBAL_TOKENS,
+        global_qkv_weight=torch.randn(3 * HIDDEN_SIZE, HIDDEN_SIZE),
+        global_qkv_bias=None,
+        visual_qkv_weight=torch.randn(3 * HIDDEN_SIZE, HIDDEN_SIZE),
+        visual_qkv_bias=None,
+        global_norm_weight=torch.ones(HIDDEN_SIZE),
+        global_norm_bias=None,
+        visual_norm_weight=torch.ones(HIDDEN_SIZE),
+        visual_norm_bias=None,
+        use_layer_norm=True,
+        head_dim=HIDDEN_SIZE // NUM_HEADS,
+        w_out=torch.randn(HIDDEN_SIZE, HIDDEN_SIZE),
+        b_out=None,
+        attn_mask=None,
+        eps=NORM_EPS,
+        q_norm_weight=None,
+        q_norm_bias=None,
+        k_norm_weight=None,
+        k_norm_bias=None,
+        qk_use_layer_norm=True,
+        qk_eps=NORM_EPS,
+        qk_normalization=False,
+        attention_dropout=0.0,
+        dropout=0.0,
+        training=True,
+    )
+
+    assert output is expected_output
 
 
 def test_auto_mode_static_batch_allowlist_replaces_default_threshold() -> None:
@@ -475,7 +523,7 @@ def test_auto_mode_static_batch_allowlist_replaces_default_threshold() -> None:
             compile_mode="auto",
             static_batch_sizes=CUSTOM_STATIC_BATCH_SIZES,
         )
-        is attention_token_specialized_qkv_packed
+        is _adapting_token_specialized_attention
     )
     with torch.no_grad():
         assert (
@@ -485,7 +533,7 @@ def test_auto_mode_static_batch_allowlist_replaces_default_threshold() -> None:
                 compile_mode="auto",
                 static_batch_sizes=CUSTOM_STATIC_BATCH_SIZES,
             )
-            is attention_token_specialized_qkv_packed
+            is _adapting_token_specialized_attention
         )
 
 
@@ -506,7 +554,7 @@ def test_forced_compile_modes_select_isolated_helpers_on_cpu() -> None:
     )
     assert len(
         {
-            id(attention_token_specialized_qkv_packed),
+            id(_adapting_token_specialized_attention),
             id(_dynamic_token_specialized_attention),
             id(_static_token_specialized_attention),
             id(_static_max_autotune_token_specialized_attention),

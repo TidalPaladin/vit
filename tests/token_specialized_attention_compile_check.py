@@ -10,6 +10,7 @@ from torch.testing import assert_close
 from vit import TokenSpecializedAttentionCompileMode
 from vit.attention import (
     _STATIC_TOKEN_SPECIALIZED_ATTENTION_MIN_BATCH_SIZE,
+    _adapting_token_specialized_attention,
     _attention_token_specialized_qkv_packed_impl,
     _select_token_specialized_attention,
     attention_token_specialized_qkv_packed,
@@ -94,14 +95,17 @@ def _run_case(
 
     def run_attention(input_features: torch.Tensor, rope: torch.Tensor, *, training: bool) -> torch.Tensor:
         if attention_override is None:
-            static_batch_sizes = (batch_size,) if compile_mode != "dynamic" else None
-            attention = _select_token_specialized_attention(
-                input_features,
-                training,
-                compile_mode,
-                static_batch_sizes,
-            )
-            assert hasattr(attention, "_torchdynamo_orig_callable")
+            if compile_mode == "auto":
+                attention = attention_token_specialized_qkv_packed
+            else:
+                static_batch_sizes = (batch_size,) if compile_mode != "dynamic" else None
+                attention = _select_token_specialized_attention(
+                    input_features,
+                    training,
+                    compile_mode,
+                    static_batch_sizes,
+                )
+                assert hasattr(attention, "_torchdynamo_orig_callable")
         else:
             attention = attention_override
         return attention(
@@ -178,7 +182,7 @@ def _assert_case_parity(actual: _CaseResult, expected: _CaseResult) -> None:
 def main() -> None:
     torch.manual_seed(RANDOM_SEED)
     assert torch._dynamo.config.disable is False
-    assert hasattr(attention_token_specialized_qkv_packed, "_torchdynamo_orig_callable")
+    assert hasattr(_adapting_token_specialized_attention, "_torchdynamo_orig_callable")
     _run_case(separate_norms=True, separate_qkv=False)
     torch._dynamo.reset()
     _run_case(separate_norms=False, separate_qkv=True)

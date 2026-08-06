@@ -70,6 +70,10 @@ CLS/register prefix and visual tokens separate normalization parameters, plus se
 LayerScale is configured. Attention still connects every token. A configurable number of leading blocks can also use
 separate QKV projections:
 
+This pathway adapts the [CLS]-patch specialization proposed by
+[Marouani et al. (2026)](https://arxiv.org/abs/2602.08626). This repository additionally treats register tokens as
+global tokens and makes QKV specialization configurable over a chosen number of leading blocks.
+
 ```python
 config = ViTConfig(
     # ... other parameters ...
@@ -251,6 +255,8 @@ See [`benchmark/README.md`](benchmark/README.md) for detailed documentation.
 * [ReLU2 Wins: Discovering Efficient Activation Functions for Sparse LLMs](https://arxiv.org/abs/2402.03804)
 
 * [Vision Transformers Need Registers](https://arxiv.org/abs/2309.16588)
+
+* [Revisiting \[CLS\] and Patch Token Interaction in Vision Transformers](https://arxiv.org/abs/2602.08626)
 
 * [GLU Variants Improve Transformer](https://arxiv.org/abs/2002.05202)
 
