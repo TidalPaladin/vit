@@ -61,6 +61,26 @@ def test_unapply():
     assert_close(x2[~mask], x2.new_zeros(x2.shape)[~mask])
 
 
+def test_unapply_ragged_mask_ignores_padding_tokens():
+    mask = torch.tensor(
+        [
+            [True, False, True, False],
+            [False, True, True, True],
+        ],
+        dtype=torch.bool,
+    )
+    sparse = torch.tensor(
+        [
+            [[1.0], [2.0], [-1.0]],
+            [[3.0], [4.0], [5.0]],
+        ]
+    )
+
+    restored = unapply_mask(mask, sparse)
+
+    assert_close(restored[..., 0], torch.tensor([[1.0, 0.0, 2.0, 0.0], [0.0, 3.0, 4.0, 5.0]]))
+
+
 class TestCreateMask:
     @pytest.mark.parametrize(
         "size, exp",

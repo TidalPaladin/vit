@@ -797,6 +797,23 @@ class TestViT:
         grid = out.visual_tokens_as_grid
         assert grid.shape == (2, *expected_size, config.hidden_size)
 
+    def test_forward_records_spatial_mask_and_restores_sparse_grid(self, device, config):
+        x = torch.randn(2, 3, *config.img_size, device=device)
+        model = ViT(config).to(device)
+        tokenized_size = model.stem.tokenized_size(config.img_size)
+        visual_tokens = math.prod(tokenized_size)
+        mask = torch.zeros((2, visual_tokens), dtype=torch.bool, device=device)
+        mask[:, ::2] = True
+
+        out = model(x, mask=mask)
+
+        assert_close(out.visual_mask, mask)
+        restored = out.restored_visual_tokens
+        assert restored.shape == (2, visual_tokens, config.hidden_size)
+        assert_close(restored[mask], out.visual_tokens.flatten(0, 1))
+        assert_close(restored[~mask], torch.zeros_like(restored[~mask]))
+        assert out.visual_tokens_as_grid.shape == (2, *tokenized_size, config.hidden_size)
+
 
 class TestViTFeatures:
     def test_iter(self):
@@ -878,6 +895,22 @@ class TestViTFeatures:
         features = ViTFeatures(torch.randn(2, 64, 128), 0, 0, tokenized_size=tokenized_size)
         features_plus_one = features.apply(lambda x: x + 1)
         assert features_plus_one.tokenized_size == tokenized_size
+
+    def test_apply_preserves_visual_mask(self):
+        tokenized_size = (8, 8)
+        visual_mask = torch.zeros((2, 64), dtype=torch.bool)
+        visual_mask[:, ::2] = True
+        features = ViTFeatures(
+            torch.randn(2, 32, 128),
+            0,
+            0,
+            tokenized_size=tokenized_size,
+            visual_mask=visual_mask,
+        )
+
+        transformed = features.apply(lambda x: x + 1)
+
+        assert_close(transformed.visual_mask, visual_mask)
 
     def test_from_separate_features_with_tokenized_size(self):
         cls_tokens = torch.randn(2, 1, 128)

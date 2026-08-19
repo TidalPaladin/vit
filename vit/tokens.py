@@ -95,12 +95,21 @@ def apply_mask(
 
 
 def unapply_mask(mask: Tensor, x: Tensor) -> Tensor:
-    assert not mask_is_ragged(mask), "Cannot unapply ragged mask"
     B, L = mask.shape
     D = x.shape[-1]
-    result = x.new_zeros((B, L, D))
-    result.masked_scatter_(mask.view(B, L, 1), x)
-    return result
+    selected_counts = mask.sum(dim=-1)
+    required_tokens = int(selected_counts.max().item())
+    if x.shape[:1] != (B,) or x.shape[1] < required_tokens:
+        raise ValueError(
+            "Sparse token tensor must contain every selected token: "
+            f"mask requires up to {required_tokens}, got {tuple(x.shape)}"
+        )
+    if required_tokens == 0:
+        return x.new_zeros((B, L, D))
+
+    sparse_indices = (mask.cumsum(dim=-1) - 1).clamp_min(0)
+    gathered = x.gather(1, sparse_indices.unsqueeze(-1).expand(-1, -1, D))
+    return torch.where(mask.unsqueeze(-1), gathered, 0)
 
 
 def _scaled_block_volumes(size: Sequence[int], scaled_size: Sequence[int], scale: int, device: torch.device) -> Tensor:

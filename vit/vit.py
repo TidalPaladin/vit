@@ -31,7 +31,7 @@ from .norm import NORM_TYPE_CHOICES, NormType, make_norm
 from .patch_embed import PatchEmbed2d, PatchEmbed3d
 from .pos_enc import PositionEncoder
 from .rope import RopePositionEmbedding
-from .tokens import apply_mask, create_mask
+from .tokens import apply_mask, create_mask, unapply_mask
 from .transformer import CrossAttentionTransformer, TransformerDecoderLayer, TransformerEncoderLayer
 
 
@@ -227,11 +227,13 @@ class ViTFeatures:
         num_register_tokens: int,
         num_cls_tokens: int,
         tokenized_size: Sequence[int] | None = None,
+        visual_mask: Tensor | None = None,
     ):
         self._dense_features = dense_features
         self._num_register_tokens = num_register_tokens
         self._num_cls_tokens = num_cls_tokens
         self._tokenized_size = tuple(tokenized_size) if tokenized_size is not None else None
+        self._visual_mask = visual_mask
 
     def __repr__(self) -> str:
         return (
@@ -264,6 +266,18 @@ class ViTFeatures:
         return self.dense_features[..., start:, :]
 
     @property
+    def visual_mask(self) -> Tensor | None:
+        """Return the full-grid mask used to select the visual-token sequence."""
+        return self._visual_mask
+
+    @property
+    def restored_visual_tokens(self) -> Tensor:
+        """Scatter sparse visual features into their original grid positions."""
+        if self.visual_mask is None:
+            return self.visual_tokens
+        return unapply_mask(self.visual_mask, self.visual_tokens)
+
+    @property
     def register_tokens(self) -> Tensor:
         start = self.num_cls_tokens
         end = self.num_cls_tokens + self.num_register_tokens
@@ -294,13 +308,17 @@ class ViTFeatures:
         """
         if self._tokenized_size is None:
             raise ValueError("tokenized_size is not set, cannot reshape to grid")
-        visual = self.visual_tokens
+        visual = self.restored_visual_tokens
         B, L, C = visual.shape
         return visual.view(B, *self._tokenized_size, C)
 
     def apply(self: Self, func: Callable[[Tensor], Tensor]) -> Self:
         return self.__class__(
-            func(self.dense_features), self.num_register_tokens, self.num_cls_tokens, self._tokenized_size
+            func(self.dense_features),
+            self.num_register_tokens,
+            self.num_cls_tokens,
+            self._tokenized_size,
+            self.visual_mask,
         )
 
     @classmethod
@@ -310,35 +328,39 @@ class ViTFeatures:
         register_tokens: Tensor,
         visual_tokens: Tensor,
         tokenized_size: Sequence[int] | None = None,
+        visual_mask: Tensor | None = None,
     ) -> Self:
         return cls(
             dense_features=torch.cat([cls_tokens, register_tokens, visual_tokens], dim=1),
             num_register_tokens=register_tokens.shape[1],
             num_cls_tokens=cls_tokens.shape[1],
             tokenized_size=tokenized_size,
+            visual_mask=visual_mask,
         )
 
 
-def _flatten_vit_features(features: ViTFeatures) -> tuple[list[Tensor], list[int | list[int] | None]]:
+def _flatten_vit_features(features: ViTFeatures) -> tuple[list[Tensor | None], list[int | list[int] | None]]:
     tokenized_size = list(features.tokenized_size) if features.tokenized_size is not None else None
     context: list[int | list[int] | None] = [
         features.num_register_tokens,
         features.num_cls_tokens,
         tokenized_size,
     ]
-    return [features.dense_features], context
+    return [features.dense_features, features.visual_mask], context
 
 
 def _unflatten_vit_features(
-    values: Iterable[Tensor],
+    values: Iterable[Tensor | None],
     context: list[int | list[int] | None],
 ) -> ViTFeatures:
-    (dense_features,) = values
+    dense_features, visual_mask = values
     num_register_tokens, num_cls_tokens, tokenized_size = context
     assert isinstance(num_register_tokens, int)
     assert isinstance(num_cls_tokens, int)
+    assert isinstance(dense_features, Tensor)
+    assert visual_mask is None or isinstance(visual_mask, Tensor)
     assert tokenized_size is None or isinstance(tokenized_size, list)
-    return ViTFeatures(dense_features, num_register_tokens, num_cls_tokens, tokenized_size)
+    return ViTFeatures(dense_features, num_register_tokens, num_cls_tokens, tokenized_size, visual_mask)
 
 
 _pytree.register_pytree_node(
@@ -717,7 +739,7 @@ class ViT(nn.Module):
 
         # Prepare output
         x = self.output_norm(x) if output_norm else x
-        return ViTFeatures(x, self.config.num_register_tokens, self.config.num_cls_tokens, tokenized_size)
+        return ViTFeatures(x, self.config.num_register_tokens, self.config.num_cls_tokens, tokenized_size, mask)
 
     if TYPE_CHECKING:
 
