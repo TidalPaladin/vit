@@ -1,4 +1,8 @@
+import os
+import subprocess
+import sys
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 import torch
@@ -16,6 +20,7 @@ from vit.fused import (
 
 
 TORCHAO_QUANTIZATION_CONFIG_VERSION = 2
+COMPILE_TEST_TIMEOUT_SECONDS = 120
 
 
 def _apply_norm_manual(
@@ -99,6 +104,19 @@ class TestNormLinear:
 
 
 class TestNormMLP:
+    @pytest.mark.compile
+    def test_compiles_across_sparse_bucket_shapes(self):
+        environment = os.environ.copy()
+        environment.pop("TORCHDYNAMO_DISABLE", None)
+        check_script = Path(__file__).with_name("norm_mlp_dynamic_shapes_compile_check.py")
+
+        subprocess.run(
+            [sys.executable, str(check_script)],
+            check=True,
+            env=environment,
+            timeout=COMPILE_TEST_TIMEOUT_SECONDS,
+        )
+
     def test_reset_parameters_zeros_biases(self):
         layer = NormMLP(10, 20)
         assert layer.fc1.bias is not None
