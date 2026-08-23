@@ -9,6 +9,7 @@ from .fused import AdaNormMLP, NormMLP, _MLPIntermediates
 from .initialization import zero_bias_if_present
 from .layer_scale import LayerScale
 from .norm import NormType
+from .packed import PackedAttentionBackend, PackedSequence
 
 
 def _select_residual_subset(x: Tensor, drop_path_rate: float, training: bool) -> tuple[Tensor, Tensor | None, float]:
@@ -36,6 +37,19 @@ def _merge_residual_subset(
     if keep_indices is None:
         return x + residual
     return x.flatten(1).index_add(0, keep_indices, residual.flatten(1), alpha=residual_scale).view_as(x)
+
+
+def _packed_drop_path_scale(x: PackedSequence, drop_path_rate: float, training: bool) -> Tensor:
+    if not training or drop_path_rate <= 0.0:
+        return x.values.new_ones((x.values.shape[0], 1))
+    if drop_path_rate >= 1.0:
+        return x.values.new_zeros((x.values.shape[0], 1))
+    keep_probability = 1.0 - drop_path_rate
+    sequence_scale = torch.empty((x.batch_size, 1), device=x.values.device, dtype=x.values.dtype).bernoulli_(
+        keep_probability
+    )
+    sequence_scale.div_(keep_probability)
+    return torch.repeat_interleave(sequence_scale, x.lengths.to(torch.int64), dim=0)
 
 
 def _subset_batched_rope(rope: Tensor | None, keep_indices: Tensor | None, full_batch_size: int) -> Tensor | None:
@@ -290,6 +304,30 @@ class TransformerEncoderLayer(nn.Module):
         o = self.layer_scale_mlp(_forward_mlp(self.mlp, x_residual, conditioning, keep_indices, batch_size))
         x = _merge_residual_subset(x, o, keep_indices, residual_scale)
         return x
+
+    def forward_packed(
+        self,
+        x: PackedSequence,
+        rope: Tensor | None = None,
+        *,
+        backend: PackedAttentionBackend = "auto",
+    ) -> PackedSequence:
+        """Apply an encoder block to flat packed values with sequence-level drop path."""
+        if isinstance(self.mlp, AdaNormMLP):
+            raise RuntimeError("packed transformer execution does not support conditioned MLPs")
+        if self.mlp.visual_norm is not None:
+            raise RuntimeError("packed transformer execution does not support token specialization")
+        if self.mlp.quantization_config is not None:
+            raise RuntimeError("packed transformer execution does not support quantized MLP projections")
+
+        attention = self.self_attention.forward_packed(x, rope=rope, backend=backend).values
+        attention = self.layer_scale_attn(attention)
+        values = x.values + attention * _packed_drop_path_scale(x, self.drop_path_rate, self.training)
+
+        mlp_output = self.mlp._forward_with_intermediates(values).output
+        mlp_output = self.layer_scale_mlp(mlp_output)
+        values = values + mlp_output * _packed_drop_path_scale(x, self.drop_path_rate, self.training)
+        return x.with_values(values)
 
     if TYPE_CHECKING:
 

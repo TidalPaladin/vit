@@ -1,4 +1,4 @@
-.PHONY: audit-dependencies audit-workflows check check-distribution clean clean-env deploy init quality report-deprecations style test test-ci test-compile-cpu test-compile-cuda test-deprecations types
+.PHONY: audit-dependencies audit-workflows benchmark-packed-cuda check check-distribution clean clean-env deploy init quality report-deprecations style test test-ci test-compile-cpu test-compile-cuda test-deprecations test-packed-cuda types
 
 PROJECT=vit
 QUALITY_DIRS=$(PROJECT) tests benchmark tools examples
@@ -129,6 +129,21 @@ test-compile-cuda: ## run CUDA-only torch.compile tests with Dynamo enabled
 		-rs \
 		-m "compile and cuda" \
 		./tests/
+
+test-packed-cuda: ## run packed variable-length CUDA tests
+	export TORCHDYNAMO_DISABLE="1" && \
+	$(PYTHON) -m pytest \
+		-rs \
+		-m "cuda and not compile" \
+		./tests/test_packed.py
+	export TORCHDYNAMO_DISABLE="0" && \
+	$(PYTHON) -m pytest \
+		-rs \
+		-m "cuda and compile" \
+		./tests/test_packed.py
+
+benchmark-packed-cuda: ## run the three-pass packed attention decision benchmark
+	$(UV) run vit-packed-attention-benchmark --independent-runs 3
 
 report-deprecations: ## report direct dependency yanks, inactivity, and Python conflicts
 	$(UV) run --isolated --frozen --only-group ci-dependency-report --python 3.14 python tools/dependency_report.py \

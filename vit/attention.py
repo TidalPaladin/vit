@@ -1,5 +1,7 @@
 from collections.abc import Callable, Sequence
 from copy import deepcopy
+from functools import lru_cache
+from importlib.metadata import PackageNotFoundError, version
 from typing import TYPE_CHECKING, Any, Literal, get_args
 
 import torch
@@ -10,10 +12,12 @@ from torchao.quantization import quantize_
 
 from .initialization import init_linear, trunc_normal_
 from .norm import NormModule, NormType, apply_norm, get_norm_bias, is_layer_norm, make_norm
+from .packed import PackedAttentionBackend, PackedSequence
 from .rope import apply_rope
 
 
 _STATIC_TOKEN_SPECIALIZED_ATTENTION_MIN_BATCH_SIZE = 512
+_QUALIFIED_FLASH_ATTENTION_VERSIONS: frozenset[str] = frozenset()
 TokenSpecializedAttentionCompileMode = Literal["auto", "dynamic", "static", "static_max_autotune"]
 
 
@@ -58,6 +62,26 @@ def _unfold_head_and_permute(x: Tensor, head_dim: int) -> Tensor:
 def _permute_and_fold_head(x: Tensor) -> Tensor:
     B, H, S, D = x.shape
     return x.transpose(1, 2).reshape(B, S, H * D)
+
+
+def _apply_flat_rope(q: Tensor, k: Tensor, rope: Tensor | None) -> tuple[Tensor, Tensor]:
+    if rope is None:
+        return q, k
+    sin, cos = rope
+    original_dtype = q.dtype
+    q_working = q.type_as(rope)
+    k_working = k.type_as(rope)
+    sin = sin.unsqueeze(1)
+    cos = cos.unsqueeze(1)
+    q_rotated = (
+        q_working * cos
+        + torch.cat((-q_working[..., q.shape[-1] // 2 :], q_working[..., : q.shape[-1] // 2]), dim=-1) * sin
+    )
+    k_rotated = (
+        k_working * cos
+        + torch.cat((-k_working[..., k.shape[-1] // 2 :], k_working[..., : k.shape[-1] // 2]), dim=-1) * sin
+    )
+    return q_rotated.to(original_dtype), k_rotated.to(original_dtype)
 
 
 def _apply_qk_norm(
@@ -336,6 +360,166 @@ def attention_qkv_packed(
     o = F.linear(o, w_out, b_out)
     o = F.dropout(o, p=dropout, training=training, inplace=True)
     return o
+
+
+def _pytorch_packed_attention_impl(
+    # fmt: off
+    values: Tensor,
+    cu_seqlens: Tensor,
+    w_in: Tensor,
+    b_in: Tensor | None,
+    w_norm: Tensor,
+    b_norm: Tensor | None,
+    use_layer_norm: bool,
+    head_dim: int,
+    w_out: Tensor,
+    b_out: Tensor | None,
+    eps: float,
+    q_norm_weight: Tensor | None,
+    q_norm_bias: Tensor | None,
+    k_norm_weight: Tensor | None,
+    k_norm_bias: Tensor | None,
+    qk_use_layer_norm: bool,
+    qk_eps: float,
+    qk_normalization: bool,
+    attention_dropout: float,
+    dropout: float,
+    training: bool,
+    rope: Tensor | None,
+    # fmt: on
+) -> Tensor:
+    normalized = apply_norm(values, w_norm, b_norm, eps, use_layer_norm=use_layer_norm)
+    q, k, v = F.linear(normalized, w_in, b_in).chunk(3, dim=-1)
+    q = q.view(q.shape[0], -1, head_dim)
+    k = k.view(k.shape[0], -1, head_dim)
+    v = v.view(v.shape[0], -1, head_dim)
+    q, k = _apply_qk_norm(
+        q,
+        k,
+        q_norm_weight,
+        q_norm_bias,
+        k_norm_weight,
+        k_norm_bias,
+        qk_use_layer_norm,
+        qk_eps,
+        qk_normalization,
+    )
+    q, k = _apply_flat_rope(q, k, rope)
+
+    # A conservative symbolic upper bound avoids reading data-dependent offsets
+    # while allowing one dynamic graph to adapt to changing packed layouts.
+    jagged_options = {
+        "offsets": cu_seqlens,
+        "jagged_dim": 1,
+        "min_seqlen": 1,
+        "max_seqlen": values.shape[0],
+    }
+    q_jagged = torch.nested.nested_tensor_from_jagged(q, **jagged_options).transpose(1, 2)
+    k_jagged = torch.nested.nested_tensor_from_jagged(k, **jagged_options).transpose(1, 2)
+    v_jagged = torch.nested.nested_tensor_from_jagged(v, **jagged_options).transpose(1, 2)
+    attention_dropout = attention_dropout if training else 0.0
+    output = F.scaled_dot_product_attention(
+        q_jagged,
+        k_jagged,
+        v_jagged,
+        dropout_p=attention_dropout,
+        is_causal=False,
+        enable_gqa=True,
+    )
+    output = output.transpose(1, 2).values().reshape(values.shape[0], -1)
+    output = F.linear(output, w_out, b_out)
+    return F.dropout(output, p=dropout, training=training)
+
+
+_pytorch_packed_attention = torch.compile(fullgraph=True, dynamic=True)(_pytorch_packed_attention_impl)
+
+
+@lru_cache(maxsize=1)
+def _flash_attention_installation() -> tuple[bool, bool]:
+    try:
+        from flash_attn import flash_attn_varlen_qkvpacked_func  # pyright: ignore[reportMissingImports] # noqa: F401
+    except (ImportError, OSError):
+        return False, False
+    try:
+        installed_version = version("flash-attn")
+    except PackageNotFoundError:
+        return True, False
+    return True, installed_version in _QUALIFIED_FLASH_ATTENTION_VERSIONS
+
+
+def _flash_attention_available(values: Tensor) -> bool:
+    compatible = (
+        values.device.type == "cuda"
+        and values.dtype in (torch.float16, torch.bfloat16)
+        and torch.cuda.get_device_capability(values.device)[0] >= 8
+    )
+    return compatible and _flash_attention_installation()[0]
+
+
+def _flash_attention_qualified(values: Tensor) -> bool:
+    return _flash_attention_available(values) and _flash_attention_installation()[1]
+
+
+def _flash_packed_attention(
+    values: Tensor,
+    cu_seqlens: Tensor,
+    w_in: Tensor,
+    b_in: Tensor | None,
+    w_norm: Tensor,
+    b_norm: Tensor | None,
+    use_layer_norm: bool,
+    head_dim: int,
+    w_out: Tensor,
+    b_out: Tensor | None,
+    eps: float,
+    q_norm_weight: Tensor | None,
+    q_norm_bias: Tensor | None,
+    k_norm_weight: Tensor | None,
+    k_norm_bias: Tensor | None,
+    qk_use_layer_norm: bool,
+    qk_eps: float,
+    qk_normalization: bool,
+    attention_dropout: float,
+    dropout: float,
+    training: bool,
+    rope: Tensor | None,
+) -> Tensor:
+    try:
+        from flash_attn import flash_attn_varlen_qkvpacked_func  # pyright: ignore[reportMissingImports]
+    except (ImportError, OSError) as error:
+        raise RuntimeError(
+            "FlashAttention packed execution requires the optional Linux CUDA 'flash-attn' package; "
+            "install the packed-attention extra on an Ampere-or-newer GPU"
+        ) from error
+
+    normalized = apply_norm(values, w_norm, b_norm, eps, use_layer_norm=use_layer_norm)
+    q, k, v = F.linear(normalized, w_in, b_in).chunk(3, dim=-1)
+    q = q.view(q.shape[0], -1, head_dim)
+    k = k.view(k.shape[0], -1, head_dim)
+    v = v.view(v.shape[0], -1, head_dim)
+    q, k = _apply_qk_norm(
+        q,
+        k,
+        q_norm_weight,
+        q_norm_bias,
+        k_norm_weight,
+        k_norm_bias,
+        qk_use_layer_norm,
+        qk_eps,
+        qk_normalization,
+    )
+    q, k = _apply_flat_rope(q, k, rope)
+    qkv = torch.stack((q, k, v), dim=1)
+    max_seqlen = int(cu_seqlens.diff().max().item())
+    output = flash_attn_varlen_qkvpacked_func(
+        qkv,
+        cu_seqlens,
+        max_seqlen,
+        attention_dropout if training else 0.0,
+        causal=False,
+    ).reshape(values.shape[0], -1)
+    output = F.linear(output, w_out, b_out)
+    return F.dropout(output, p=dropout, training=training)
 
 
 def _attention_token_specialized_qkv_packed_impl(
@@ -804,10 +988,12 @@ class SelfAttention(nn.Module):
     ) -> None:
         """Apply quantization to the linear layers using torchao."""
         if qkv_quantization_config is not None:
+            self.qkv_quantization_config = qkv_quantization_config
             quantize_(self.qkv_proj, qkv_quantization_config)
             if self.visual_qkv_proj is not None:
                 quantize_(self.visual_qkv_proj, qkv_quantization_config)
         if out_quantization_config is not None:
+            self.out_quantization_config = out_quantization_config
             quantize_(self.out_proj, out_quantization_config)
 
     def forward(self, x: Tensor, attn_mask: Tensor | None = None, rope: Tensor | None = None) -> Tensor:
@@ -876,6 +1062,95 @@ class SelfAttention(nn.Module):
             rope,
             # fmt: on
         )
+
+    def forward_packed(
+        self,
+        x: PackedSequence,
+        rope: Tensor | None = None,
+        *,
+        backend: PackedAttentionBackend = "auto",
+    ) -> PackedSequence:
+        """Apply self-attention independently to each sequence without padding."""
+        return self._forward_packed(x, rope, backend=backend, allow_unqualified_flash=False)
+
+    def _forward_packed_candidate(
+        self,
+        x: PackedSequence,
+        rope: Tensor | None = None,
+        *,
+        backend: PackedAttentionBackend,
+    ) -> PackedSequence:
+        """Run an installed candidate backend for qualification benchmarks."""
+        return self._forward_packed(x, rope, backend=backend, allow_unqualified_flash=True)
+
+    def _forward_packed(
+        self,
+        x: PackedSequence,
+        rope: Tensor | None,
+        *,
+        backend: PackedAttentionBackend,
+        allow_unqualified_flash: bool,
+    ) -> PackedSequence:
+        if backend not in ("auto", "pytorch", "flash_attention"):
+            raise ValueError(f"unsupported packed attention backend: {backend!r}")
+        if x.values.device.type != "cuda":
+            raise RuntimeError("packed attention requires CUDA")
+        if x.values.dtype not in (torch.bfloat16, torch.float16):
+            raise RuntimeError("packed attention requires BF16 or FP16 token values")
+        if torch.cuda.get_device_capability(x.values.device)[0] < 8:
+            raise RuntimeError("packed attention requires an Ampere-or-newer NVIDIA GPU")
+        if self.visual_norm is not None or self.visual_qkv_proj is not None:
+            raise RuntimeError("packed attention does not support token specialization")
+        if self.qkv_quantization_config is not None or self.out_quantization_config is not None:
+            raise RuntimeError("packed attention does not support quantized attention projections")
+        if rope is not None and rope.shape != (2, x.values.shape[0], self._head_dim):
+            raise ValueError(f"packed RoPE must have shape [2, total_tokens, head_dim], got {tuple(rope.shape)}")
+
+        resolved_backend: PackedAttentionBackend = backend
+        if backend == "auto":
+            resolved_backend = "flash_attention" if _flash_attention_qualified(x.values) else "pytorch"
+        if resolved_backend == "flash_attention" and not _flash_attention_available(x.values):
+            raise RuntimeError(
+                "FlashAttention packed execution requires the optional Linux CUDA 'flash-attn' package, "
+                "BF16/FP16 inputs, and an Ampere-or-newer GPU"
+            )
+        if (
+            resolved_backend == "flash_attention"
+            and not allow_unqualified_flash
+            and not _flash_attention_qualified(x.values)
+        ):
+            raise RuntimeError(
+                "the installed FlashAttention version has not qualified for packed production execution; "
+                "run vit-packed-attention-benchmark and add only a version that passes the production gate"
+            )
+
+        q_norm_weight, q_norm_bias, k_norm_weight, k_norm_bias, qk_eps = _get_qk_norm_inputs(self.q_norm, self.k_norm)
+        attention = _flash_packed_attention if resolved_backend == "flash_attention" else _pytorch_packed_attention
+        values = attention(
+            x.values,
+            x.cu_seqlens,
+            self.qkv_proj.weight,
+            self.qkv_proj.bias,
+            self.norm.weight,
+            get_norm_bias(self.norm),
+            self._use_layer_norm,
+            self._head_dim,
+            self.out_proj.weight,
+            self.out_proj.bias,
+            self.norm.eps or 1e-5,
+            q_norm_weight,
+            q_norm_bias,
+            k_norm_weight,
+            k_norm_bias,
+            self._use_layer_norm,
+            qk_eps,
+            self._qk_normalization,
+            self.attention_dropout.p,
+            self.dropout.p,
+            self.training,
+            rope,
+        )
+        return x.with_values(values)
 
     if TYPE_CHECKING:
 

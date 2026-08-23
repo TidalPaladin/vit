@@ -330,6 +330,7 @@ class NormMLP(nn.Module):
         """Apply quantization to both linear layers using torchao."""
         if quantization_config is None:
             return
+        self.quantization_config = quantization_config
         if self.glu_max_autotune_gemm:
             raise ValueError("glu_max_autotune_gemm is not supported with quantization")
         quantize_(self.fc1, quantization_config)

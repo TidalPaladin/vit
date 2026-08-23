@@ -16,6 +16,20 @@ Main flow is `Images -> PatchEmbed -> Transformer -> ViTFeatures -> Heads`.
 - CLS and register tokens are optional. Pooling and classification behavior remains explicit in heads.
 - Prefer config-driven construction via `ViTConfig.instantiate()` and `HeadConfig.instantiate()`.
 - Use `activation_checkpointing=True` in `ViTConfig` when trading latency for lower training memory.
+- Keep packed variable-length execution opt-in. Preserve dense `ViT.forward()` and `ViTFeatures`. Run non-attention
+  work on flat values. Construct jagged Q/K/V only at the SDPA boundary. Keep the PyTorch packed helper
+  `fullgraph=True, dynamic=True`. Do not share its compiler code object with dense or optional backend helpers.
+- Keep packed CLS/register outputs dense and visual tokens as `PackedSequence`. Require explicit `to_padded()` calls.
+  Reject token specialization, conditioning, quantization, export, and explainability tracing before kernel launch.
+  Also reject 3D inputs, FP32, pre-Ampere CUDA, empty sequences, and malformed offsets.
+- Preserve sequence-level stochastic depth, aligned 2D RoPE with identity prefix rotations, training dropout, and
+  activation checkpointing on packed values/offsets/RoPE. Use `PackedBatchBudget` and a fingerprinted calibration
+  result to reject memory outliers before production steps. Catch OOM only in disposable calibration trials.
+- Retain a packed production backend only after three same-GPU decision runs in
+  `vit-packed-attention-benchmark`. Require at least 10% lower median latency. Alternatively, require latency within 3%
+  and peak memory at least 15% lower. No case can be more than 5% slower than the best baseline. Amortize one packing
+  operation across the 12 ViT-S encoder blocks. Measure memory with only the selected method's input representation.
+  Isolate bounded baseline compiler helpers for each benchmark case.
 - Token specialization is disabled by default and does not change the `ViT.forward()` or `ViTFeatures` contracts.
   When enabled, treat the leading CLS and register tokens as one global stream. Split the pre-attention and pre-MLP
   norms, plus configured LayerScale parameters, in every encoder block. Split QKV only in the configured leading block
@@ -52,6 +66,8 @@ Use `uv` and Make targets to keep local and CI behavior aligned.
 - `make test-ci`: run CI-equivalent tests (`not cuda and not compile`).
 - `make test-compile-cpu`: run CPU `torch.compile` tests with Dynamo enabled and CUDA hidden.
 - `make test-compile-cuda`: run CUDA `torch.compile` tests with Dynamo enabled.
+- `make test-packed-cuda`: run packed CUDA correctness and dynamic-shape regression tests.
+- `make benchmark-packed-cuda`: run three packed attention decision runs on the local CUDA GPU.
 - `make test-deprecations`: run CPU tests with default deprecation warnings.
 - `make audit-workflows`: audit GitHub Actions with the locked strict `zizmor` configuration.
 - `make report-deprecations REPORT_DIR=<path>`: report yanked, inactive, and Python-incompatible direct pins.

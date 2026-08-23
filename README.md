@@ -127,6 +127,69 @@ token_specialized_attention_static_batch_sizes: [128, 256, 512]
 target workload justify another mode. See [`docs/aot-export.md`](docs/aot-export.md) for `torch.export` and
 AOTInductor support for every mode.
 
+## Packed Variable-Length Attention
+
+Packed attention is an opt-in Linux NVIDIA CUDA path for BF16 or FP16 on Ampere-or-newer GPUs. It stores visual tokens
+as contiguous values and CUDA `int32` cumulative sequence offsets. Dense `ViT.forward()` and `ViTFeatures` behavior is
+unchanged.
+
+Use `forward_packed` when images have the same spatial size but only a variable subset of patches is valid:
+
+```python
+images = torch.randn(8, 3, 224, 224, device="cuda", dtype=torch.bfloat16)
+patch_validity = torch.rand(8, 256, device="cuda") > 0.25
+
+packed_features = model.forward_packed(
+    images,
+    patch_validity,
+    backend="auto",  # qualifying FlashAttention, otherwise PyTorch jagged SDPA
+)
+
+visual_values = packed_features.visual_tokens.values
+dense_features, visual_validity = packed_features.to_padded()  # explicit conversion only
+```
+
+Use `encode_packed` when the caller tokenizes variable-resolution images separately. Pass a `PackedSequence` of visual
+features and, for RoPE models, a `[2, total_tokens, head_dim]` sine/cosine tensor aligned with the packed values. The
+method adds CLS/register prefixes to each sequence. Prefix RoPE rows use identity rotations. The path uses flat tensors
+for normalization, projections, residuals, LayerScale, MLPs, dropout, and output normalization. Only Q/K/V become
+jagged at the SDPA boundary.
+
+`backend="pytorch"` selects the stable PyTorch 2.13 jagged NestedTensor SDPA path. Its full-graph dynamic helper adapts
+to changes in total tokens, batch count, and sequence lengths. `backend="flash_attention"` is explicit and raises an
+installation, compatibility, or qualification error unless the installed version passed the production gate. The
+default installation does not add FlashAttention. Packed execution rejects token specialization, conditioned MLPs,
+quantization, `torch.export`, 3D inputs, FP32, pre-Ampere GPUs, and explainability tracing. The path supports activation
+checkpointing and sequence-level stochastic depth, including a finite zero residual scale at a drop-path rate of one.
+
+The production gate passed on an RTX 3090 with PyTorch 2.13.0 and native BF16. Three independent runs covered all 24
+surface, profile, and pass combinations. PyTorch packed SDPA had a 0.621 aggregate latency ratio and a 0.914 allocated
+memory ratio against the best baseline in each case. The worst case had a 0.993 latency ratio, so no case regressed.
+
+The latency gate adds one-twelfth of the measured packing latency to each attention result. This models one
+`forward_packed` packing operation amortized across the 12 ViT-S encoder blocks while preserving the zero-pack
+`encode_packed` case. Memory measurements keep only the selected method's input representation live. The artifacts are
+in `benchmark_results/components/packed_attention/rtx3090-bf16-decision-3x/`.
+
+No FlashAttention version is currently qualified or pinned. The benchmark can run an installed version as a candidate,
+but the public explicit backend rejects it until that version passes the production gate.
+
+### Memory procedure
+
+Create a hard `PackedBatchBudget` and use `build_packed_batches` before launching the model. The budget can constrain
+maximum sequence length, total tokens, and `sum(length**2)` attention work. Over-limit sequences raise an error and
+are never truncated.
+
+For training, call `calibrate_packed_batch_budget` only after the model, optimizer, precision policy, activation
+checkpointing, and distributed state are initialized. Its closure receives each proposed total-token limit and must
+run a disposable representative training step, including the optimizer behavior that affects peak memory. The
+calibrator repeats peak-reserved-memory measurements, binary-searches the safe limit, and permits calibration-only OOM
+recovery. It defaults to 85% of usable CUDA memory and keeps a minimum 15% reserve.
+
+Store the returned model and device fingerprint with the budget. `require_fingerprint` rejects stale results.
+Production training must reject over-limit batches before execution. It must not retry a partially completed step after
+OOM. Monitor `average_fill` and `worst_fill` from the greedy batch builder. Recalibrate when utilization is poor.
+
 ## CUDA GLU GEMM Autotuning
 
 Compiled GLU MLPs can opt into PyTorch Inductor GEMM autotuning when steady-state CUDA throughput is more important
@@ -238,6 +301,15 @@ Results are saved as CSV files and visualized with publication-quality plots (PN
 
 For low-level optimization regression testing of core transformer components, use
 `vit-component-benchmark` (`run`, `compare`, `list-baselines`).
+
+Run the packed attention decision surface with `vit-packed-attention-benchmark`. It compares five attention methods
+across four ViT-S BF16 surfaces. The methods include dense masking, power-of-two bucketing, per-sequence SDPA,
+PyTorch jagged SDPA, and an installed FlashAttention candidate. The benchmark uses three deterministic ragged profiles
+and forward or forward-backward execution.
+
+It records median/p95 latency, useful-token throughput, allocated/reserved CUDA peaks, packing overhead, and compiler
+graph counts. `make benchmark-packed-cuda` performs three independent decision runs and applies the checked-in ship
+gate.
 Detailed workflow and recipes live in:
 - [`benchmark/README.md`](benchmark/README.md)
 - `.agents/skills/vit-component-benchmark/SKILL.md` (contributor skill documentation)
