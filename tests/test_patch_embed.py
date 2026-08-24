@@ -1,9 +1,37 @@
 import math
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 import torch
 
 from vit.patch_embed import PatchEmbed2d, PatchEmbed3d
+
+
+COMPILE_TEST_TIMEOUT_SECONDS = 120
+PATCH_COMPILE_CASES = (
+    ("2d", "batch"),
+    ("2d", "resolution"),
+    ("3d", "batch"),
+    ("3d", "resolution"),
+)
+
+
+@pytest.mark.compile
+@pytest.mark.parametrize(("dimensions", "shape_axis"), PATCH_COMPILE_CASES)
+def test_patch_embedding_compiles_across_dynamic_shapes(dimensions, shape_axis):
+    environment = os.environ.copy()
+    environment.pop("TORCHDYNAMO_DISABLE", None)
+    check_script = Path(__file__).with_name("patch_embed_dynamic_shapes_compile_check.py")
+
+    subprocess.run(
+        [sys.executable, str(check_script), dimensions, shape_axis],
+        check=True,
+        env=environment,
+        timeout=COMPILE_TEST_TIMEOUT_SECONDS,
+    )
 
 
 class TestPatchEmbed2d:
