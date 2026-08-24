@@ -1,5 +1,6 @@
 import math
 from collections.abc import Callable, Iterable, Iterator, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Self, cast
@@ -28,6 +29,7 @@ from .head import (
 )
 from .initialization import trunc_normal_
 from .norm import NORM_TYPE_CHOICES, NormType, make_norm
+from .packed import PackedAttentionBackend, PackedSequence
 from .patch_embed import PatchEmbed2d, PatchEmbed3d
 from .pos_enc import PositionEncoder
 from .rope import RopePositionEmbedding
@@ -37,6 +39,7 @@ from .transformer import CrossAttentionTransformer, TransformerDecoderLayer, Tra
 
 HeadConfigType = HeadConfig | AttentivePoolHeadConfig | TransposedConv2dHeadConfig | UpsampleHeadConfig
 HeadModuleType = Head | AttentivePoolHead | TransposedConv2dHead | UpsampleHead
+_EXPLAINABILITY_TRACE_ACTIVE = ContextVar("vit_explainability_trace_active", default=False)
 _DTYPE_BY_NAME = {
     "bfloat16": torch.bfloat16,
     "float16": torch.float16,
@@ -319,6 +322,65 @@ class ViTFeatures:
         )
 
 
+class PackedViTFeatures:
+    """ViT features with fixed prefixes kept dense and visual tokens kept packed."""
+
+    def __init__(
+        self,
+        cls_tokens: Tensor,
+        register_tokens: Tensor,
+        visual_tokens: PackedSequence,
+        tokenized_size: Sequence[int] | None = None,
+    ):
+        if cls_tokens.ndim != 3 or register_tokens.ndim != 3:
+            raise ValueError("packed ViT prefix tokens must be dense rank-three tensors")
+        if cls_tokens.shape[0] != visual_tokens.batch_size or register_tokens.shape[0] != visual_tokens.batch_size:
+            raise ValueError("packed ViT prefix and visual batch sizes must match")
+        if cls_tokens.device != visual_tokens.values.device or register_tokens.device != visual_tokens.values.device:
+            raise ValueError("packed ViT prefix and visual tokens must use the same device")
+        if (
+            cls_tokens.shape[-1] != visual_tokens.values.shape[-1]
+            or register_tokens.shape[-1] != visual_tokens.values.shape[-1]
+        ):
+            raise ValueError("packed ViT prefix and visual hidden sizes must match")
+        self._cls_tokens = cls_tokens
+        self._register_tokens = register_tokens
+        self._visual_tokens = visual_tokens
+        self._tokenized_size = tuple(tokenized_size) if tokenized_size is not None else None
+
+    @property
+    def cls_tokens(self) -> Tensor:
+        return self._cls_tokens
+
+    @property
+    def register_tokens(self) -> Tensor:
+        return self._register_tokens
+
+    @property
+    def visual_tokens(self) -> PackedSequence:
+        return self._visual_tokens
+
+    @property
+    def tokenized_size(self) -> tuple[int, ...] | None:
+        return self._tokenized_size
+
+    def to_padded(self, padding_value: float = 0.0) -> tuple[ViTFeatures, Tensor]:
+        """Explicitly convert to legacy dense features and return visual validity."""
+        visual_tokens, validity = self.visual_tokens.to_padded(padding_value)
+        tokenized_size = self.tokenized_size
+        if tokenized_size is not None and not bool((self.visual_tokens.lengths == math.prod(tokenized_size)).all()):
+            tokenized_size = None
+        return (
+            ViTFeatures.from_separate_features(
+                self.cls_tokens,
+                self.register_tokens,
+                visual_tokens,
+                tokenized_size,
+            ),
+            validity,
+        )
+
+
 def _flatten_vit_features(features: ViTFeatures) -> tuple[list[Tensor], list[int | list[int] | None]]:
     tokenized_size = list(features.tokenized_size) if features.tokenized_size is not None else None
     context: list[int | list[int] | None] = [
@@ -349,6 +411,111 @@ _pytree.register_pytree_node(
 )
 
 
+def _packed_visual_destinations(
+    visual: PackedSequence,
+    prefix_length: int,
+) -> tuple[Tensor, Tensor, Tensor]:
+    new_lengths = visual.lengths + prefix_length
+    zero = torch.zeros(1, device=visual.values.device, dtype=torch.int32)
+    new_offsets = torch.cat((zero, new_lengths.cumsum(0, dtype=torch.int32)))
+    sequence_indices = torch.repeat_interleave(
+        torch.arange(visual.batch_size, device=visual.values.device),
+        visual.lengths.to(torch.int64),
+    )
+    source_starts = torch.repeat_interleave(
+        visual._cu_seqlens_for_ops()[:-1].to(torch.int64),
+        visual.lengths.to(torch.int64),
+    )
+    within_sequence = torch.arange(visual.values.shape[0], device=visual.values.device) - source_starts
+    destinations = new_offsets[:-1].to(torch.int64).index_select(0, sequence_indices)
+    destinations = destinations + prefix_length + within_sequence
+    return destinations, new_offsets, new_lengths
+
+
+def _add_packed_prefix(
+    visual: PackedSequence,
+    cls_tokens: Tensor,
+    register_tokens: Tensor,
+    visual_rope: Tensor | None,
+) -> tuple[PackedSequence, Tensor | None]:
+    prefix = torch.cat(
+        (cls_tokens.expand(visual.batch_size, -1, -1), register_tokens.expand(visual.batch_size, -1, -1)), dim=1
+    )
+    prefix_length = prefix.shape[1]
+    if prefix_length == 0:
+        return visual, visual_rope
+
+    visual_destinations, new_offsets, new_lengths = _packed_visual_destinations(visual, prefix_length)
+    total_tokens = visual.values.shape[0] + visual.batch_size * prefix_length
+    output = visual.values.new_zeros((total_tokens, visual.values.shape[-1]))
+    output = output.index_copy(0, visual_destinations, visual.values)
+    prefix_destinations = (
+        new_offsets[:-1].to(torch.int64).unsqueeze(1)
+        + torch.arange(prefix_length, device=visual.values.device).unsqueeze(0)
+    ).flatten()
+    output = output.index_copy(0, prefix_destinations, prefix.reshape(-1, prefix.shape[-1]))
+    packed = PackedSequence._from_validated(
+        output,
+        new_offsets,
+        new_lengths,
+        visual.min_seqlen + prefix_length,
+        visual.max_seqlen + prefix_length,
+    )
+
+    if visual_rope is None:
+        return packed, None
+    if visual_rope.shape[1] != visual.values.shape[0]:
+        raise ValueError("packed visual RoPE must align one-to-one with visual token values")
+    full_rope = visual_rope.new_empty((2, total_tokens, visual_rope.shape[-1]))
+    full_rope[0].zero_()
+    full_rope[1].fill_(1)
+    full_rope = full_rope.index_copy(1, visual_destinations, visual_rope)
+    return packed, full_rope
+
+
+def _split_packed_features(
+    packed: PackedSequence,
+    num_cls_tokens: int,
+    num_register_tokens: int,
+    tokenized_size: Sequence[int] | None,
+) -> PackedViTFeatures:
+    prefix_length = num_cls_tokens + num_register_tokens
+    sequence_starts = packed._cu_seqlens_for_ops()[:-1].to(torch.int64)
+    if prefix_length == 0:
+        prefix = packed.values.new_empty((packed.batch_size, 0, packed.values.shape[-1]))
+    else:
+        prefix_indices = sequence_starts.unsqueeze(1) + torch.arange(prefix_length, device=packed.values.device)
+        prefix = packed.values.index_select(0, prefix_indices.flatten()).view(
+            packed.batch_size, prefix_length, packed.values.shape[-1]
+        )
+
+    visual_lengths = packed.lengths - prefix_length
+    source_starts = torch.repeat_interleave(sequence_starts, visual_lengths.to(torch.int64))
+    visual_offsets = torch.cat(
+        (
+            torch.zeros(1, device=packed.values.device, dtype=torch.int32),
+            visual_lengths.cumsum(0, dtype=torch.int32),
+        )
+    )
+    total_visual_tokens = packed.values.shape[0] - packed.batch_size * prefix_length
+    within_sequence = torch.arange(total_visual_tokens, device=packed.values.device)
+    within_sequence -= torch.repeat_interleave(visual_offsets[:-1].to(torch.int64), visual_lengths.to(torch.int64))
+    visual_indices = source_starts + prefix_length + within_sequence
+    visual = PackedSequence._from_validated(
+        packed.values.index_select(0, visual_indices),
+        visual_offsets,
+        visual_lengths,
+        packed.min_seqlen - prefix_length,
+        packed.max_seqlen - prefix_length,
+    )
+    return PackedViTFeatures(
+        cls_tokens=prefix[:, :num_cls_tokens],
+        register_tokens=prefix[:, num_cls_tokens:],
+        visual_tokens=visual,
+        tokenized_size=tokenized_size,
+    )
+
+
 class ViT(nn.Module):
     def __init__(
         self,
@@ -361,6 +528,14 @@ class ViT(nn.Module):
         factory_kwargs = {"device": device, "dtype": config.dtype}
         super().__init__()
         self._config = config
+        self._packed_quantization_enabled = any(
+            quantization_config is not None
+            for quantization_config in (
+                mlp_quantization_config,
+                qkv_quantization_config,
+                attn_quantization_config,
+            )
+        )
 
         # Stem tokenizer
         PatchEmbed = PatchEmbed2d if len(config.patch_size) == 2 else PatchEmbed3d
@@ -430,6 +605,15 @@ class ViT(nn.Module):
         qkv_quantization_config: Any | None = None,
         attn_quantization_config: Any | None = None,
     ) -> None:
+        if any(
+            quantization_config is not None
+            for quantization_config in (
+                mlp_quantization_config,
+                qkv_quantization_config,
+                attn_quantization_config,
+            )
+        ):
+            self._packed_quantization_enabled = True
         for block in self.blocks:
             assert isinstance(block, TransformerEncoderLayer)
             block.apply_quantization(mlp_quantization_config, qkv_quantization_config, attn_quantization_config)
@@ -686,6 +870,150 @@ class ViT(nn.Module):
                 raise ValueError("conditioning is not supported unless config.conditioning_size is set")
         elif conditioning is None:
             raise ValueError("conditioning is required when config.conditioning_size is set")
+
+    def _validate_packed_execution(self) -> None:
+        if torch.compiler.is_exporting():
+            raise RuntimeError("packed ViT execution does not support torch.export")
+        if _EXPLAINABILITY_TRACE_ACTIVE.get():
+            raise RuntimeError("packed ViT execution does not support explainability tracing")
+        if self.config.token_specialization_enabled:
+            raise RuntimeError("packed ViT execution does not support token specialization")
+        if self.config.conditioning_size is not None:
+            raise RuntimeError("packed ViT execution does not support conditioned MLPs")
+        if self._packed_quantization_enabled:
+            raise RuntimeError("packed ViT execution does not support quantization")
+        if len(self.config.patch_size) != 2:
+            raise RuntimeError("packed ViT execution supports 2D inputs only")
+
+    def encode_packed(
+        self,
+        visual_features: PackedSequence,
+        *,
+        rope: Tensor | None = None,
+        tokenized_size: Sequence[int] | None = None,
+        output_norm: bool = True,
+        backend: PackedAttentionBackend = "auto",
+    ) -> PackedViTFeatures:
+        """Encode already tokenized visual features without padding.
+
+        The method applies the configured patch-embedding normalization. When
+        RoPE is configured, ``rope`` must contain sine/cosine rows aligned with
+        ``visual_features.values``.
+        """
+        normalized = visual_features.with_values(self.normalize_patch_embeddings(visual_features.values))
+        return self._encode_packed_normalized(
+            normalized,
+            rope=rope,
+            tokenized_size=tokenized_size,
+            output_norm=output_norm,
+            backend=backend,
+        )
+
+    def _encode_packed_normalized(
+        self,
+        visual_features: PackedSequence,
+        *,
+        rope: Tensor | None,
+        tokenized_size: Sequence[int] | None,
+        output_norm: bool,
+        backend: PackedAttentionBackend,
+    ) -> PackedViTFeatures:
+        self._validate_packed_execution()
+        if self.rope is not None and rope is None:
+            raise ValueError("packed RoPE values are required when the ViT uses RoPE")
+        if self.rope is None and rope is not None:
+            raise ValueError("packed RoPE values were provided to a ViT without RoPE")
+
+        packed, aligned_rope = _add_packed_prefix(
+            visual_features,
+            self.cls_tokens,
+            self.register_tokens,
+            rope,
+        )
+        for block in self.blocks:
+            assert isinstance(block, TransformerEncoderLayer)
+            if self.config.activation_checkpointing and self.training:
+                layout = packed
+
+                def checkpointed_block(
+                    values: Tensor,
+                    offsets: Tensor,
+                    block_rope: Tensor | None,
+                    current_block: TransformerEncoderLayer = block,
+                    current_layout: PackedSequence = layout,
+                ) -> Tensor:
+                    block_input = PackedSequence._from_validated(
+                        values,
+                        offsets,
+                        current_layout.lengths,
+                        current_layout.min_seqlen,
+                        current_layout.max_seqlen,
+                    )
+                    return current_block.forward_packed(block_input, rope=block_rope, backend=backend).values
+
+                values = cast(
+                    Tensor,
+                    checkpoint(
+                        checkpointed_block,
+                        packed.values,
+                        packed._cu_seqlens_for_ops(),
+                        aligned_rope,
+                        use_reentrant=False,
+                    ),
+                )
+                packed = packed.with_values(values)
+            else:
+                packed = block.forward_packed(packed, rope=aligned_rope, backend=backend)
+
+        values = self.output_norm(packed.values) if output_norm else packed.values
+        return _split_packed_features(
+            packed.with_values(values),
+            self.config.num_cls_tokens,
+            self.config.num_register_tokens,
+            tokenized_size,
+        )
+
+    def forward_packed(
+        self,
+        images: Tensor,
+        mask: Tensor,
+        rope_seed: int | None = None,
+        output_norm: bool = True,
+        *,
+        backend: PackedAttentionBackend = "auto",
+    ) -> PackedViTFeatures:
+        """Encode same-size images using a ragged patch-validity mask."""
+        self._validate_packed_execution()
+        if images.ndim != 4:
+            raise ValueError("forward_packed expects same-size dense 2D images with shape [B, C, H, W]")
+        if mask.dtype != torch.bool or mask.device != images.device:
+            raise ValueError("packed image mask must be boolean and on the image device")
+        tokenized_size = self.stem.tokenized_size(images.shape[2:])
+        visual_features = self.stem(images)
+        visual_features = self.normalize_patch_embeddings(visual_features)
+        if mask.shape != visual_features.shape[:2]:
+            raise ValueError(
+                f"packed image mask must have shape {tuple(visual_features.shape[:2])}, got {tuple(mask.shape)}"
+            )
+        packed_visual = PackedSequence.from_padded(visual_features, mask)
+
+        packed_rope = None
+        if self.rope is not None:
+            dense_rope = self.prepare_rope(tokenized_size, rope_seed=rope_seed)
+            batch_size = images.shape[0]
+            packed_rope = torch.stack(
+                (
+                    dense_rope[0].expand(batch_size, -1, -1)[mask],
+                    dense_rope[1].expand(batch_size, -1, -1)[mask],
+                )
+            )
+        return self._encode_packed_normalized(
+            packed_visual,
+            rope=packed_rope,
+            tokenized_size=tokenized_size,
+            output_norm=output_norm,
+            backend=backend,
+        )
 
     def forward(
         self,

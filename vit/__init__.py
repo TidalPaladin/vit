@@ -15,7 +15,17 @@ from .head import (
     UpsampleHeadConfig,
     register_constructors as register_head_constructors,
 )
-from .vit import ViT, ViTConfig, ViTFeatures, register_constructors as register_vit_constructors
+from .packed import (
+    PackedAttentionBackend,
+    PackedBatchBudget,
+    PackedBatchConstruction,
+    PackedMemoryCalibration,
+    PackedSequence,
+    build_packed_batches,
+    calibrate_packed_batch_budget,
+    packed_configuration_fingerprint,
+)
+from .vit import PackedViTFeatures, ViT, ViTConfig, ViTFeatures, register_constructors as register_vit_constructors
 
 
 def _resolve_version() -> str:
@@ -42,6 +52,15 @@ __all__ = [
     "ViT",
     "ViTConfig",
     "ViTFeatures",
+    "PackedViTFeatures",
+    "PackedAttentionBackend",
+    "PackedBatchBudget",
+    "PackedBatchConstruction",
+    "PackedMemoryCalibration",
+    "PackedSequence",
+    "build_packed_batches",
+    "calibrate_packed_batch_budget",
+    "packed_configuration_fingerprint",
     "TokenSpecializedAttentionCompileMode",
     "AttentivePool",
     "AttentivePoolHead",

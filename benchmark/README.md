@@ -142,6 +142,32 @@ baseline, not a public `ViTConfig` mode. Use fresh processes and compiler caches
 Detailed workflows, recipes, and interpretation guidance are maintained in:
 - `.agents/skills/vit-component-benchmark/SKILL.md`
 
+### Packed Attention Decision Benchmark
+
+`vit-packed-attention-benchmark` is the variable-length attention decision surface. Its deterministic defaults cover
+approximately B64/L196, B16/L1024, B4/L4096, and B2/L10000 with mild raggedness, high raggedness, and one-long-outlier
+profiles in forward and forward-backward modes. It compares dense masking, power-of-two padded bucketing,
+per-sequence execution, PyTorch jagged SDPA, and an installed FlashAttention varlen candidate.
+
+```bash
+make benchmark-packed-cuda
+
+# Short diagnostic run
+vit-packed-attention-benchmark \
+    --surfaces b64_l196 \
+    --profiles high outlier \
+    --pass-modes forward_backward \
+    --independent-runs 1 \
+    --samples 3
+```
+
+The CLI saves JSON and CSV artifacts under `benchmark_results/components/packed_attention/`. Records include exact
+length vectors, latency, throughput, allocated/reserved CUDA memory, packing latency, compile counts, and backend errors.
+The production latency gate adds one-twelfth of the packing median to each candidate execution median. This represents
+one pack amortized across the 12 ViT-S encoder blocks. Memory measurements keep only the selected method's input
+representation live, and bounded dense baseline helpers use separate compiler code objects per case. The CLI exits with
+a nonzero status when no packed candidate qualifies.
+
 ### Using the Python API
 
 ```python

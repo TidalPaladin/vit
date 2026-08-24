@@ -14,7 +14,7 @@ from vit.norm import get_norm_bias
 from vit.patch_embed import PatchEmbed2d
 from vit.tokens import apply_mask
 from vit.transformer import _forward_mlp, _forward_mlp_with_intermediates
-from vit.vit import ViT, ViTFeatures
+from vit.vit import _EXPLAINABILITY_TRACE_ACTIVE, ViT, ViTFeatures
 
 from .types import ForwardArgs, LayerTrace, MLPTrace, TokenLayout, TraceConfig, ViTTrace
 
@@ -151,6 +151,21 @@ def eager_self_attention(attention, x: Tensor, rope: Tensor | None) -> tuple[Ten
 
 
 def trace_vit(
+    model: ViT,
+    inputs: Tensor,
+    config: TraceConfig,
+    forward_args: ForwardArgs,
+    intervention: Callable[[str, int, Tensor], Tensor] | None = None,
+) -> ViTTrace:
+    """Execute an eager trace while packed execution is explicitly disabled."""
+    token = _EXPLAINABILITY_TRACE_ACTIVE.set(True)
+    try:
+        return _trace_vit(model, inputs, config, forward_args, intervention)
+    finally:
+        _EXPLAINABILITY_TRACE_ACTIVE.reset(token)
+
+
+def _trace_vit(
     model: ViT,
     inputs: Tensor,
     config: TraceConfig,
