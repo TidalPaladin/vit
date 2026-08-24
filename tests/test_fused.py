@@ -1,4 +1,8 @@
+import os
+import subprocess
+import sys
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 import torch
@@ -16,6 +20,13 @@ from vit.fused import (
 
 
 TORCHAO_QUANTIZATION_CONFIG_VERSION = 2
+COMPILE_TEST_TIMEOUT_SECONDS = 120
+MLP_COMPILE_CASES = (
+    ("srelu", "grad"),
+    ("srelu", "no_grad"),
+    ("swiglu", "grad"),
+    ("swiglu", "no_grad"),
+)
 
 
 def _apply_norm_manual(
@@ -99,6 +110,20 @@ class TestNormLinear:
 
 
 class TestNormMLP:
+    @pytest.mark.compile
+    @pytest.mark.parametrize(("activation", "gradient_mode"), MLP_COMPILE_CASES)
+    def test_compiles_across_dynamic_flat_token_counts(self, activation, gradient_mode):
+        environment = os.environ.copy()
+        environment.pop("TORCHDYNAMO_DISABLE", None)
+        check_script = Path(__file__).with_name("norm_mlp_dynamic_shapes_compile_check.py")
+
+        subprocess.run(
+            [sys.executable, str(check_script), activation, gradient_mode],
+            check=True,
+            env=environment,
+            timeout=COMPILE_TEST_TIMEOUT_SECONDS,
+        )
+
     def test_reset_parameters_zeros_biases(self):
         layer = NormMLP(10, 20)
         assert layer.fc1.bias is not None
