@@ -267,6 +267,16 @@ class TestTransformerEncoderLayer:
         keep_count = _expected_keep_count(batch_size, drop_path_rate)
         assert residual_scale == pytest.approx(batch_size / keep_count)
 
+    @pytest.mark.parametrize(("drop_path_rate", "training"), [(0.0, True), (0.5, False)])
+    def test_inactive_stochastic_depth_reuses_dense_batch(self, device, drop_path_rate, training):
+        x = torch.randn(4, 8, 16, device=device)
+
+        residual, keep_indices, residual_scale = _select_residual_subset(x, drop_path_rate, training)
+
+        assert residual is x
+        assert keep_indices is None
+        assert residual_scale == 1.0
+
     def test_backward_with_selective_stochastic_depth(self, device):
         batch_size, seq_len, hidden_size = 8, 16, 64
         layer = TransformerEncoderLayer(

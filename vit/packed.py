@@ -29,8 +29,8 @@ class PackedSequence:
     def __init__(self, values: Tensor, cu_seqlens: Tensor):
         self._validate(values, cu_seqlens)
         self._values = values
-        self._cu_seqlens = cu_seqlens
-        self._lengths = cu_seqlens.diff()
+        self._cu_seqlens = cu_seqlens.clone()
+        self._lengths = self._cu_seqlens.diff()
         self._min_seqlen = int(self._lengths.min().item())
         self._max_seqlen = int(self._lengths.max().item())
 
@@ -50,6 +50,33 @@ class PackedSequence:
         packed._min_seqlen = min_seqlen
         packed._max_seqlen = max_seqlen
         return packed
+
+    @staticmethod
+    def _validate_internal_values(values: Tensor) -> None:
+        if values.ndim != 2:
+            raise ValueError(f"packed values must have shape [total_tokens, hidden_size], got {tuple(values.shape)}")
+        if values.device.type != "cuda":
+            raise ValueError("cu_seqlens must be a CUDA int32 tensor")
+
+    @classmethod
+    def _from_length_tensor(cls, values: Tensor, lengths: Tensor, *, validate_total: bool) -> Self:
+        cls._validate_internal_values(values)
+        if lengths.numel() == 0:
+            raise ValueError("cu_seqlens must be one-dimensional and describe at least one sequence")
+
+        minimum_tensor, maximum_tensor = torch.aminmax(lengths)
+        minimum = int(minimum_tensor.item())
+        maximum = int(maximum_tensor.item())
+        if minimum < 0:
+            raise ValueError("cu_seqlens must be monotonic")
+        if minimum == 0:
+            raise ValueError("each packed sequence must contain at least one token")
+
+        zero = torch.zeros(1, device=values.device, dtype=torch.int32)
+        cu_seqlens = torch.cat((zero, lengths.cumsum(0, dtype=torch.int32)))
+        if validate_total and int(cu_seqlens[-1].item()) != values.shape[0]:
+            raise ValueError("cu_seqlens final offset must equal the total token count")
+        return cls._from_validated(values, cu_seqlens, lengths, minimum, maximum)
 
     @staticmethod
     def _validate(values: Tensor, cu_seqlens: Tensor) -> None:
@@ -77,14 +104,27 @@ class PackedSequence:
         if isinstance(lengths, Tensor):
             if lengths.ndim != 1 or lengths.dtype not in (torch.int32, torch.int64):
                 raise ValueError("lengths must be a one-dimensional int32 or int64 tensor")
-            length_tensor = lengths.to(device=values.device, dtype=torch.int32)
+            length_tensor = lengths.to(device=values.device, dtype=torch.int32, copy=True)
+            return cls._from_length_tensor(values, length_tensor, validate_total=True)
         else:
             normalized_lengths = tuple(lengths)
             if any(not isinstance(length, int) or isinstance(length, bool) for length in normalized_lengths):
                 raise ValueError("lengths must contain integers")
+            cls._validate_internal_values(values)
+            if not normalized_lengths:
+                raise ValueError("cu_seqlens must be one-dimensional and describe at least one sequence")
+            minimum = min(normalized_lengths)
+            maximum = max(normalized_lengths)
+            if minimum < 0:
+                raise ValueError("cu_seqlens must be monotonic")
+            if minimum == 0:
+                raise ValueError("each packed sequence must contain at least one token")
+            if sum(normalized_lengths) != values.shape[0]:
+                raise ValueError("cu_seqlens final offset must equal the total token count")
             length_tensor = torch.tensor(normalized_lengths, device=values.device, dtype=torch.int32)
-        zero = torch.zeros(1, device=values.device, dtype=torch.int32)
-        return cls(values, torch.cat((zero, length_tensor.cumsum(0, dtype=torch.int32))))
+            zero = torch.zeros(1, device=values.device, dtype=torch.int32)
+            cu_seqlens = torch.cat((zero, length_tensor.cumsum(0, dtype=torch.int32)))
+            return cls._from_validated(values, cu_seqlens, length_tensor, minimum, maximum)
 
     @classmethod
     def from_padded(cls, values: Tensor, validity: Tensor) -> Self:
@@ -98,7 +138,7 @@ class PackedSequence:
         if validity.device != values.device:
             raise ValueError("padded values and validity must use the same device")
         lengths = validity.sum(dim=1, dtype=torch.int32)
-        return cls.from_lengths(values[validity], lengths)
+        return cls._from_length_tensor(values[validity], lengths, validate_total=False)
 
     @property
     def values(self) -> Tensor:
@@ -106,6 +146,11 @@ class PackedSequence:
 
     @property
     def cu_seqlens(self) -> Tensor:
+        """Return a copy of the offsets so cached sequence bounds cannot be invalidated."""
+        return self._cu_seqlens.clone()
+
+    def _cu_seqlens_for_ops(self) -> Tensor:
+        """Return internal offsets for repository operations that do not mutate metadata."""
         return self._cu_seqlens
 
     @property
@@ -129,7 +174,7 @@ class PackedSequence:
         """Return a jagged NestedTensor view over the packed values."""
         return torch.nested.nested_tensor_from_jagged(
             self.values,
-            self.cu_seqlens,
+            self._cu_seqlens,
             min_seqlen=self.min_seqlen,
             max_seqlen=self.max_seqlen,
         )
@@ -142,7 +187,7 @@ class PackedSequence:
             raise ValueError("replacement values must remain on the packed sequence device")
         return self._from_validated(
             values,
-            self.cu_seqlens,
+            self._cu_seqlens,
             self.lengths,
             self.min_seqlen,
             self.max_seqlen,
@@ -150,7 +195,7 @@ class PackedSequence:
 
     def unbind(self) -> tuple[Tensor, ...]:
         """Return ordinary tensor views for each logical sequence."""
-        offsets = self.cu_seqlens.tolist()
+        offsets = self._cu_seqlens.tolist()
         return tuple(self.values[start:end] for start, end in zip(offsets[:-1], offsets[1:], strict=True))
 
     def to_padded(self, padding_value: float = 0.0) -> tuple[Tensor, Tensor]:

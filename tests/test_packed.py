@@ -121,9 +121,119 @@ class TestPackedSequence:
         with pytest.raises(ValueError, match="device"):
             packed.with_values(packed.values.cpu())
 
+    def test_internal_constructors_do_not_repeat_offset_validation(self, monkeypatch):
+        values = torch.randn(sum(LENGTHS), HIDDEN_SIZE, device="cuda", dtype=torch.bfloat16)
+        padded = torch.randn(len(LENGTHS), max(LENGTHS), HIDDEN_SIZE, device="cuda", dtype=torch.bfloat16)
+        token_indices = torch.arange(max(LENGTHS), device="cuda")
+        validity = token_indices.unsqueeze(0) < torch.tensor(LENGTHS, device="cuda").unsqueeze(1)
+
+        def fail_validation(*_args):
+            raise AssertionError("internally constructed offsets must not be revalidated")
+
+        monkeypatch.setattr(PackedSequence, "_validate", staticmethod(fail_validation))
+
+        from_lengths = PackedSequence.from_lengths(values, LENGTHS)
+        from_padded = PackedSequence.from_padded(padded, validity)
+
+        assert from_lengths.max_seqlen == max(LENGTHS)
+        assert from_padded.max_seqlen == max(LENGTHS)
+
+    @pytest.mark.parametrize(
+        ("lengths", "message"),
+        [
+            ([], "at least one sequence"),
+            ([0, 3], "at least one token"),
+            ([-1, 4], "monotonic"),
+            ([2], "total token count"),
+        ],
+    )
+    def test_from_lengths_preserves_metadata_validation(self, lengths, message):
+        values = torch.randn(3, HIDDEN_SIZE, device="cuda", dtype=torch.bfloat16)
+
+        with pytest.raises(ValueError, match=message):
+            PackedSequence.from_lengths(values, lengths)
+
+    def test_from_padded_rejects_an_empty_sequence(self):
+        values = torch.randn(2, 3, HIDDEN_SIZE, device="cuda", dtype=torch.bfloat16)
+        validity = torch.tensor([[True, True, True], [False, False, False]], device="cuda")
+
+        with pytest.raises(ValueError, match="at least one token"):
+            PackedSequence.from_padded(values, validity)
+
+    def test_from_lengths_owns_external_tensor_metadata(self):
+        values = torch.randn(sum(LENGTHS), HIDDEN_SIZE, device="cuda", dtype=torch.bfloat16)
+        lengths = torch.tensor(LENGTHS, device="cuda", dtype=torch.int32)
+        packed = PackedSequence.from_lengths(values, lengths)
+
+        lengths.fill_(1)
+
+        assert packed.lengths.tolist() == list(LENGTHS)
+        assert packed.max_seqlen == max(LENGTHS)
+
+    def test_constructor_owns_and_encapsulates_external_offsets(self):
+        values = torch.randn(6, HIDDEN_SIZE, device="cuda", dtype=torch.bfloat16)
+        offsets = torch.tensor([0, 3, 6], device="cuda", dtype=torch.int32)
+        packed = PackedSequence(values, offsets)
+
+        offsets[1] = 1
+        exposed_offsets = packed.cu_seqlens
+        exposed_offsets[1] = 1
+
+        assert packed.cu_seqlens.tolist() == [0, 3, 6]
+        assert packed.lengths.tolist() == [3, 3]
+        assert packed.max_seqlen == 3
+
 
 @pytest.mark.cuda
 class TestPackedSelfAttention:
+    def test_passes_exact_sequence_bound_to_pytorch_backend(self, monkeypatch):
+        packed = _packed(LENGTHS)
+        module = SelfAttention(
+            HIDDEN_SIZE,
+            NUM_HEADS,
+            hidden_dropout=0.0,
+            attention_dropout=0.0,
+            device=torch.device("cuda"),
+            dtype=torch.bfloat16,
+        ).eval()
+        captured: dict[str, object] = {}
+
+        def capture_bound(values, _cu_seqlens, max_seqlen, *_args):
+            captured["max_seqlen"] = max_seqlen
+            return torch.zeros_like(values)
+
+        monkeypatch.setattr(attention_module, "_pytorch_packed_attention", capture_bound)
+
+        module.forward_packed(packed, backend="pytorch")
+
+        assert isinstance(captured["max_seqlen"], int)
+        assert captured["max_seqlen"] == max(LENGTHS)
+
+    def test_passes_exact_sequence_bound_to_flash_backend(self, monkeypatch):
+        packed = _packed(LENGTHS)
+        module = SelfAttention(
+            HIDDEN_SIZE,
+            NUM_HEADS,
+            hidden_dropout=0.0,
+            attention_dropout=0.0,
+            device=torch.device("cuda"),
+            dtype=torch.bfloat16,
+        ).eval()
+        captured: dict[str, object] = {}
+
+        def capture_bound(values, _cu_seqlens, max_seqlen, *_args):
+            captured["max_seqlen"] = max_seqlen
+            return torch.zeros_like(values)
+
+        monkeypatch.setattr(attention_module, "_flash_attention_available", lambda _values: True)
+        monkeypatch.setattr(attention_module, "_flash_attention_qualified", lambda _values: True)
+        monkeypatch.setattr(attention_module, "_flash_packed_attention", capture_bound)
+
+        module.forward_packed(packed, backend="flash_attention")
+
+        assert isinstance(captured["max_seqlen"], int)
+        assert captured["max_seqlen"] == max(LENGTHS)
+
     @pytest.mark.parametrize("qk_normalization", [False, True])
     def test_matches_independent_sequences_and_gradients(self, qk_normalization):
         module = SelfAttention(
@@ -274,6 +384,15 @@ class TestPackedSelfAttention:
 
 @pytest.mark.cuda
 class TestPackedTransformer:
+    @pytest.mark.parametrize(("drop_path_rate", "training"), [(0.0, True), (0.5, False)])
+    def test_inactive_drop_path_uses_scalar_identity(self, drop_path_rate, training):
+        packed = _packed(LENGTHS)
+
+        scale = _packed_drop_path_scale(packed, drop_path_rate, training)
+
+        assert isinstance(scale, float)
+        assert scale == 1.0
+
     def test_layer_matches_independent_sequences_with_layer_scale(self):
         layer = TransformerEncoderLayer(
             HIDDEN_SIZE,
@@ -307,8 +426,10 @@ class TestPackedTransformer:
         packed = _packed(LENGTHS)
         torch.manual_seed(123)
 
-        scale = _packed_drop_path_scale(packed, 0.5, True).flatten()
+        scale = _packed_drop_path_scale(packed, 0.5, True)
 
+        assert isinstance(scale, torch.Tensor)
+        scale = scale.flatten()
         start = 0
         for length in LENGTHS:
             assert torch.unique(scale[start : start + length]).numel() == 1
@@ -319,6 +440,7 @@ class TestPackedTransformer:
 
         scale = _packed_drop_path_scale(packed, 1.0, True)
 
+        assert isinstance(scale, torch.Tensor)
         assert torch.count_nonzero(scale) == 0
         assert torch.isfinite(scale).all()
 

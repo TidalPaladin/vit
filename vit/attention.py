@@ -366,6 +366,7 @@ def _pytorch_packed_attention_impl(
     # fmt: off
     values: Tensor,
     cu_seqlens: Tensor,
+    max_seqlen: int,
     w_in: Tensor,
     b_in: Tensor | None,
     w_norm: Tensor,
@@ -406,13 +407,11 @@ def _pytorch_packed_attention_impl(
     )
     q, k = _apply_flat_rope(q, k, rope)
 
-    # A conservative symbolic upper bound avoids reading data-dependent offsets
-    # while allowing one dynamic graph to adapt to changing packed layouts.
     jagged_options = {
         "offsets": cu_seqlens,
         "jagged_dim": 1,
         "min_seqlen": 1,
-        "max_seqlen": values.shape[0],
+        "max_seqlen": max_seqlen,
     }
     q_jagged = torch.nested.nested_tensor_from_jagged(q, **jagged_options).transpose(1, 2)
     k_jagged = torch.nested.nested_tensor_from_jagged(k, **jagged_options).transpose(1, 2)
@@ -463,6 +462,7 @@ def _flash_attention_qualified(values: Tensor) -> bool:
 def _flash_packed_attention(
     values: Tensor,
     cu_seqlens: Tensor,
+    max_seqlen: int,
     w_in: Tensor,
     b_in: Tensor | None,
     w_norm: Tensor,
@@ -510,7 +510,6 @@ def _flash_packed_attention(
     )
     q, k = _apply_flat_rope(q, k, rope)
     qkv = torch.stack((q, k, v), dim=1)
-    max_seqlen = int(cu_seqlens.diff().max().item())
     output = flash_attn_varlen_qkvpacked_func(
         qkv,
         cu_seqlens,
@@ -1128,7 +1127,8 @@ class SelfAttention(nn.Module):
         attention = _flash_packed_attention if resolved_backend == "flash_attention" else _pytorch_packed_attention
         values = attention(
             x.values,
-            x.cu_seqlens,
+            x._cu_seqlens_for_ops(),
+            x.max_seqlen,
             self.qkv_proj.weight,
             self.qkv_proj.bias,
             self.norm.weight,

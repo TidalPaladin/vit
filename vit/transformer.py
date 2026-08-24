@@ -39,9 +39,9 @@ def _merge_residual_subset(
     return x.flatten(1).index_add(0, keep_indices, residual.flatten(1), alpha=residual_scale).view_as(x)
 
 
-def _packed_drop_path_scale(x: PackedSequence, drop_path_rate: float, training: bool) -> Tensor:
+def _packed_drop_path_scale(x: PackedSequence, drop_path_rate: float, training: bool) -> float | Tensor:
     if not training or drop_path_rate <= 0.0:
-        return x.values.new_ones((x.values.shape[0], 1))
+        return 1.0
     if drop_path_rate >= 1.0:
         return x.values.new_zeros((x.values.shape[0], 1))
     keep_probability = 1.0 - drop_path_rate

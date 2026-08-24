@@ -423,7 +423,7 @@ def _packed_visual_destinations(
         visual.lengths.to(torch.int64),
     )
     source_starts = torch.repeat_interleave(
-        visual.cu_seqlens[:-1].to(torch.int64),
+        visual._cu_seqlens_for_ops()[:-1].to(torch.int64),
         visual.lengths.to(torch.int64),
     )
     within_sequence = torch.arange(visual.values.shape[0], device=visual.values.device) - source_starts
@@ -480,7 +480,7 @@ def _split_packed_features(
     tokenized_size: Sequence[int] | None,
 ) -> PackedViTFeatures:
     prefix_length = num_cls_tokens + num_register_tokens
-    sequence_starts = packed.cu_seqlens[:-1].to(torch.int64)
+    sequence_starts = packed._cu_seqlens_for_ops()[:-1].to(torch.int64)
     if prefix_length == 0:
         prefix = packed.values.new_empty((packed.batch_size, 0, packed.values.shape[-1]))
     else:
@@ -956,7 +956,7 @@ class ViT(nn.Module):
                     checkpoint(
                         checkpointed_block,
                         packed.values,
-                        packed.cu_seqlens,
+                        packed._cu_seqlens_for_ops(),
                         aligned_rope,
                         use_reentrant=False,
                     ),
