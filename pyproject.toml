@@ -112,6 +112,7 @@ dev = [
 
 ci-security = [
     "pip-audit==2.10.1",
+    "pip==26.2.1",  # PYSEC-2026-3721
     "zizmor==1.28.0",
 ]
 
