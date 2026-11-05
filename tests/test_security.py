@@ -1,3 +1,4 @@
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -23,16 +24,20 @@ def test_dependency_audit_workflow_is_scheduled_and_covers_supported_python_boun
     assert "tools/run_security_audit.py" in security_command
 
 
-def test_dependency_audit_target_runs_scanner_on_requested_python() -> None:
+@pytest.mark.parametrize("python_version", ["3.11", "3.15"])
+def test_dependency_audit_target_runs_scanner_on_requested_python(python_version: str) -> None:
     result = subprocess.run(
-        ["make", "--dry-run", "audit-dependencies", "PYTHON_VERSION=3.11"],
+        ["make", "--dry-run", "audit-dependencies", f"PYTHON_VERSION={python_version}"],
         cwd=PROJECT_ROOT,
         capture_output=True,
         text=True,
         check=True,
     )
 
-    assert '--python "3.11"' in result.stdout
+    assert f'--python "{python_version}"' in result.stdout
+    scanner_line = next(line for line in result.stdout.splitlines() if " pip-audit " in line)
+    scanner_command = shlex.split(scanner_line.rstrip().removesuffix("\\"))
+    assert scanner_command[scanner_command.index("--python") + 1] == python_version
     assert "--only-group ci-security" in result.stdout
     assert "pip-audit" in result.stdout
 

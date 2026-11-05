@@ -236,7 +236,7 @@ def main() -> int:
     parser.add_argument("--summary-output", type=Path, required=True)
     parser.add_argument("--python-version", action="append", dest="python_versions")
     args = parser.parse_args()
-    python_versions = tuple(args.python_versions or ("3.11", "3.14"))
+    python_versions = tuple(args.python_versions or ("3.11", "3.15"))
 
     args.json_output.parent.mkdir(parents=True, exist_ok=True)
     args.summary_output.parent.mkdir(parents=True, exist_ok=True)

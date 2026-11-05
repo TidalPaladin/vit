@@ -1,6 +1,6 @@
 # AOT export
 
-`ViT` supports direct inference export with PyTorch 2.13 `torch.export` and packaging with AOTInductor. Exported models
+`ViT` supports direct inference export with PyTorch 2.15 `torch.export` and packaging with AOTInductor. Exported models
 retain the `ViTFeatures` output type, including CLS/register counts and the tokenized spatial size.
 
 ## Support matrix

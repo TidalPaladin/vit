@@ -29,24 +29,24 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up uv and Python
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.11.28"
-          checksum: e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224
-          python-version: "3.14"
+          version: "0.13.7"
+          checksum: c5221ff41b7892bfc223543883600125f6a47fe845093e0f5bdff4f359196d83
+          python-version: "3.15"
           enable-cache: true
           restore-cache: true
           save-cache: true
           cache-dependency-glob: |-
             pyproject.toml
             uv.lock
-          cache-suffix: ubuntu-x64-uv-0.11.28-python-3.14-torch-2.13.0-security
+          cache-suffix: ubuntu-x64-uv-0.13.7-python-3.15-torch-2.15.0-security
       - name: Verify pinned tools
         run: |
-          test "$(uv --version | cut -d ' ' -f 1-2)" = "uv 0.11.28"
-          uv run --no-project --python 3.14 python -c 'import sys; assert sys.version_info[:2] == (3, 14)'
+          test "$(uv --version | cut -d ' ' -f 1-2)" = "uv 0.13.7"
+          uv run --no-project --python 3.15 python -c 'import sys; assert sys.version_info[:2] == (3, 15)'
       - name: Install locked security tools
-        run: uv sync --frozen --only-group ci-security --python 3.14
+        run: uv sync --frozen --only-group ci-security --python 3.15
       - name: Run every security scanner
         id: security
         continue-on-error: true
@@ -65,7 +65,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload security reports
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dependency-security-${{ github.run_id }}
           path: dependency-security/
@@ -87,28 +87,28 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up uv and Python
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.11.28"
-          checksum: e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224
-          python-version: "3.14"
+          version: "0.13.7"
+          checksum: c5221ff41b7892bfc223543883600125f6a47fe845093e0f5bdff4f359196d83
+          python-version: "3.15"
           enable-cache: true
           restore-cache: true
           save-cache: true
           cache-dependency-glob: |-
             pyproject.toml
             uv.lock
-          cache-suffix: ubuntu-x64-uv-0.11.28-python-3.14-torch-2.13.0-dependency-report
+          cache-suffix: ubuntu-x64-uv-0.13.7-python-3.15-torch-2.15.0-dependency-report
       - name: Verify pinned tools
         run: |
-          test "$(uv --version | cut -d ' ' -f 1-2)" = "uv 0.11.28"
-          uv run --no-project --python 3.14 python -c 'import sys; assert sys.version_info[:2] == (3, 14)'
+          test "$(uv --version | cut -d ' ' -f 1-2)" = "uv 0.13.7"
+          uv run --no-project --python 3.15 python -c 'import sys; assert sys.version_info[:2] == (3, 15)'
       - name: Install locked reporting tools
-        run: uv sync --frozen --only-group ci-dependency-report --python 3.14
+        run: uv sync --frozen --only-group ci-dependency-report --python 3.15
       - name: Build dependency report
         run: make report-deprecations REPORT_DIR=dependency-deprecations
       - name: Install locked test dependencies
-        run: uv sync --frozen --all-groups --python 3.14
+        run: uv sync --frozen --all-groups --python 3.15
       - name: Run tests with deprecation warnings
         run: |
           set -o pipefail
@@ -118,7 +118,7 @@ jobs:
         run: cat dependency-deprecations/dependency-deprecations.md >> "$GITHUB_STEP_SUMMARY"
       - name: Upload dependency reports
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dependency-deprecations-${{ github.run_id }}
           path: dependency-deprecations/

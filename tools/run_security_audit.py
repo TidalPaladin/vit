@@ -14,7 +14,7 @@ from pathlib import Path
 
 
 Runner = Callable[[tuple[str, ...]], subprocess.CompletedProcess[str]]
-PYTHON_VERSIONS = ("3.11", "3.14")
+PYTHON_VERSIONS = ("3.11", "3.15")
 VULNERABILITY_SERVICE = "PyPI advisory database"
 
 
@@ -131,7 +131,7 @@ def main() -> int:
         "--only-group",
         "ci-security",
         "--python",
-        "3.14",
+        "3.15",
     )
     tools = {
         "uv": _tool_version(("uv", "--version")),

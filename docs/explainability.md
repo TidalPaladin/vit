@@ -20,7 +20,7 @@ uv sync --group explainability
 pip install "vit[explainability] @ git+https://github.com/TidalPaladin/vit.git"
 ```
 
-The extra pins Captum 0.9.0, Matplotlib 3.11.0, and Pillow 12.3.0. Importing `vit.explain` and running
+The extra pins Captum 0.9.0, Matplotlib 3.11.2, and Pillow 13.0.0. Importing `vit.explain` and running
 `vit-explain --help` do not import those optional packages.
 
 ## Citing the methods

@@ -15,10 +15,10 @@ MAKEFILE = REPOSITORY_ROOT / "Makefile"
 CIRCLECI_CONFIGURATION = REPOSITORY_ROOT / ".circleci" / "config.yml"
 CODECOV_CONFIGURATION = REPOSITORY_ROOT / "codecov.yml"
 CHECKOUT_ACTION = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
-SETUP_UV_ACTION = "astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9"
-UPLOAD_ARTIFACT_ACTION = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
-UV_VERSION = "0.11.28"
-UV_CHECKSUM = "e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224"
+SETUP_UV_ACTION = "astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2"
+UPLOAD_ARTIFACT_ACTION = "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9"
+UV_VERSION = "0.13.7"
+UV_CHECKSUM = "c5221ff41b7892bfc223543883600125f6a47fe845093e0f5bdff4f359196d83"
 
 
 def load_workflow(name: str) -> dict[str, Any]:
@@ -51,6 +51,7 @@ def test_ci_workflow_contract() -> None:
     assert jobs["tests"]["strategy"]["matrix"]["include"] == [
         {"python-version": "3.11", "artifact-suffix": "py311"},
         {"python-version": "3.14", "artifact-suffix": "py314"},
+        {"python-version": "3.15", "artifact-suffix": "py315"},
     ]
     assert jobs["tests"]["runs-on"] == "ubuntu-24.04"
     assert jobs["tests"]["timeout-minutes"] == 25
@@ -104,8 +105,8 @@ def test_ci_cache_is_restored_for_forks_but_saved_only_by_trusted_writers() -> N
             "github.event.pull_request.head.repo.full_name == github.repository }}"
         )
         assert step["with"]["cache-dependency-glob"] == "pyproject.toml\nuv.lock"
-        assert "uv-0.11.28" in step["with"]["cache-suffix"]
-        assert "torch-2.13.0" in step["with"]["cache-suffix"]
+        assert "uv-0.13.7" in step["with"]["cache-suffix"]
+        assert "torch-2.15.0" in step["with"]["cache-suffix"]
 
 
 def test_dependency_health_workflow_contract() -> None:
