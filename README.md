@@ -45,7 +45,7 @@ config = ViTConfig(
     num_attention_heads=12,
     hidden_dropout=0.1,
     attention_dropout=0.1,
-    activation="swiglu", # or srelu, gelu, etc.
+    activation="swiglu",  # or srelu, gelu, etc.
     patch_embed_normalization=True,  # Apply backbone norm after patch embedding
     drop_path_rate=0.1,
     num_register_tokens=16,
@@ -129,6 +129,25 @@ token_specialized_attention_static_batch_sizes: [128, 256, 512]
 `static_max_autotune` has a substantial one-time CUDA compile cost. Prefer `auto` unless repeated measurements on the
 target workload justify another mode. See [`docs/aot-export.md`](docs/aot-export.md) for `torch.export` and
 AOTInductor support for every mode.
+
+## Quantization-Aware Training
+
+Apply a TorchAO `QATConfig` before you create the optimizer. For example, configure an instantiated `model` for
+4-bit weights and dynamic 8-bit activations:
+
+```python
+import torch
+from torchao.quantization import Int8DynamicActivationIntxWeightConfig
+from torchao.quantization.qat import QATConfig
+
+qat = QATConfig(Int8DynamicActivationIntxWeightConfig(weight_dtype=torch.int4))
+model.apply_quantization(mlp_quantization_config=qat)
+```
+
+The default weight group size is 32. Projection input widths must be divisible by that group size.
+Use `qkv_quantization_config` or `attn_quantization_config` to apply QAT to attention projections.
+Fake quantizers execute during normal forwards, attention-weight inspection, and eager explanation traces.
+Packed attention and GLU GEMM autotuning do not support quantization.
 
 ## Packed Variable-Length Attention
 

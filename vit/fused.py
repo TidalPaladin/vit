@@ -7,11 +7,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
-from torchao.quantization import quantize_
 
 from .helpers import get_activation
 from .initialization import init_linear, zero_bias_if_present
 from .norm import NormType, apply_norm, get_norm_bias, is_layer_norm, make_norm, reshape_modulation
+from .quantization import linear_forward, qat_linear, quantize_linears
 
 
 VALID_ADALN_GATE_INITS = (0.0, 1.0)
@@ -46,11 +46,12 @@ def norm_linear(
     eps: float,
     dropout: float,
     training: bool,
+    linear_module: nn.Linear | None = None,
     # fmt: on
 ) -> Tensor:
     x = apply_norm(x, norm_weight, norm_bias, eps, use_layer_norm=use_layer_norm)
     x = F.dropout(x, p=dropout, training=training)
-    return F.linear(x, weight, bias)
+    return linear_forward(x, weight, bias, linear_module)
 
 
 class NormLinear(nn.Module):
@@ -85,7 +86,8 @@ class NormLinear(nn.Module):
         """Apply quantization to the linear layer using torchao."""
         if quantization_config is None:
             return
-        quantize_(self.linear, quantization_config)
+        self.quantization_config = quantization_config
+        quantize_linears(self, ("linear",), quantization_config)
 
     def forward(self, x: Tensor) -> Tensor:
         return norm_linear(
@@ -98,6 +100,7 @@ class NormLinear(nn.Module):
             self.norm.eps or 1e-5,
             self.dropout.p,
             self.training,
+            qat_linear(self.linear),
         )
 
     if TYPE_CHECKING:
@@ -132,6 +135,8 @@ def norm_mlp(
     norm_scale_delta: Tensor | None = None,
     norm_shift: Tensor | None = None,
     output_gate: Tensor | None = None,
+    fc1_module: nn.Linear | None = None,
+    fc2_module: nn.Linear | None = None,
     # fmt: on
 ) -> Tensor:
     if norm_weight is not None:
@@ -144,10 +149,10 @@ def norm_mlp(
             scale_delta=norm_scale_delta,
             shift=norm_shift,
         )
-    x = F.linear(x, fc1_weight, fc1_bias)
+    x = linear_forward(x, fc1_weight, fc1_bias, fc1_module)
     x = activation(x)
     x = F.dropout(x, p=dropout, training=training)
-    x = F.linear(x, fc2_weight, fc2_bias)
+    x = linear_forward(x, fc2_weight, fc2_bias, fc2_module)
     x = F.dropout(x, p=dropout, training=training, inplace=True)
     if output_gate is not None:
         x = x * output_gate
@@ -182,6 +187,8 @@ def norm_mlp_glu(
     norm_scale_delta: Tensor | None = None,
     norm_shift: Tensor | None = None,
     output_gate: Tensor | None = None,
+    fc1_module: nn.Linear | None = None,
+    fc2_module: nn.Linear | None = None,
     # fmt: on
 ) -> Tensor:
     if norm_weight is not None:
@@ -196,7 +203,7 @@ def norm_mlp_glu(
         )
 
     # FC1 - GLU
-    x = F.linear(x, fc1_weight, fc1_bias)
+    x = linear_forward(x, fc1_weight, fc1_bias, fc1_module)
     x_linear, x_glu = x.chunk(2, dim=-1)
     if limit is not None:
         x_linear = x_linear.clamp(min=-limit, max=limit)
@@ -207,7 +214,7 @@ def norm_mlp_glu(
     x = F.dropout(x, p=dropout, training=training)
 
     # FC2
-    x = F.linear(x, fc2_weight, fc2_bias)
+    x = linear_forward(x, fc2_weight, fc2_bias, fc2_module)
     x = F.dropout(x, p=dropout, training=training, inplace=True)
     if output_gate is not None:
         x = x * output_gate
@@ -244,6 +251,8 @@ def norm_mlp_glu_max_autotune_gemm(
     norm_scale_delta: Tensor | None = None,
     norm_shift: Tensor | None = None,
     output_gate: Tensor | None = None,
+    fc1_module: nn.Linear | None = None,
+    fc2_module: nn.Linear | None = None,
     # fmt: on
 ) -> Tensor:
     if norm_weight is not None:
@@ -258,7 +267,7 @@ def norm_mlp_glu_max_autotune_gemm(
         )
 
     # FC1 - GLU
-    x = F.linear(x, fc1_weight, fc1_bias)
+    x = linear_forward(x, fc1_weight, fc1_bias, fc1_module)
     x_linear, x_glu = x.chunk(2, dim=-1)
     if limit is not None:
         x_linear = x_linear.clamp(min=-limit, max=limit)
@@ -269,7 +278,7 @@ def norm_mlp_glu_max_autotune_gemm(
     x = F.dropout(x, p=dropout, training=training)
 
     # FC2
-    x = F.linear(x, fc2_weight, fc2_bias)
+    x = linear_forward(x, fc2_weight, fc2_bias, fc2_module)
     x = F.dropout(x, p=dropout, training=training, inplace=True)
     if output_gate is not None:
         x = x * output_gate
@@ -333,8 +342,7 @@ class NormMLP(nn.Module):
         self.quantization_config = quantization_config
         if self.glu_max_autotune_gemm:
             raise ValueError("glu_max_autotune_gemm is not supported with quantization")
-        quantize_(self.fc1, quantization_config)
-        quantize_(self.fc2, quantization_config)
+        quantize_linears(self, ("fc1", "fc2"), quantization_config)
 
     def _normalize_input(
         self,
@@ -380,7 +388,7 @@ class NormMLP(nn.Module):
     ) -> _MLPIntermediates:
         """Run the eager MLP path and return graph-connected intermediates."""
         normalized_input = self._normalize_input(x, norm_scale_delta, norm_shift)
-        fc1_output = F.linear(normalized_input, self.fc1.weight, self.fc1.bias)
+        fc1_output: Tensor = self.fc1(normalized_input)
         linear_branch: Tensor | None = None
         gate_branch: Tensor | None = None
         if self._is_glu:
@@ -396,7 +404,7 @@ class NormMLP(nn.Module):
             activation_output = self.activation(fc1_output)
             hidden = activation_output
         hidden = F.dropout(hidden, p=self.dropout.p, training=self.training)
-        output = F.linear(hidden, self.fc2.weight, self.fc2.bias)
+        output = self.fc2(hidden)
         output = F.dropout(output, p=self.dropout.p, training=self.training, inplace=True)
         if output_gate is not None:
             output = output * output_gate
@@ -453,6 +461,8 @@ class NormMLP(nn.Module):
                 norm_scale_delta,
                 norm_shift,
                 output_gate,
+                qat_linear(self.fc1),
+                qat_linear(self.fc2),
                 # fmt: on
             )
         else:
@@ -473,6 +483,8 @@ class NormMLP(nn.Module):
                 norm_scale_delta,
                 norm_shift,
                 output_gate,
+                qat_linear(self.fc1),
+                qat_linear(self.fc2),
                 # fmt: on
             )
 

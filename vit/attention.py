@@ -8,11 +8,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
-from torchao.quantization import quantize_
 
 from .initialization import init_linear, trunc_normal_
 from .norm import NormModule, NormType, apply_norm, get_norm_bias, is_layer_norm, make_norm
 from .packed import PackedAttentionBackend, PackedSequence
+from .quantization import linear_forward, qat_linear, quantize_linears
 from .rope import apply_rope
 
 
@@ -149,10 +149,11 @@ def project_qkv_packed(
     qk_eps: float,
     qk_normalization: bool,
     rope: Tensor | None = None,
+    qkv_module: nn.Linear | None = None,
     # fmt: on
 ) -> tuple[Tensor, Tensor, Tensor]:
     x = apply_norm(x, w_norm, b_norm, eps, use_layer_norm=use_layer_norm)
-    q, k, v = F.linear(x, w_in, b_in).chunk(3, dim=-1)
+    q, k, v = linear_forward(x, w_in, b_in, qkv_module).chunk(3, dim=-1)
     q = _unfold_head_and_permute(q, head_dim)
     k = _unfold_head_and_permute(k, head_dim)
     q, k = _apply_qk_norm(
@@ -197,6 +198,8 @@ def project_token_specialized_qkv_packed(
     qk_eps: float,
     qk_normalization: bool,
     rope: Tensor | None = None,
+    qkv_module: nn.Linear | None = None,
+    visual_qkv_module: nn.Linear | None = None,
     # fmt: on
 ) -> tuple[Tensor, Tensor, Tensor]:
     if visual_norm_weight is None:
@@ -224,17 +227,19 @@ def project_token_specialized_qkv_packed(
         )
         normalized_features = torch.cat((global_features, visual_features), dim=1)
     if visual_qkv_weight is None:
-        qkv = F.linear(normalized_features, global_qkv_weight, global_qkv_bias)
+        qkv = linear_forward(normalized_features, global_qkv_weight, global_qkv_bias, qkv_module)
     else:
-        global_qkv = F.linear(
+        global_qkv = linear_forward(
             normalized_features[:, :num_global_tokens],
             global_qkv_weight,
             global_qkv_bias,
+            qkv_module,
         )
-        visual_qkv = F.linear(
+        visual_qkv = linear_forward(
             normalized_features[:, num_global_tokens:],
             visual_qkv_weight,
             visual_qkv_bias,
+            visual_qkv_module,
         )
         qkv = torch.cat((global_qkv, visual_qkv), dim=1)
     q, k, v = qkv.chunk(3, dim=-1)
@@ -281,11 +286,13 @@ def project_q_kv_packed(
     qk_normalization: bool,
     rope_q: Tensor | None = None,
     rope_k: Tensor | None = None,
+    q_module: nn.Linear | None = None,
+    kv_module: nn.Linear | None = None,
     # fmt: on
 ) -> tuple[Tensor, Tensor, Tensor]:
     q = apply_norm(q, w_norm, b_norm, eps, use_layer_norm=use_layer_norm)
-    q = F.linear(q, w_q, b_q)
-    k, v = F.linear(kv, w_kv, b_kv).chunk(2, dim=-1)
+    q = linear_forward(q, w_q, b_q, q_module)
+    k, v = linear_forward(kv, w_kv, b_kv, kv_module).chunk(2, dim=-1)
     q = _unfold_head_and_permute(q, head_dim)
     k = _unfold_head_and_permute(k, head_dim)
     v = _unfold_head_and_permute(v, head_dim)
@@ -332,6 +339,8 @@ def attention_qkv_packed(
     dropout: float,
     training: bool,
     rope: Tensor | None = None,
+    qkv_module: nn.Linear | None = None,
+    out_module: nn.Linear | None = None,
     # fmt: on
 ) -> Tensor:
     q, k, v = project_qkv_packed(
@@ -351,13 +360,14 @@ def attention_qkv_packed(
         qk_eps,
         qk_normalization,
         rope,
+        qkv_module,
     )
     attention_dropout = 0.0 if not training else attention_dropout
     o = F.scaled_dot_product_attention(
         q, k, v, attn_mask=attn_mask, dropout_p=attention_dropout, is_causal=False, enable_gqa=True
     )
     o = _permute_and_fold_head(o)
-    o = F.linear(o, w_out, b_out)
+    o = linear_forward(o, w_out, b_out, out_module)
     o = F.dropout(o, p=dropout, training=training, inplace=True)
     return o
 
@@ -550,6 +560,9 @@ def _attention_token_specialized_qkv_packed_impl(
     dropout: float,
     training: bool,
     rope: Tensor | None = None,
+    qkv_module: nn.Linear | None = None,
+    visual_qkv_module: nn.Linear | None = None,
+    out_module: nn.Linear | None = None,
     # fmt: on
 ) -> Tensor:
     q, k, v = project_token_specialized_qkv_packed(
@@ -574,6 +587,8 @@ def _attention_token_specialized_qkv_packed_impl(
         qk_eps,
         qk_normalization,
         rope,
+        qkv_module,
+        visual_qkv_module,
     )
     attention_dropout = 0.0 if not training else attention_dropout
     output = F.scaled_dot_product_attention(
@@ -586,7 +601,7 @@ def _attention_token_specialized_qkv_packed_impl(
         enable_gqa=True,
     )
     output = _permute_and_fold_head(output)
-    output = F.linear(output, w_out, b_out)
+    output = linear_forward(output, w_out, b_out, out_module)
     return F.dropout(output, p=dropout, training=training, inplace=True)
 
 
@@ -672,6 +687,9 @@ def attention_token_specialized_qkv_packed(
     dropout: float,
     training: bool,
     rope: Tensor | None = None,
+    qkv_module: nn.Linear | None = None,
+    visual_qkv_module: nn.Linear | None = None,
+    out_module: nn.Linear | None = None,
     # fmt: on
 ) -> Tensor:
     """Run token-specialized attention with the default automatic compile policy."""
@@ -705,6 +723,9 @@ def attention_token_specialized_qkv_packed(
         dropout,
         training,
         rope,
+        qkv_module,
+        visual_qkv_module,
+        out_module,
         # fmt: on
     )
 
@@ -738,6 +759,9 @@ def attention_q_kv_packed(
     training: bool,
     rope_q: Tensor | None = None,
     rope_k: Tensor | None = None,
+    q_module: nn.Linear | None = None,
+    kv_module: nn.Linear | None = None,
+    out_module: nn.Linear | None = None,
     # fmt: on
 ) -> Tensor:
     q, k, v = project_q_kv_packed(
@@ -761,13 +785,15 @@ def attention_q_kv_packed(
         qk_normalization,
         rope_q,
         rope_k,
+        q_module,
+        kv_module,
     )
     attention_dropout = 0.0 if not training else attention_dropout
     o = F.scaled_dot_product_attention(
         q, k, v, attn_mask=attn_mask, dropout_p=attention_dropout, is_causal=False, enable_gqa=True
     )
     o = _permute_and_fold_head(o)
-    o = F.linear(o, w_out, b_out)
+    o = linear_forward(o, w_out, b_out, out_module)
     o = F.dropout(o, p=dropout, training=training, inplace=True)
     return o
 
@@ -792,6 +818,7 @@ def attention_weights_qkv_packed(
     qk_eps: float,
     qk_normalization: bool,
     rope: Tensor | None = None,
+    qkv_module: nn.Linear | None = None,
     # fmt: on
 ) -> Tensor:
     q, k, _ = project_qkv_packed(
@@ -811,6 +838,7 @@ def attention_weights_qkv_packed(
         qk_eps,
         qk_normalization,
         rope,
+        qkv_module,
     )
     return (q @ k.mT * (head_dim**-0.5)).softmax(dim=-1)
 
@@ -840,6 +868,8 @@ def attention_weights_token_specialized_qkv_packed(
     qk_eps: float,
     qk_normalization: bool,
     rope: Tensor | None = None,
+    qkv_module: nn.Linear | None = None,
+    visual_qkv_module: nn.Linear | None = None,
     # fmt: on
 ) -> Tensor:
     q, k, _ = project_token_specialized_qkv_packed(
@@ -864,6 +894,8 @@ def attention_weights_token_specialized_qkv_packed(
         qk_eps,
         qk_normalization,
         rope,
+        qkv_module,
+        visual_qkv_module,
     )
     return (q @ k.mT * (head_dim**-0.5)).softmax(dim=-1)
 
@@ -892,6 +924,8 @@ def attention_weights_q_kv_packed(
     qk_normalization: bool,
     rope_q: Tensor | None = None,
     rope_k: Tensor | None = None,
+    q_module: nn.Linear | None = None,
+    kv_module: nn.Linear | None = None,
     # fmt: on
 ) -> Tensor:
     q, k, _ = project_q_kv_packed(
@@ -915,6 +949,8 @@ def attention_weights_q_kv_packed(
         qk_normalization,
         rope_q,
         rope_k,
+        q_module,
+        kv_module,
     )
     return (q @ k.mT * (head_dim**-0.5)).softmax(dim=-1)
 
@@ -988,12 +1024,11 @@ class SelfAttention(nn.Module):
         """Apply quantization to the linear layers using torchao."""
         if qkv_quantization_config is not None:
             self.qkv_quantization_config = qkv_quantization_config
-            quantize_(self.qkv_proj, qkv_quantization_config)
-            if self.visual_qkv_proj is not None:
-                quantize_(self.visual_qkv_proj, qkv_quantization_config)
+            names = ("qkv_proj",) if self.visual_qkv_proj is None else ("qkv_proj", "visual_qkv_proj")
+            quantize_linears(self, names, qkv_quantization_config)
         if out_quantization_config is not None:
             self.out_quantization_config = out_quantization_config
-            quantize_(self.out_proj, out_quantization_config)
+            quantize_linears(self, ("out_proj",), out_quantization_config)
 
     def forward(self, x: Tensor, attn_mask: Tensor | None = None, rope: Tensor | None = None) -> Tensor:
         q_norm_weight, q_norm_bias, k_norm_weight, k_norm_bias, qk_eps = _get_qk_norm_inputs(self.q_norm, self.k_norm)
@@ -1033,6 +1068,9 @@ class SelfAttention(nn.Module):
                 self.dropout.p,
                 self.training,
                 rope,
+                qat_linear(self.qkv_proj),
+                qat_linear(self.visual_qkv_proj),
+                qat_linear(self.out_proj),
                 # fmt: on
             )
         return attention_qkv_packed(
@@ -1059,6 +1097,8 @@ class SelfAttention(nn.Module):
             self.dropout.p,
             self.training,
             rope,
+            qat_linear(self.qkv_proj),
+            qat_linear(self.out_proj),
             # fmt: on
         )
 
@@ -1183,6 +1223,8 @@ class SelfAttention(nn.Module):
                 qk_eps,
                 self._qk_normalization,
                 rope,
+                qat_linear(self.qkv_proj),
+                qat_linear(self.visual_qkv_proj),
                 # fmt: on
             )
         return attention_weights_qkv_packed(
@@ -1203,6 +1245,7 @@ class SelfAttention(nn.Module):
             qk_eps,
             self._qk_normalization,
             rope,
+            qat_linear(self.qkv_proj),
             # fmt: on
         )
 
@@ -1252,10 +1295,11 @@ class CrossAttention(nn.Module):
     ) -> None:
         """Apply quantization to the linear layers using torchao."""
         if qkv_quantization_config is not None:
-            quantize_(self.q_proj, qkv_quantization_config)
-            quantize_(self.kv_proj, qkv_quantization_config)
+            self.qkv_quantization_config = qkv_quantization_config
+            quantize_linears(self, ("q_proj", "kv_proj"), qkv_quantization_config)
         if out_quantization_config is not None:
-            quantize_(self.out_proj, out_quantization_config)
+            self.out_quantization_config = out_quantization_config
+            quantize_linears(self, ("out_proj",), out_quantization_config)
 
     def forward(
         self,
@@ -1294,6 +1338,9 @@ class CrossAttention(nn.Module):
             self.training,
             rope_q,
             rope_k,
+            qat_linear(self.q_proj),
+            qat_linear(self.kv_proj),
+            qat_linear(self.out_proj),
             # fmt: on
         )
 
@@ -1335,6 +1382,8 @@ class CrossAttention(nn.Module):
             self._qk_normalization,
             rope_q,
             rope_k,
+            qat_linear(self.q_proj),
+            qat_linear(self.kv_proj),
             # fmt: on
         )
 
