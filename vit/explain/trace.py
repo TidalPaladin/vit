@@ -6,12 +6,12 @@ from typing import Protocol
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch import Tensor
 
 from vit.attention import _permute_and_fold_head, project_qkv_packed, project_token_specialized_qkv_packed
 from vit.norm import get_norm_bias
 from vit.patch_embed import PatchEmbed2d
+from vit.quantization import qat_linear
 from vit.tokens import apply_mask
 from vit.transformer import _forward_mlp, _forward_mlp_with_intermediates
 from vit.vit import _EXPLAINABILITY_TRACE_ACTIVE, ViT, ViTFeatures
@@ -89,7 +89,7 @@ def make_token_layout(model: ViT, inputs: Tensor, mask: Tensor | None) -> TokenL
 
 def attention_output_from_heads(attention, head_outputs: Tensor) -> Tensor:
     """Project per-head values back into the residual stream."""
-    output = F.linear(_permute_and_fold_head(head_outputs), attention.out_proj.weight, attention.out_proj.bias)
+    output = attention.out_proj(_permute_and_fold_head(head_outputs))
     return attention.dropout(output)
 
 
@@ -123,6 +123,8 @@ def eager_self_attention(attention, x: Tensor, rope: Tensor | None) -> tuple[Ten
             qk_eps,
             attention._qk_normalization,
             rope,
+            qat_linear(attention.qkv_proj),
+            qat_linear(attention.visual_qkv_proj),
         )
     else:
         q, k, value = project_qkv_packed(
@@ -142,6 +144,7 @@ def eager_self_attention(attention, x: Tensor, rope: Tensor | None) -> tuple[Ten
             qk_eps,
             attention._qk_normalization,
             rope,
+            qat_linear(attention.qkv_proj),
         )
     probabilities = (q @ k.mT * (attention._head_dim**-0.5)).softmax(dim=-1)
     if not probabilities.requires_grad:
