@@ -3,13 +3,13 @@
 PROJECT=vit
 QUALITY_DIRS=$(PROJECT) tests benchmark tools examples
 CLEAN_DIRS=$(PROJECT) tests benchmark tools examples
-UV_VERSION=0.11.28
+UV_VERSION=0.13.7
 UVX=uvx
 UV=$(UVX) --from uv==$(UV_VERSION) uv
 PYTHON=$(UV) run python
-PYTHON_VERSION?=3.14
+PYTHON_VERSION?=3.15
 REPORT_DIR?=dependency_reports
-PIP_AUDIT=$(UV) run --isolated --frozen --only-group ci-security --python 3.14 pip-audit
+PIP_AUDIT=$(UV) run --isolated --frozen --only-group ci-security --python "$(PYTHON_VERSION)" pip-audit
 
 CONFIG_FILE := config.mk
 ifneq ($(wildcard $(CONFIG_FILE)),)
@@ -46,7 +46,7 @@ audit-dependencies: ## audit locked Python dependencies for known public vulnera
 		$(if $(AUDIT_REPORT),--format json --output "$(AUDIT_REPORT)")
 
 audit-workflows: ## audit GitHub Actions workflows with locked zizmor
-	$(UV) run --isolated --frozen --only-group ci-security --python 3.14 zizmor \
+	$(UV) run --isolated --frozen --only-group ci-security --python 3.15 zizmor \
 		--strict-collection \
 		--pedantic \
 		--offline \
@@ -146,7 +146,7 @@ benchmark-packed-cuda: ## run the three-pass packed attention decision benchmark
 	$(UV) run vit-packed-attention-benchmark --independent-runs 3
 
 report-deprecations: ## report direct dependency yanks, inactivity, and Python conflicts
-	$(UV) run --isolated --frozen --only-group ci-dependency-report --python 3.14 python tools/dependency_report.py \
+	$(UV) run --isolated --frozen --only-group ci-dependency-report --python 3.15 python tools/dependency_report.py \
 		--json-output "$(REPORT_DIR)/dependency-deprecations.json" \
 		--summary-output "$(REPORT_DIR)/dependency-deprecations.md"
 

@@ -27,35 +27,35 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up uv and Python
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.11.28"
-          checksum: e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224
-          python-version: "3.14"
+          version: "0.13.7"
+          checksum: c5221ff41b7892bfc223543883600125f6a47fe845093e0f5bdff4f359196d83
+          python-version: "3.15"
           enable-cache: true
           restore-cache: true
           save-cache: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
           cache-dependency-glob: |-
             pyproject.toml
             uv.lock
-          cache-suffix: ubuntu-x64-uv-0.11.28-python-3.14-torch-2.13.0
+          cache-suffix: ubuntu-x64-uv-0.13.7-python-3.15-torch-2.15.0
       - name: Verify pinned tools
         env:
-          PYTHON_VERSION: "3.14"
+          PYTHON_VERSION: "3.15"
         run: |
-          test "$(uv --version | cut -d ' ' -f 1-2)" = "uv 0.11.28"
+          test "$(uv --version | cut -d ' ' -f 1-2)" = "uv 0.13.7"
           uv python install "$PYTHON_VERSION"
           uv run --no-project --python "$PYTHON_VERSION" python -c \
             'import os, sys; assert sys.version_info[:2] == tuple(map(int, os.environ["PYTHON_VERSION"].split(".")))'
       - name: Install locked dependencies
         env:
-          PYTHON_VERSION: "3.14"
+          PYTHON_VERSION: "3.15"
         run: uv sync --frozen --all-groups --python "$PYTHON_VERSION"
       - name: Verify runtime versions
         env:
-          PYTHON_VERSION: "3.14"
-          TORCH_VERSION: "2.13.0"
-          TORCHAO_VERSION: "0.17.0"
+          PYTHON_VERSION: "3.15"
+          TORCH_VERSION: "2.15.0"
+          TORCHAO_VERSION: "0.18.0"
         run: |
           uv run --frozen --no-sync python - <<'PY'
           import importlib.metadata
@@ -83,6 +83,8 @@ jobs:
             artifact-suffix: py311
           - python-version: "3.14"
             artifact-suffix: py314
+          - python-version: "3.15"
+            artifact-suffix: py315
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -90,10 +92,10 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
       - name: Set up uv and Python
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.11.28"
-          checksum: e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224
+          version: "0.13.7"
+          checksum: c5221ff41b7892bfc223543883600125f6a47fe845093e0f5bdff4f359196d83
           python-version: ${{ matrix.python-version }}
           enable-cache: true
           restore-cache: true
@@ -101,12 +103,12 @@ jobs:
           cache-dependency-glob: |-
             pyproject.toml
             uv.lock
-          cache-suffix: ubuntu-x64-uv-0.11.28-python-${{ matrix.python-version }}-torch-2.13.0
+          cache-suffix: ubuntu-x64-uv-0.13.7-python-${{ matrix.python-version }}-torch-2.15.0
       - name: Verify pinned tools
         env:
           PYTHON_VERSION: ${{ matrix.python-version }}
         run: |
-          test "$(uv --version | cut -d ' ' -f 1-2)" = "uv 0.11.28"
+          test "$(uv --version | cut -d ' ' -f 1-2)" = "uv 0.13.7"
           uv python install "$PYTHON_VERSION"
           uv run --no-project --python "$PYTHON_VERSION" python -c \
             'import os, sys; assert sys.version_info[:2] == tuple(map(int, os.environ["PYTHON_VERSION"].split(".")))'
@@ -117,8 +119,8 @@ jobs:
       - name: Verify runtime versions
         env:
           PYTHON_VERSION: ${{ matrix.python-version }}
-          TORCH_VERSION: "2.13.0"
-          TORCHAO_VERSION: "0.17.0"
+          TORCH_VERSION: "2.15.0"
+          TORCHAO_VERSION: "0.18.0"
         run: |
           uv run --frozen --no-sync python - <<'PY'
           import importlib.metadata
@@ -135,7 +137,7 @@ jobs:
         run: make check-distribution
       - name: Upload coverage
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-${{ matrix.artifact-suffix }}-${{ github.sha }}
           path: coverage.xml

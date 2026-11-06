@@ -73,7 +73,7 @@ Use `uv` and Make targets to keep local and CI behavior aligned.
 - `make report-deprecations REPORT_DIR=<path>`: report yanked, inactive, and Python-incompatible direct pins.
 - `make test-<pattern>`: run targeted tests, e.g. `make test-attention`.
 
-GitHub Actions runs required Linux CPU checks on Python 3.11 and 3.14. The independent Monday dependency-health
+GitHub Actions runs required Linux CPU checks on Python 3.11, 3.14, and 3.15. The independent Monday dependency-health
 workflow writes security and deprecation reports. The Sunday production workflow validates distributions and CPU
 compilation. Both weekly workflows can also be dispatched manually. CUDA CI is deferred until a suitable self-hosted
 runner is available; GitHub-hosted GPU larger runners are not part of the free public-repository runner allocation.
@@ -86,7 +86,7 @@ Use the local skill `$vit-component-benchmark` for detailed guidance.
 - Includes: run/compare workflows, device/pass/dtype usage, reproducibility controls, and artifact interpretation
 
 ## Coding Style & Naming Conventions
-Python target is `>=3.11,<3.15`. Keep code typed and concise.
+Python target is `>=3.11,<3.16`. Keep code typed and concise.
 
 - Formatting/linting: `ruff` (`line-length = 120`).
 - Type checking: `basedpyright` (`typeCheckingMode = "standard"`).

@@ -13,8 +13,8 @@ from tools.validate_wheel import validate_console_script_targets
 
 
 PROJECT_ROOT = Path(__file__).parents[1]
-BENCHMARK_DEPENDENCIES = {"matplotlib==3.11.0", "tqdm==4.68.4"}
-EXPLAINABILITY_DEPENDENCIES = {"captum==0.9.0", "matplotlib==3.11.0", "pillow==12.3.0"}
+BENCHMARK_DEPENDENCIES = {"matplotlib==3.11.2", "tqdm==4.70.1"}
+EXPLAINABILITY_DEPENDENCIES = {"captum==0.9.0", "matplotlib==3.11.2", "pillow==13.0.0"}
 BENCHMARK_PACKAGES = {"vit", "benchmark"}
 ENTRY_POINTS_PATH = "vit-0.1.1.dist-info/entry_points.txt"
 OPTIONAL_DEPENDENCY_BLOCKER = """

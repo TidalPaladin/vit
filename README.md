@@ -13,6 +13,9 @@ This library can be installed with the following command
 pip install "vit @ git+https://github.com/TidalPaladin/vit.git"
 ```
 
+The supported Python versions are 3.11 through 3.15. The pinned runtime uses PyTorch 2.15.0 and TorchAO 0.18.0.
+NumPy stays at 2.4.6 on Python 3.11 and uses 2.5.4 on newer supported Python versions.
+
 For benchmarking capabilities, install with the benchmarking extras:
 
 ```bash
@@ -155,7 +158,7 @@ method adds CLS/register prefixes to each sequence. Prefix RoPE rows use identit
 for normalization, projections, residuals, LayerScale, MLPs, dropout, and output normalization. Only Q/K/V become
 jagged at the SDPA boundary.
 
-`backend="pytorch"` selects the stable PyTorch 2.13 jagged NestedTensor SDPA path. Its full-graph dynamic helper adapts
+`backend="pytorch"` selects the PyTorch jagged NestedTensor SDPA path. Its full-graph dynamic helper adapts
 to changes in total tokens, batch count, and sequence lengths. `backend="flash_attention"` is explicit and raises an
 installation, compatibility, or qualification error unless the installed version passed the production gate. The
 default installation does not add FlashAttention. Packed execution rejects token specialization, conditioned MLPs,
